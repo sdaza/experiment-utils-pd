@@ -285,8 +285,8 @@ class ExperimentAnalyzer:
 
         return overlap_coefficient
 
-    def get_effects(self, min_binary_count: int = 100, adjustment: str | None = None) -> None: # Changed return type annotation
-        """
+    def get_effects(self, min_binary_count: int = 100, adjustment: str | None = None) -> None:
+        """"
         Calculate effects (uplifts), given the data and experimental units.
 
         Parameters
@@ -364,7 +364,7 @@ class ExperimentAnalyzer:
                 self._logger.warning(f'Skipping {experiment_tuple} as there are no valid treatment-control groups!')
                 continue
             if not (0 in treatvalues and 1 in treatvalues):
-                log_and_raise_error(self._logger, f'The treatment column {self._treatment_col} must contain only 0 and 1')
+                log_and_raise_error(self._logger, f'The treatment column {self._treatment_col} must contain only 0 and 1')  # noqa: E501
 
             temp_pd = self.impute_missing_values(
                 data=temp_pd.copy(), # Use copy to avoid SettingWithCopyWarning
@@ -438,7 +438,7 @@ class ExperimentAnalyzer:
                                 )
                                 self._logger.info('::::: Overlap: %.2f', np.round(overlap, 2))
                             else:
-                                self._logger.warning("Could not calculate overlap due to missing scores for treatment or control.")
+                                self._logger.warning("Could not calculate overlap due to missing scores for treatment or control.")  # noqa: E501
                         else:
                              self._logger.warning("Propensity score column not found, skipping overlap assessment.")
 
@@ -473,11 +473,11 @@ class ExperimentAnalyzer:
             for outcome in self._outcomes:
                 # Ensure outcome column is numeric
                 if not pd.api.types.is_numeric_dtype(temp_pd[outcome]):
-                     self._logger.warning(f"Outcome '{outcome}' is not numeric for experiment {experiment_tuple}. Skipping.")
+                     self._logger.warning(f"Outcome '{outcome}' is not numeric for experiment {experiment_tuple}. Skipping.")  # noqa: E501
                      continue
                 # Ensure outcome has variance
                 if temp_pd[outcome].var() == 0:
-                    self._logger.warning(f"Outcome '{outcome}' has zero variance for experiment {experiment_tuple}. Skipping.")
+                    self._logger.warning(f"Outcome '{outcome}' has zero variance for experiment {experiment_tuple}. Skipping.")  # noqa: E501
                     continue
 
                 try:
@@ -485,14 +485,14 @@ class ExperimentAnalyzer:
                         # Check if weight column exists and has non-zero variance if needed by estimator
                         weight_col = self._target_weights[self._target_ipw_effect]
                         if weight_col not in temp_pd.columns:
-                             log_and_raise_error(self._logger, f"Weight column '{weight_col}' not found after propensity score calculation.")
+                             log_and_raise_error(self._logger, f"Weight column '{weight_col}' not found after propensity score calculation.")  # noqa: E501
                         if temp_pd[weight_col].var() == 0:
-                             self._logger.warning(f"Weight column '{weight_col}' has zero variance for experiment {experiment_tuple}. Results might be unreliable.")
+                             self._logger.warning(f"Weight column '{weight_col}' has zero variance for experiment {experiment_tuple}. Results might be unreliable.")  # noqa: E501
 
-                        output = model[adjustment](data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates),
+                        output = model[adjustment](data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates),  # noqa: E501
                                                    weight_column=weight_col)
                     else:
-                        output = model[adjustment](data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates))
+                        output = model[adjustment](data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates))  # noqa: E501
 
                     output['adjustment'] = adjustment_label
                     if adjustment == 'IPW' and not adjusted_balance.empty:
@@ -506,7 +506,7 @@ class ExperimentAnalyzer:
                     temp_results.append(output)
 
                 except Exception as e:
-                    self._logger.error(f"Error processing outcome '{outcome}' for experiment {experiment_tuple} with adjustment '{adjustment_label}': {e}")
+                    self._logger.error(f"Error processing outcome '{outcome}' for experiment {experiment_tuple} with adjustment '{adjustment_label}': {e}")  # noqa: E501
                     # Optionally append a row with NaNs or skip
                     error_output = {
                         'outcome': outcome,
@@ -522,8 +522,8 @@ class ExperimentAnalyzer:
 
         if not temp_results:
              self._logger.warning("No results were generated. Check input data and experiment configurations.")
-             self._results = pd.DataFrame() # Assign empty DataFrame
-             return # Exit early
+             self._results = pd.DataFrame() 
+             return
 
         clean_temp_results = pd.DataFrame(temp_results)
 
