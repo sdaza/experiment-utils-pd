@@ -797,7 +797,7 @@ class ExperimentAnalyzer:
                     self._logger.error(f"Failed to split tuple column '{tuple_column}' into {new_columns}. Error: {e}")
                     # Keep original structure on error
             elif not df.empty:
-                 self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped.")
+                 self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped.")  # noqa: E501
                  # Keep the original tuple column if data is inconsistent
 
         return df
