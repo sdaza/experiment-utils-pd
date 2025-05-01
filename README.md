@@ -3,7 +3,7 @@
 
 # Experiment utils
 
-Generic functions for PySpark experiment analysis and design 
+Generic functions for experiment analysis and design:
 
 - [Experiment utils](#experiment-utils)
 - [Installation](#installation)
@@ -14,14 +14,14 @@ Generic functions for PySpark experiment analysis and design
 # Installation
 
 ```
-pip install git+https://github.com/sdaza/experiment-utils.git
+pip install git+https://github.com/sdaza/experiment-utils-pd.git
 ```
 
 # How to use it
 
 ## Experiment Analyzer
 
-The DataFrame `df` is a PySpark DataFrame. If it's a Pandas DataFrame, it will transform automatically.
+ `df` is a Pandas DataFrame:
 
 ```python
 analyzer = ExperimentAnalyzer(

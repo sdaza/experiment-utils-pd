@@ -95,7 +95,7 @@ class ExperimentAnalyzer:
     def __check_input(self) -> None:
 
         # dataframe is empty
-        if self._data.empty: # Changed from isEmpty()
+        if self._data.empty:
             log_and_raise_error(self._logger, "Dataframe is empty!")
 
         # impute covariates from regression covariates
@@ -116,7 +116,7 @@ class ExperimentAnalyzer:
 
         # create an experiment id if there is not one
         if len(self._experiment_identifier) == 0:
-            self._data["experiment_id"] = 1 # Changed from F.lit(1)
+            self._data["experiment_id"] = 1
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
@@ -329,13 +329,9 @@ class ExperimentAnalyzer:
         if self._experiment_identifier:
             grouped_data = self._data.groupby(self._experiment_identifier)
         else:
-            # If no identifier, treat the whole dataset as one group
             grouped_data = [(None, self._data)]
 
-
-        # iterate over each combination of experimental units
         for experiment_tuple, temp_pd in grouped_data:
-            # Ensure experiment_tuple is a tuple even for single identifier
             if self._experiment_identifier and len(self._experiment_identifier) == 1:
                  experiment_tuple = (experiment_tuple,)
             elif not self._experiment_identifier:
@@ -343,18 +339,6 @@ class ExperimentAnalyzer:
 
 
             self._logger.info('Processing: %s', experiment_tuple)
-            # Removed spark filter logic
-            # filter_condition = reduce(
-            #     lambda a, b: a & b,
-            #     [
-            #         (F.col(unit) == row[unit])
-            #         for unit in self._experiment_identifier
-            #     ],
-            # )
-            # temp = self._data.filter(filter_condition)
-            # temp_pd = temp.toPandas()
-
-            # temp_pd is already the pandas DataFrame for the current group
 
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
             binary_covariates = self.__get_binary_covariates(data=temp_pd)
@@ -367,14 +351,14 @@ class ExperimentAnalyzer:
                 log_and_raise_error(self._logger, f'The treatment column {self._treatment_col} must contain only 0 and 1')  # noqa: E501
 
             temp_pd = self.impute_missing_values(
-                data=temp_pd.copy(), # Use copy to avoid SettingWithCopyWarning
+                data=temp_pd.copy(),
                 num_covariates=numeric_covariates,
                 bin_covariates=binary_covariates,
             )
 
             # remove constant or low frequency covariates
             numeric_covariates = [
-                c for c in numeric_covariates if temp_pd[c].std(ddof=0) != 0 # Use ddof=0 for population std dev
+                c for c in numeric_covariates if temp_pd[c].std(ddof=0) != 0
             ]
             binary_covariates = [
                 c
@@ -386,12 +370,12 @@ class ExperimentAnalyzer:
             ]
 
             final_covariates = numeric_covariates + binary_covariates
-            self._final_covariates = final_covariates # Store final covariates for this experiment run
+            self._final_covariates = final_covariates 
             if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
                 self._logger.warning(f"No valid covariates for {experiment_tuple}, balance can\'t be assessed!")
 
-            balance = pd.DataFrame() # Initialize balance df
-            adjusted_balance = pd.DataFrame() # Initialize adjusted balance df
+            balance = pd.DataFrame()
+            adjusted_balance = pd.DataFrame()
 
             if len(final_covariates) > 0:
                 temp_pd["weights"] = 1
@@ -453,7 +437,6 @@ class ExperimentAnalyzer:
                     self._logger.info('::::: IV Balance: %.2f', np.round(iv_balance_mean, 2))
 
             # create adjustment label
-            # Use self._final_covariates which reflects covariates used in *this* experiment run
             relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
             adjustment_labels = {
@@ -748,6 +731,58 @@ class ExperimentAnalyzer:
         # Reorder columns to have the new columns at the start
         ordered_columns = new_columns + columns
         df = df[ordered_columns]
+
+        return df
+
+    def __transform_tuple_column(self, df: pd.DataFrame, tuple_column: str, new_columns: list[str]) -> pd.DataFrame:
+        """
+        Transforms a column containing tuples or single values
+        into separate columns named according to new_columns.
+        Handles the case where a single identifier results in a single-element tuple.
+
+        Parameters:
+        df (pd.DataFrame): The DataFrame containing the column to transform.
+        tuple_column (str): The name of the column with tuples or single values.
+        new_columns (list): A list of new column names. Should match self._experiment_identifier.
+
+        Returns:
+        pd.DataFrame: A new DataFrame with the elements as separate columns.
+        """
+
+        if len(new_columns) == 1:
+            new_col_name = new_columns[0]
+
+            def extract_value(x):
+                if isinstance(x, tuple) and len(x) == 1:
+                    return x[0]
+                return x
+
+            # Create the new column with extracted scalar values
+            df[new_col_name] = df[tuple_column].apply(extract_value)
+
+            # Define columns to keep (all except the original tuple_column if its name is different)
+            cols_to_keep = [col for col in df.columns if col not in [tuple_column, new_col_name]]
+
+            # Reconstruct the DataFrame with the new column at the beginning
+            final_cols = [new_col_name] + cols_to_keep
+            df = df[final_cols]
+
+        elif len(new_columns) > 1:
+            def check_tuple(x):
+                return isinstance(x, tuple) and len(x) == len(new_columns)
+
+            if not df.empty and df[tuple_column].apply(check_tuple).all():
+                columns_to_keep = [col for col in df.columns if col != tuple_column]
+                try:
+                    split_cols = pd.DataFrame(df[tuple_column].tolist(), index=df.index, columns=new_columns)
+                    df = pd.concat([split_cols, df[columns_to_keep]], axis=1)
+                    ordered_columns = new_columns + columns_to_keep
+                    df = df[ordered_columns]
+                except Exception as e:
+                    self._logger.error(f"Failed to split tuple column '{tuple_column}' into {new_columns}. Error: {e}")
+            elif not df.empty:
+                 self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped for this column.")  # noqa: E501
+                 pass
 
         return df
 
