@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'  # Triggers on any branch
+  pull_request:
+    branches:
+      - '**'  # Triggers on pull requests to any branch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.10'  # Specify the Python version
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Install dependencies
+      run: |
+        uv sync
+
+    - name: Linting with Ruff
+      run: |
+        # Install ruff
+        uv pip install ruff
+        # Run ruff using uv run
+        uv run ruff check .
+
+    - name: Run tests
+      run: |
+        uv run pytest tests/  # Adjust the path to your test directory
