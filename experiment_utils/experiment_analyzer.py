@@ -748,41 +748,57 @@ class ExperimentAnalyzer:
         Returns:
         pd.DataFrame: A new DataFrame with the elements as separate columns.
         """
+        if df.empty or tuple_column not in df.columns:
+            return df
+
+        if not new_columns:
+             self._logger.warning("No new column names provided for transformation. Skipping.")
+             return df
+
+        # Make a copy to avoid potential SettingWithCopyWarning
+        df = df.copy()
 
         if len(new_columns) == 1:
             new_col_name = new_columns[0]
 
-            def extract_value(x):
+            # Helper function to extract the single element if it's a single-element tuple
+            def extract_single_element(x):
                 if isinstance(x, tuple) and len(x) == 1:
-                    return x[0]
-                return x
+                    return x[0] # Extract the first (and only) element, regardless of type
+                return x # Return as is if not a single-element tuple
 
-            # Create the new column with extracted scalar values
-            df[new_col_name] = df[tuple_column].apply(extract_value)
+            # Apply the extraction function using .loc for safe modification
+            df.loc[:, tuple_column] = df[tuple_column].apply(extract_single_element)
 
-            # Define columns to keep (all except the original tuple_column if its name is different)
-            cols_to_keep = [col for col in df.columns if col not in [tuple_column, new_col_name]]
+            # Rename the column
+            df = df.rename(columns={tuple_column: new_col_name})
 
-            # Reconstruct the DataFrame with the new column at the beginning
-            final_cols = [new_col_name] + cols_to_keep
-            df = df[final_cols]
+            # Reorder columns to put the new identifier column first
+            cols_order = [new_col_name] + [col for col in df.columns if col != new_col_name]
+            df = df[cols_order]
 
         elif len(new_columns) > 1:
+            # Logic for multiple identifiers (splitting tuples)
             def check_tuple(x):
                 return isinstance(x, tuple) and len(x) == len(new_columns)
 
+            # Check if all relevant entries are tuples of the expected length
             if not df.empty and df[tuple_column].apply(check_tuple).all():
                 columns_to_keep = [col for col in df.columns if col != tuple_column]
                 try:
+                    # Create new columns from the tuple elements
                     split_cols = pd.DataFrame(df[tuple_column].tolist(), index=df.index, columns=new_columns)
-                    df = pd.concat([split_cols, df[columns_to_keep]], axis=1)
+                    # Concatenate new columns with the rest of the DataFrame
+                    df_transformed = pd.concat([split_cols, df[columns_to_keep]], axis=1)
+                    # Reorder columns
                     ordered_columns = new_columns + columns_to_keep
-                    df = df[ordered_columns]
+                    df = df_transformed[ordered_columns] # Assign back to df
                 except Exception as e:
                     self._logger.error(f"Failed to split tuple column '{tuple_column}' into {new_columns}. Error: {e}")
+                    # Keep original structure on error
             elif not df.empty:
-                 self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped for this column.")  # noqa: E501
-                 pass
+                 self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped.")
+                 # Keep the original tuple column if data is inconsistent
 
         return df
 
