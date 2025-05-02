@@ -869,15 +869,14 @@ class ExperimentAnalyzer:
                 z_stat, p_value = proportions_ztest(
                     count=observed_count,
                     nobs=n_total,
-                    value=unique_expected_ratio,
+                    value=unique_expected_ratio[0],
                     alternative='two-sided'
                 )
                 srm_pvalue = p_value
 
-
                 if p_value < self._alpha:
                     srm_detected = True
-                    self.logger.info(f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio.")  # noqa: E501
+                    self._logger.info(f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio.")  # noqa: E501
 
                 return sample_ratio, srm_detected, srm_pvalue
 

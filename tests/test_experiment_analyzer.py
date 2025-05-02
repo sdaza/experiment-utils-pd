@@ -45,6 +45,7 @@ def sample_data(
     model_data = pd.DataFrame(
         {
             "experiment": 123,
+            "expected_ratio": 0.5,
             "group": "model",
             "treatment": model_treatment,
             "conversion": model_conversion.astype(int),
@@ -60,6 +61,7 @@ def sample_data(
     random_data = pd.DataFrame(
         {
             "experiment": 123,
+            "expected_ratio": 0.5,
             "group": "random",
             "treatment": random_treatment,
             "conversion": random_conversion.astype(int),
@@ -84,6 +86,28 @@ def test_no_covariates(sample_data):
         outcomes=outcomes,
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier)
+
+    try:
+        analyzer.get_effects()
+        _ = analyzer.results
+        assert True
+    except Exception as e:
+        pytest.fail(f" raised an exception: {e}")
+
+
+def test_sample_ratio_check(sample_data):
+    """Test get_effects sample ratio check"""
+    outcomes = "conversion"
+    treatment_col = "treatment"
+    experiment_identifier = "experiment"
+    expected_ratio_col = 'expected_ratio'
+
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes=outcomes,
+        treatment_col=treatment_col,
+        experiment_identifier=experiment_identifier, 
+        exp_sample_ratio_col=expected_ratio_col)
 
     try:
         analyzer.get_effects()
