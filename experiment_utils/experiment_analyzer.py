@@ -30,6 +30,8 @@ class ExperimentAnalyzer:
         List of columns to identify an experiment
     adjustment : str, optional
         Covariate adjustment method (e.g., IPW, IV), by default None
+    exp_sample_ratio_col : str, optional
+        Column name for the expected sample ratio, by default None
     target_ipw_effect : str, optional
         Target IPW effect (ATT, ATE, ATC), by default "ATT"
     propensity_score_method : str, optional
@@ -58,6 +60,7 @@ class ExperimentAnalyzer:
         experiment_identifier: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
+        exp_sample_ratio_col: str | None = None,
         target_ipw_effect: str = "ATT",
         propensity_score_method: str = 'logistic',
         min_ps_score: float = 0.05,
@@ -77,6 +80,7 @@ class ExperimentAnalyzer:
         self._treatment_col = treatment_col
         self._experiment_identifier = self.__ensure_list(experiment_identifier)
         self._adjustment = adjustment
+        self._exp_sample_ratio_col = exp_sample_ratio_col
         self._propensity_score_method = propensity_score_method
         self._target_ipw_effect = target_ipw_effect
         self._assess_overlap = assess_overlap
@@ -122,7 +126,8 @@ class ExperimentAnalyzer:
 
         # check if all required columns are present
         required_columns = (self._experiment_identifier + [self._treatment_col] + self._outcomes +
-                            self._covariates + ([self._instrument_col] if self._instrument_col is not None else []))
+                            self._covariates + ([self._instrument_col] if self._instrument_col is not None else []) + 
+                            ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else []))
 
         missing_columns = set(required_columns) - set(self._data.columns)
 
@@ -301,7 +306,7 @@ class ExperimentAnalyzer:
         self._results: A Pandas DataFrame with effects.
         self._balance: A list of Pandas DataFrames with balance metrics per experiment.
         self._adjusted_balance: A list of Pandas DataFrames with adjusted balance metrics per experiment.
-        """  # noqa: E501
+        """
 
         model = {
             None: self._estimator.linear_regression,
@@ -314,9 +319,6 @@ class ExperimentAnalyzer:
             'xgboost': self._estimator.ipw_xgboost
         }
 
-        # Removed distinct().collect() - replaced with pandas groupby
-        # key_experiments = self._data.select(*self._experiment_identifier).distinct().collect()
-
         temp_results = []
 
         if adjustment is None:
@@ -325,18 +327,12 @@ class ExperimentAnalyzer:
         self._balance = []
         self._adjusted_balance = []
 
-        # Group data by experiment identifier using pandas groupby
         if self._experiment_identifier:
             grouped_data = self._data.groupby(self._experiment_identifier)
         else:
             grouped_data = [(None, self._data)]
 
         for experiment_tuple, temp_pd in grouped_data:
-            if self._experiment_identifier and len(self._experiment_identifier) == 1:
-                 experiment_tuple = (experiment_tuple,)
-            elif not self._experiment_identifier:
-                 experiment_tuple = (1,) # Default experiment ID if none provided
-
 
             self._logger.info('Processing: %s', experiment_tuple)
 
@@ -696,13 +692,11 @@ class ExperimentAnalyzer:
         """
         Returns the imbalance DataFrame. Checks adjusted balance first, then unadjusted.
         """
-        # Check if adjusted_balance DataFrame is not empty and has data
         if not self._adjusted_balance.empty:
             ab = self._adjusted_balance[self._adjusted_balance.balance_flag == 0]
             if not ab.empty:
                 self._logger.info('Imbalance after adjustments!')
                 return ab
-        # Check if balance DataFrame is not empty and has data
         elif not self._balance.empty:
             b = self._balance[self._balance.balance_flag == 0]
             if not b.empty:
@@ -711,28 +705,6 @@ class ExperimentAnalyzer:
         else:
             self._logger.warning('No balance information available to determine imbalance!')
             return None
-
-    def __transform_tuple_column(self, df: pd.DataFrame, tuple_column: str, new_columns: list[str]) -> pd.DataFrame:
-        """
-        Transforms a column of tuples into separate columns.
-
-        Parameters:
-        df (pd.DataFrame): The DataFrame containing the tuple column.
-        tuple_column (str): The name of the column with tuples.
-        new_columns (list): A list of new column names for the tuple elements.
-
-        Returns:
-        pd.DataFrame: A new DataFrame with the tuple elements as separate columns.
-        """
-        # Split the tuple column into new columns
-        columns = [col for col in df.columns if col != tuple_column]
-        df[new_columns] = pd.DataFrame(df[tuple_column].tolist(), index=df.index)
-
-        # Reorder columns to have the new columns at the start
-        ordered_columns = new_columns + columns
-        df = df[ordered_columns]
-
-        return df
 
     def __transform_tuple_column(self, df: pd.DataFrame, tuple_column: str, new_columns: list[str]) -> pd.DataFrame:
         """
@@ -755,50 +727,38 @@ class ExperimentAnalyzer:
              self._logger.warning("No new column names provided for transformation. Skipping.")
              return df
 
-        # Make a copy to avoid potential SettingWithCopyWarning
         df = df.copy()
 
         if len(new_columns) == 1:
             new_col_name = new_columns[0]
 
-            # Helper function to extract the single element if it's a single-element tuple
             def extract_single_element(x):
                 if isinstance(x, tuple) and len(x) == 1:
                     return x[0] # Extract the first (and only) element, regardless of type
                 return x # Return as is if not a single-element tuple
 
-            # Apply the extraction function using .loc for safe modification
             df.loc[:, tuple_column] = df[tuple_column].apply(extract_single_element)
 
-            # Rename the column
             df = df.rename(columns={tuple_column: new_col_name})
 
-            # Reorder columns to put the new identifier column first
             cols_order = [new_col_name] + [col for col in df.columns if col != new_col_name]
             df = df[cols_order]
 
         elif len(new_columns) > 1:
-            # Logic for multiple identifiers (splitting tuples)
             def check_tuple(x):
                 return isinstance(x, tuple) and len(x) == len(new_columns)
 
-            # Check if all relevant entries are tuples of the expected length
             if not df.empty and df[tuple_column].apply(check_tuple).all():
                 columns_to_keep = [col for col in df.columns if col != tuple_column]
                 try:
-                    # Create new columns from the tuple elements
                     split_cols = pd.DataFrame(df[tuple_column].tolist(), index=df.index, columns=new_columns)
-                    # Concatenate new columns with the rest of the DataFrame
                     df_transformed = pd.concat([split_cols, df[columns_to_keep]], axis=1)
-                    # Reorder columns
                     ordered_columns = new_columns + columns_to_keep
-                    df = df_transformed[ordered_columns] # Assign back to df
+                    df = df_transformed[ordered_columns] 
                 except Exception as e:
                     self._logger.error(f"Failed to split tuple column '{tuple_column}' into {new_columns}. Error: {e}")
-                    # Keep original structure on error
             elif not df.empty:
                  self._logger.warning(f"Column '{tuple_column}' does not contain consistent tuples of length {len(new_columns)}. Transformation skipped.")  # noqa: E501
-                 # Keep the original tuple column if data is inconsistent
 
         return df
 
