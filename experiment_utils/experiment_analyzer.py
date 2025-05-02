@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.stats import gaussian_kde
+from statsmodels.stats.proportion import proportions_ztest
 
 from .estimators import Estimators
 from .utils import get_logger, log_and_raise_error
@@ -73,8 +74,7 @@ class ExperimentAnalyzer:
     ) -> None:
 
         self._logger = get_logger('Experiment Analyzer')
-        # Removed __ensure_spark_df call
-        self._data = data.copy() # Use copy to avoid modifying original df
+        self._data = data.copy()
         self._outcomes = self.__ensure_list(outcomes)
         self._covariates = self.__ensure_list(covariates)
         self._treatment_col = treatment_col
@@ -346,6 +346,8 @@ class ExperimentAnalyzer:
             if not (0 in treatvalues and 1 in treatvalues):
                 log_and_raise_error(self._logger, f'The treatment column {self._treatment_col} must contain only 0 and 1')  # noqa: E501
 
+            sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(temp_pd)
+
             temp_pd = self.impute_missing_values(
                 data=temp_pd.copy(),
                 num_covariates=numeric_covariates,
@@ -482,6 +484,9 @@ class ExperimentAnalyzer:
                         output['balance'] = np.nan # No balance calculated
 
                     output['experiment'] = experiment_tuple
+                    output['sample_ratio'] = sample_ratio
+                    output['srm_detected'] = srm_detected
+                    output['srm_pvalue'] = srm_pvalue
                     temp_results.append(output)
 
                 except Exception as e:
@@ -494,7 +499,11 @@ class ExperimentAnalyzer:
                         'treatment_value': np.nan, 'absolute_effect': np.nan, 'relative_effect': np.nan,
                         'stat_significance': np.nan, 'standard_error': np.nan, 'pvalue': np.nan,
                         'balance': output.get('balance', np.nan), # Keep balance if calculated
-                        'experiment': experiment_tuple
+                        'experiment': experiment_tuple,
+                        'sample_ratio': sample_ratio,
+                        'srm_detected': srm_detected,
+                        'srm_pvalue': srm_pvalue
+
                     }
                     temp_results.append(error_output)
 
@@ -507,7 +516,7 @@ class ExperimentAnalyzer:
         clean_temp_results = pd.DataFrame(temp_results)
 
         # Define result columns, ensure 'balance' is included conditionally
-        result_columns = ['experiment', 'outcome', 'adjustment',
+        result_columns = ['experiment', 'outcome', 'sample_ratio', 'adjustment',
                           'treated_units', 'control_units', 'control_value',
                           'treatment_value', 'absolute_effect', 'relative_effect',
                           'stat_significance', 'standard_error',
@@ -525,6 +534,11 @@ class ExperimentAnalyzer:
                  index_to_insert = result_columns.index('adjustment') + 1
                  result_columns.insert(index_to_insert, 'balance')
 
+        # Check if srm check should be added
+        if srm_detected is not None and 'srm_detected' not in result_columns:
+            result_columns.insert(result_columns.index('pvalue') + 1, 'srm_detected')
+        if srm_pvalue is not None and 'srm_pvalue' not in result_columns:
+            result_columns.insert(result_columns.index('srm_detected') + 1, 'srm_pvalue')
 
         # Ensure all expected columns exist before selecting
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
@@ -819,3 +833,49 @@ class ExperimentAnalyzer:
             return getattr(self, attribute)
         else:
             log_and_raise_error(self._logger, f'Attribute {attribute} not found!')
+
+    def __check_sample_ratio_mismatch(self, df: pd.DataFrame):
+        """
+        Performs a Sample Ratio Mismatch (SRM) test to check if the observed
+        treatment ratio significantly differs from the expected ratio.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame containing the treatment assignment and expected sample ratio.
+        """
+
+        n_total = len(df)
+        observed_count = df[self._treatment_col].sum()
+        if n_total > 0:
+            sample_ratio = observed_count / n_total
+        else:
+            sample_ratio = None
+
+        if self._exp_sample_ratio_col is not None:
+
+            unique_expected_ratio = df[self._exp_sample_ratio_col].unique()
+
+            if len(unique_expected_ratio) > 1:
+                log_and_raise_error(self._logger, "Multiple unique values by experiment found in expected ratio column!")  # noqa: E501
+            if not (0 < unique_expected_ratio < 1):
+                log_and_raise_error(self._logger, "Expected ratio is not between 0 and 1!")
+
+            try:
+                z_stat, p_value = proportions_ztest(
+                    count=observed_count,
+                    nobs=n_total,
+                    value=unique_expected_ratio,
+                    alternative='two-sided'
+                )
+                srm_pvalue = p_value
+                if p_value < self._alpha:
+                    srm_detected = True
+                    self.logger.info(f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio.")  # noqa: E501
+
+            except Exception as e:
+                self._logger.error(f"SRM error during proportions_ztest: {e}")
+
+            return sample_ratio, srm_detected, srm_pvalue
+        else:
+            return sample_ratio, None, None
