@@ -306,7 +306,7 @@ class ExperimentAnalyzer:
         self._results: A Pandas DataFrame with effects.
         self._balance: A list of Pandas DataFrames with balance metrics per experiment.
         self._adjusted_balance: A list of Pandas DataFrames with adjusted balance metrics per experiment.
-        """
+        """  # noqa: E501
 
         model = {
             None: self._estimator.linear_regression,
