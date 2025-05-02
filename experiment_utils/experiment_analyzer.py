@@ -873,9 +873,10 @@ class ExperimentAnalyzer:
                     srm_detected = True
                     self.logger.info(f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio.")  # noqa: E501
 
+                return sample_ratio, srm_detected, srm_pvalue
+            
             except Exception as e:
                 self._logger.error(f"SRM error during proportions_ztest: {e}")
-
-            return sample_ratio, srm_detected, srm_pvalue
+            
         else:
             return sample_ratio, None, None
