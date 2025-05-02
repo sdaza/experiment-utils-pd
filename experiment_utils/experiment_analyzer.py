@@ -862,6 +862,10 @@ class ExperimentAnalyzer:
                 log_and_raise_error(self._logger, "Expected ratio is not between 0 and 1!")
 
             try:
+
+                srm_detected = False
+                srm_pvalue = None
+
                 z_stat, p_value = proportions_ztest(
                     count=observed_count,
                     nobs=n_total,
@@ -869,14 +873,15 @@ class ExperimentAnalyzer:
                     alternative='two-sided'
                 )
                 srm_pvalue = p_value
+
+
                 if p_value < self._alpha:
                     srm_detected = True
                     self.logger.info(f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio.")  # noqa: E501
 
                 return sample_ratio, srm_detected, srm_pvalue
-            
+
             except Exception as e:
                 self._logger.error(f"SRM error during proportions_ztest: {e}")
-            
         else:
             return sample_ratio, None, None
