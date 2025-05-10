@@ -306,6 +306,26 @@ class ExperimentAnalyzer:
         self._results: A Pandas DataFrame with effects.
         self._balance: A list of Pandas DataFrames with balance metrics per experiment.
         self._adjusted_balance: A list of Pandas DataFrames with adjusted balance metrics per experiment.
+
+        Results
+        -------
+        The results are stored in self._results, which contains the following columns:
+        - experiment: The experiment identifier.
+        - outcome: The outcome variable.
+        - sample_ratio: The sample ratio of the treatment group to the control group.
+        - adjustment: The type of adjustment applied.
+        - balance: The balance metric for the covariates.
+        - treated_units: The number of treated units.
+        - control_units: The number of control units.
+        - control_value: The mean value of the outcome variable in the control group.
+        - treatment_value: The mean value of the outcome variable in the treatment group.
+        - absolute_effect: The absolute effect of the treatment.
+        - relative_effect: The relative effect of the treatment.
+        - stat_significance: The statistical significance of the effect.
+        - standard_error: The standard error of the effect estimate.
+        - pvalue: The p-value of the effect estimate.
+        - srm_detected: Whether sample ratio mismatch was detected.
+        - srm_pvalue: The p-value for the sample ratio mismatch test.
         """  # noqa: E501
 
         model = {
