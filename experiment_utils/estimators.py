@@ -1,5 +1,4 @@
-""""This module contains classes for performing causal inference using various estimators."""
-
+""" "This module contains classes for performing causal inference using various estimators."""
 
 import numpy as np
 import pandas as pd
@@ -17,21 +16,28 @@ class Estimators:
     A class for performing causal inference using various estimators.
     """
 
-    def __init__(self, treatment_col: str, instrument_col: str | None = None,
-                 target_ipw_effect: str = 'ATT', alpha: float = 0.05,
-                 min_ps_score: float = 0.05, max_ps_score: float = 0.95,
-                 polynomial_ipw: bool = False) -> None:
-
-        self._logger = get_logger('Estimators')
+    def __init__(
+        self,
+        treatment_col: str,
+        instrument_col: str | None = None,
+        target_ipw_effect: str = "ATT",
+        alpha: float = 0.05,
+        min_ps_score: float = 0.05,
+        max_ps_score: float = 0.95,
+        polynomial_ipw: bool = False,
+    ) -> None:
+        self._logger = get_logger("Estimators")
         self._treatment_col = treatment_col
         self._instrument_col = instrument_col
         self._target_ipw_effect = target_ipw_effect
         self._alpha = alpha
         self._max_ps_score = max_ps_score
         self._min_ps_score = min_ps_score
-        self._polynomial_ipw = polynomial_ipw
+        self._polynomial_ipw = (polynomial_ipw,)
 
-    def __create_formula(self, outcome_variable: str, covariates: list[str] | None, model_type: str = 'regression') -> str:  # noqa: E501
+    def __create_formula(
+        self, outcome_variable: str, covariates: list[str] | None, model_type: str = "regression"
+    ) -> str:  # noqa: E501
         """
         Create the formula for the regression model.
 
@@ -45,17 +51,19 @@ class Estimators:
         """
 
         formula_dict = {
-            'regression': f"{outcome_variable} ~ 1 + {self._treatment_col}",
-            'iv': f"{outcome_variable} ~ 1 + [{self._treatment_col} ~ {self._instrument_col}]"
+            "regression": f"{outcome_variable} ~ 1 + {self._treatment_col}",
+            "iv": f"{outcome_variable} ~ 1 + [{self._treatment_col} ~ {self._instrument_col}]",
         }
         if covariates:
             standardized_covariates = [f"z_{covariate}" for covariate in covariates]
-            formula = formula_dict[model_type] + ' + ' + ' + '.join(standardized_covariates)
+            formula = formula_dict[model_type] + " + " + " + ".join(standardized_covariates)
         else:
             formula = formula_dict[model_type]
         return formula
 
-    def linear_regression(self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None) -> dict[str, str | int | float]:  # noqa: E501
+    def linear_regression(
+        self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None
+    ) -> dict[str, str | int | float]:  # noqa: E501
         """
         Perform linear regression on the given data.
 
@@ -98,11 +106,12 @@ class Estimators:
             "relative_effect": relative_effect,
             "standard_error": standard_error,
             "pvalue": pvalue,
-            "stat_significance": 1 if pvalue < self._alpha else 0
+            "stat_significance": 1 if pvalue < self._alpha else 0,
         }
 
-    def weighted_least_squares(self, data: pd.DataFrame, outcome_variable: str,
-                               weight_column: str, covariates: list[str] | None = None) -> dict[str, str | int | float]:
+    def weighted_least_squares(
+        self, data: pd.DataFrame, outcome_variable: str, weight_column: str, covariates: list[str] | None = None
+    ) -> dict[str, str | int | float]:
         """
         Perform weighted least squares regression on the given data.
 
@@ -149,11 +158,13 @@ class Estimators:
             "relative_effect": relative_effect,
             "standard_error": standard_error,
             "pvalue": pvalue,
-            "stat_significance": 1 if pvalue < self._alpha else 0
+            "stat_significance": 1 if pvalue < self._alpha else 0,
         }
 
-    def iv_regression(self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None) -> dict[str, str | int | float]:  # noqa: E501
-        """"
+    def iv_regression(
+        self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None
+    ) -> dict[str, str | int | float]:  # noqa: E501
+        """ "
         Perform instrumental variable regression on the given data.
 
         Parameters:
@@ -177,9 +188,9 @@ class Estimators:
         if not self._instrument_col:
             log_and_raise_error(self._logger, "Instrument column must be specified for IV adjustment")
 
-        formula = self.__create_formula(outcome_variable=outcome_variable, model_type='iv', covariates=covariates)
+        formula = self.__create_formula(outcome_variable=outcome_variable, model_type="iv", covariates=covariates)
         model = IV2SLS.from_formula(formula, data)
-        results = model.fit(cov_type='robust')
+        results = model.fit(cov_type="robust")
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
@@ -197,10 +208,12 @@ class Estimators:
             "relative_effect": relative_effect,
             "standard_error": standard_error,
             "pvalue": pvalue,
-            "stat_significance": 1 if pvalue < self._alpha else 0
+            "stat_significance": 1 if pvalue < self._alpha else 0,
         }
 
-    def ipw_logistic(self, data: pd.DataFrame, covariates: list[str], penalty: str = 'l2', C: float = 1.0, max_iter: int = 5000) -> pd.DataFrame:  # noqa: E501
+    def ipw_logistic(
+        self, data: pd.DataFrame, covariates: list[str], penalty: str = "l2", C: float = 1.0, max_iter: int = 5000
+    ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate the Inverse Probability Weights (IPW) using logistic regression with regularization.
 
@@ -237,11 +250,13 @@ class Estimators:
         logistic_model.fit(X, y)
 
         if not logistic_model.n_iter_[0] < logistic_model.max_iter:
-            self._logger.warning("Logistic regression model did not converge. Consider increasing the number of iterations or adjusting other parameters.")  # noqa: E501
+            self._logger.warning(
+                "Logistic regression model did not converge. Consider increasing the number of iterations or adjusting other parameters."  # noqa: E501
+            )  # noqa: E501
 
-        data['propensity_score'] = logistic_model.predict_proba(X)[:, 1]
-        data['propensity_score'] = np.minimum(self._max_ps_score, data['propensity_score'])
-        data['propensity_score'] = np.maximum(self._min_ps_score, data['propensity_score'])
+        data["propensity_score"] = logistic_model.predict_proba(X)[:, 1]
+        data["propensity_score"] = np.minimum(self._max_ps_score, data["propensity_score"])
+        data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
 
         data = self.__calculate_stabilized_weights(data)
         return data
@@ -261,12 +276,12 @@ class Estimators:
         X = data[covariates]
         y = data[self._treatment_col]
 
-        xgb_model = XGBClassifier(eval_metric='logloss')
+        xgb_model = XGBClassifier(eval_metric="logloss")
         xgb_model.fit(X, y)
 
-        data['propensity_score'] = xgb_model.predict_proba(X)[:, 1]
-        data['propensity_score'] = np.minimum(self._max_ps_score, data['propensity_score'])
-        data['propensity_score'] = np.maximum(self._min_ps_score, data['propensity_score'])
+        data["propensity_score"] = xgb_model.predict_proba(X)[:, 1]
+        data["propensity_score"] = np.minimum(self._max_ps_score, data["propensity_score"])
+        data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
         data = self.__calculate_stabilized_weights(data)
 
         return data
@@ -288,24 +303,16 @@ class Estimators:
         num_units = data.shape[0]
         p_treatment = sum(data[self._treatment_col]) / num_units
 
-        data["ips_stabilized_weight"] = data[self._treatment_col] / data[
-            "propensity_score"
-        ] * p_treatment + (1 - data[self._treatment_col]) / (
-            1 - data["propensity_score"]
-        ) * (
-            1 - p_treatment
-        )
+        data["ips_stabilized_weight"] = data[self._treatment_col] / data["propensity_score"] * p_treatment + (
+            1 - data[self._treatment_col]
+        ) / (1 - data["propensity_score"]) * (1 - p_treatment)
 
         data["tips_stabilized_weight"] = data[self._treatment_col] * p_treatment + (
             1 - data[self._treatment_col]
         ) * data["propensity_score"] / (1 - data["propensity_score"]) * (1 - p_treatment)
 
-        data["cips_stabilized_weight"] = data[self._treatment_col] * (
-            1 - data["propensity_score"]
-        ) / data["propensity_score"] * p_treatment + (
-            1 - data[self._treatment_col]
-        ) * (
-            1 - p_treatment
-        )
+        data["cips_stabilized_weight"] = data[self._treatment_col] * (1 - data["propensity_score"]) / data[
+            "propensity_score"
+        ] * p_treatment + (1 - data[self._treatment_col]) * (1 - p_treatment)
 
         return data

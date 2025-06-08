@@ -18,7 +18,6 @@ def sample_data(
     random_treatment_effect=0.05,
     random_seed=42,
 ):
-
     np.random.seed(random_seed)
 
     # Function to get a truncated normal distribution
@@ -29,18 +28,14 @@ def sample_data(
         return truncnorm.rvs(a, b, loc=mean, scale=std_dev, size=size)
 
     # Generate baseline conversions with a truncated normal distribution
-    base_model_conversion = get_truncated_normal(
-        base_model_conversion_mean, base_model_conversion_variance, n_model
-    )
+    base_model_conversion = get_truncated_normal(base_model_conversion_mean, base_model_conversion_variance, n_model)
     base_random_conversion = get_truncated_normal(
         base_random_conversion_mean, base_random_conversion_variance, n_random
     )
 
     # model group data
     model_treatment = np.random.binomial(1, 0.8, n_model)
-    model_conversion = (
-        base_model_conversion + model_treatment_effect * model_treatment
-    ) > np.random.rand(n_model)
+    model_conversion = (base_model_conversion + model_treatment_effect * model_treatment) > np.random.rand(n_model)
 
     model_data = pd.DataFrame(
         {
@@ -55,9 +50,7 @@ def sample_data(
 
     # random group data
     random_treatment = np.random.binomial(1, 0.5, n_random)
-    random_conversion = (
-        base_random_conversion + random_treatment_effect * random_treatment
-    ) > np.random.rand(n_random)
+    random_conversion = (base_random_conversion + random_treatment_effect * random_treatment) > np.random.rand(n_random)
     random_data = pd.DataFrame(
         {
             "experiment": 123,
@@ -82,10 +75,8 @@ def test_no_covariates(sample_data):
     experiment_identifier = "experiment"
 
     analyzer = ExperimentAnalyzer(
-        data=sample_data,
-        outcomes=outcomes,
-        treatment_col=treatment_col,
-        experiment_identifier=experiment_identifier)
+        data=sample_data, outcomes=outcomes, treatment_col=treatment_col, experiment_identifier=experiment_identifier
+    )
 
     try:
         analyzer.get_effects()
@@ -100,14 +91,15 @@ def test_sample_ratio_check(sample_data):
     outcomes = "conversion"
     treatment_col = "treatment"
     experiment_identifier = "experiment"
-    expected_ratio_col = 'expected_ratio'
+    expected_ratio_col = "expected_ratio"
 
     analyzer = ExperimentAnalyzer(
         data=sample_data,
         outcomes=outcomes,
         treatment_col=treatment_col,
-        experiment_identifier=experiment_identifier, 
-        exp_sample_ratio_col=expected_ratio_col)
+        experiment_identifier=experiment_identifier,
+        exp_sample_ratio_col=expected_ratio_col,
+    )
 
     try:
         analyzer.get_effects()
@@ -122,10 +114,7 @@ def test_no_experiment_identifier(sample_data):
     outcomes = "conversion"
     treatment_col = "treatment"
 
-    analyzer = ExperimentAnalyzer(
-        data=sample_data,
-        outcomes=outcomes,
-        treatment_col=treatment_col)
+    analyzer = ExperimentAnalyzer(data=sample_data, outcomes=outcomes, treatment_col=treatment_col)
 
     try:
         analyzer.get_effects()
@@ -147,7 +136,8 @@ def test_regression_covariates(sample_data):
         outcomes=outcomes,
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
-        regression_covariates=regression_covariates)
+        regression_covariates=regression_covariates,
+    )
 
     try:
         analyzer.get_effects()
@@ -169,7 +159,7 @@ def test_no_adjustment(sample_data):
         outcomes=outcomes,
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
-        covariates=covariates
+        covariates=covariates,
     )
 
     try:
@@ -193,7 +183,7 @@ def test_ipw_adjustment(sample_data):
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
         covariates=covariates,
-        adjustment="IPW"
+        adjustment="IPW",
     )
 
     try:
