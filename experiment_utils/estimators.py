@@ -316,8 +316,8 @@ class Estimators:
         covariate_data = data[covariates]
 
         eb = entbal()
-        eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
-        data[self._target_weights[self._target_ipw_effect]] = eb.W
+        weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
+        data[self._target_weights[self._target_ipw_effect]] = weights
 
         return data
 
