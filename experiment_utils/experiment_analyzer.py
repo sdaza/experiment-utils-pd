@@ -92,9 +92,8 @@ class ExperimentAnalyzer:
         self._balance = []
         self._adjusted_balance = []
         self._final_covariates = []
-        self._estimator = Estimators(treatment_col, instrument_col, target_ipw_effect, alpha, min_ps_score, max_ps_score, polynomial_ipw)  # noqa: E501
-
         self._target_weights = {"ATT": "tips_stabilized_weight", "ATE": "ips_stabilized_weight", "ATC": "cips_stabilized_weight"}  # noqa: E501
+        self._estimator = Estimators(treatment_col, instrument_col, target_ipw_effect, self._target_weights, alpha, min_ps_score, max_ps_score, polynomial_ipw)  # noqa: E501
 
     def __check_input(self) -> None:
 
@@ -336,7 +335,8 @@ class ExperimentAnalyzer:
 
         propensity_model = {
             'logistic': self._estimator.ipw_logistic,
-            'xgboost': self._estimator.ipw_xgboost
+            'xgboost': self._estimator.ipw_xgboost, 
+            'entropy': self._estimator.entropy_balance,
         }
 
         temp_results = []

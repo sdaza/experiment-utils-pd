@@ -10,7 +10,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from xgboost import XGBClassifier
 
 from .utils import get_logger, log_and_raise_error
-
+from .entbal import entbal
 
 class Estimators:
     """
@@ -18,7 +18,8 @@ class Estimators:
     """
 
     def __init__(self, treatment_col: str, instrument_col: str | None = None,
-                 target_ipw_effect: str = 'ATT', alpha: float = 0.05,
+                 target_ipw_effect: str = 'ATT', target_weights: dict = None,
+                 alpha: float = 0.05,
                  min_ps_score: float = 0.05, max_ps_score: float = 0.95,
                  polynomial_ipw: bool = False) -> None:
 
@@ -26,6 +27,7 @@ class Estimators:
         self._treatment_col = treatment_col
         self._instrument_col = instrument_col
         self._target_ipw_effect = target_ipw_effect
+        self._target_weights = target_weights
         self._alpha = alpha
         self._max_ps_score = max_ps_score
         self._min_ps_score = min_ps_score
@@ -270,6 +272,40 @@ class Estimators:
         data = self.__calculate_stabilized_weights(data)
 
         return data
+
+
+    def entropy_balance(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
+        """
+        Perform entropy balancing to create weights.
+
+        This method generates weights for the control group units such that the covariate moments
+        in the re-weighted control group match those of the treatment group. Treated units
+        receive a weight of 1.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            The input data containing the treatment status and covariates.
+        covariates : list[str]
+            A list of covariate names to use for balancing.
+
+        Returns
+        -------
+        pd.DataFrame
+            The original DataFrame with an added 'eb_weights' column.
+        """
+        if not covariates:
+            log_and_raise_error(self._logger, "Covariates must be specified for entropy balancing.")
+
+        treatment_indicator = data[self._treatment_col]
+        covariate_data = data[covariates]
+
+        eb = entbal()
+        eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
+        data[self._target_weights[self._target_ipw_effect]] = eb.W
+
+        return data
+
 
     def __calculate_stabilized_weights(self, data: pd.DataFrame) -> pd.DataFrame:
         """
