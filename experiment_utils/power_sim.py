@@ -604,7 +604,7 @@ class PowerSim:
             )  # noqa: E501
             plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=len(temp.sample_size.unique()) - 1, colors="gray")
             plt.title(
-                f"Simulated power estimation for {self.metric}s, {d_relative_effect[self.relative_effect]} effects {str(i)}\n (sims per scenario:{self.nsim})"
+                f"Simulated power estimation for {self.metric}s, {d_relative_effect[self.relative_effect]} effects {str(i)}\n (sims per scenario:{self.nsim})"  # noqa: E501
             )  # noqa: E501
             plt.legend(bbox_to_anchor=(1.05, 1), title="comparison", loc="upper left")
             plt.xlabel("\n sample size")
