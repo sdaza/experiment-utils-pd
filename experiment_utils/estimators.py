@@ -15,13 +15,15 @@ from .utils import get_logger, log_and_raise_error
 class Estimators:
     """
     A class for performing causal inference using various estimators.
+
+    Supports adjustment methods: 'balance' (with balance_method: 'ps-logistic', 'ps-xgboost', 'entropy') and 'IV'.
     """
 
     def __init__(
         self,
         treatment_col: str,
         instrument_col: str | None = None,
-        target_ipw_effect: str = "ATT",
+        target_effect: str = "ATT",
         target_weights: dict = None,
         alpha: float = 0.05,
         min_ps_score: float = 0.05,
@@ -31,12 +33,26 @@ class Estimators:
         self._logger = get_logger("Estimators")
         self._treatment_col = treatment_col
         self._instrument_col = instrument_col
-        self._target_ipw_effect = target_ipw_effect
+        self._target_effect = target_effect
         self._target_weights = target_weights
         self._alpha = alpha
         self._max_ps_score = max_ps_score
         self._min_ps_score = min_ps_score
         self._polynomial_ipw = polynomial_ipw
+
+    def get_balance_method(self, method_name: str):
+        """
+        Returns the balance method function based on the method name.
+        Supported: 'ps-logistic', 'ps-xgboost', 'entropy'.
+        """
+        balance_methods = {
+            "ps-logistic": self.ipw_logistic,
+            "ps-xgboost": self.ipw_xgboost,
+            "entropy": self.entropy_balance,
+        }
+        if method_name not in balance_methods:
+            log_and_raise_error(self._logger, f"Unknown balance_method: {method_name}")
+        return balance_methods[method_name]
 
     def __create_formula(
         self, outcome_variable: str, covariates: list[str] | None, model_type: str = "regression"
@@ -216,14 +232,14 @@ class Estimators:
 
     def ipw_logistic(
         self, data: pd.DataFrame, covariates: list[str], penalty: str = "l2", C: float = 1.0, max_iter: int = 5000
-    ) -> pd.DataFrame:  # noqa: E501
+    ) -> pd.DataFrame:
         """
-        Estimate the Inverse Probability Weights (IPW) using logistic regression with regularization.
+        Balance method: Estimate weights using logistic regression (ps-logistic).
 
         Parameters
         ----------
         data : pd.DataFrame
-            Data to estimate the IPW from
+            Data to estimate the weights from
         covariates : List[str]
             List of covariates to include in the estimation
         penalty : str, optional
@@ -231,12 +247,12 @@ class Estimators:
         C : float, optional
             Inverse of regularization strength, by default 1.0
         max_iter : int, optional
-
+            Maximum number of iterations, by default 5000
 
         Returns
         -------
         pd.DataFrame
-            Data with the estimated IPW
+            Data with the estimated weights
         """
 
         logistic_model = LogisticRegression(penalty=penalty, C=C, max_iter=max_iter)
@@ -266,14 +282,19 @@ class Estimators:
 
     def ipw_xgboost(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
         """
-        Estimate the Inverse Probability Weights (IPW) using XGBoost.
+        Balance method: Estimate weights using XGBoost (ps-xgboost).
 
-        Parameters:
-        data (pd.DataFrame): Data to estimate the IPW from.
-        covariates (List[str]): List of covariates to include in the estimation.
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Data to estimate the weights from
+        covariates : List[str]
+            List of covariates to include in the estimation
 
-        Returns:
-        pd.DataFrame: Data with the estimated IPW.
+        Returns
+        -------
+        pd.DataFrame
+            Data with the estimated weights
         """
 
         X = data[covariates]
@@ -291,7 +312,7 @@ class Estimators:
 
     def entropy_balance(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
         """
-        Perform entropy balancing to create weights.
+        Balance method: Perform entropy balancing to create weights ('entropy').
 
         This method generates weights for the control group units such that the covariate moments
         in the re-weighted control group match those of the treatment group. Treated units
@@ -307,7 +328,7 @@ class Estimators:
         Returns
         -------
         pd.DataFrame
-            The original DataFrame with an added 'eb_weights' column.
+            The original DataFrame with an added weights column.
         """
         if not covariates:
             log_and_raise_error(self._logger, "Covariates must be specified for entropy balancing.")
@@ -316,8 +337,8 @@ class Estimators:
         covariate_data = data[covariates]
 
         eb = EntropyBalance()
-        weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
-        data[self._target_weights[self._target_ipw_effect]] = weights
+        weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_effect)
+        data[self._target_weights[self._target_effect]] = weights
 
         return data
 

@@ -170,8 +170,8 @@ def test_no_adjustment(sample_data):
         pytest.fail(f" raised an exception: {e}")
 
 
-def test_ipw_adjustment(sample_data):
-    """Test get_effects ipw adjustments"""
+def test_balance_adjustment(sample_data):
+    """Test get_effects with balance adjustment and balance_method"""
     outcomes = "conversion"
     treatment_col = "treatment"
     experiment_identifier = "experiment"
@@ -183,7 +183,9 @@ def test_ipw_adjustment(sample_data):
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
         covariates=covariates,
-        adjustment="IPW",
+        adjustment="balance",
+        balance_method="ps-logistic",
+        target_effect="ATT",
     )
 
     try:

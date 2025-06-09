@@ -14,11 +14,11 @@ from .utils import get_logger, log_and_raise_error
 
 class ExperimentAnalyzer:
     """
-    Class ExperimentAnlyzer to analyze and design experiments
+    Class ExperimentAnalyzer to analyze and design experiments
 
     Parameters
     ----------
-    data : pd.DataFrame  # Changed from PySpark DataFrame
+    data : pd.DataFrame
         Pandas Dataframe
     outcomes : List
         List of outcome variables
@@ -29,13 +29,13 @@ class ExperimentAnalyzer:
     experiment_identifier : List
         List of columns to identify an experiment
     adjustment : str, optional
-        Covariate adjustment method (e.g., IPW, IV), by default None
+        Covariate adjustment method ('balance', 'IV'), by default None
     exp_sample_ratio_col : str, optional
         Column name for the expected sample ratio, by default None
     target_ipw_effect : str, optional
         Target IPW effect (ATT, ATE, ATC), by default "ATT"
-    propensity_score_method : str, optional
-        Propensity score method (logistic, xgboost), by default 'logistic'
+    balance_method : str, optional
+        Balance method ('ps-logistic', 'ps-xgboost', 'entropy'), by default 'ps-logistic'
     min_ps_score : float, optional
         Minimum propensity score, by default 0.05
     max_ps_score : float, optional
@@ -43,26 +43,26 @@ class ExperimentAnalyzer:
     polynomial_ipw : bool, optional
         Use polynomial and interaction features for IPW, by default False. It can be slow for large datasets.
     assess_overlap : bool, optional
-        Assess overlap between treatment and control groups (slow) when using IPW to adjust covariates, by default False
+        Assess overlap between treatment and control groups (slow) when using balance to adjust covariates, by default False
     instrument_col : str, optional
         Column name for the instrument variable, by default None
     alpha : float, optional
         Significance level, by default 0.05
     regression_covariates : List, optional
         List of covariates to include in the final linear regression model, by default None
-    """
+    """  # noqa: E501
 
     def __init__(
         self,
-        data: pd.DataFrame,  # Changed from PySpark DataFrame
+        data: pd.DataFrame,
         outcomes: list[str],
         treatment_col: str,
         experiment_identifier: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
         exp_sample_ratio_col: str | None = None,
-        target_ipw_effect: str = "ATT",
-        propensity_score_method: str = "logistic",
+        target_effect: str = "ATT",
+        balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
         polynomial_ipw: bool = False,
@@ -79,8 +79,8 @@ class ExperimentAnalyzer:
         self._experiment_identifier = self.__ensure_list(experiment_identifier)
         self._adjustment = adjustment
         self._exp_sample_ratio_col = exp_sample_ratio_col
-        self._propensity_score_method = propensity_score_method
-        self._target_ipw_effect = target_ipw_effect
+        self._balance_method = balance_method
+        self._target_effect = target_effect
         self._assess_overlap = assess_overlap
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
@@ -98,7 +98,7 @@ class ExperimentAnalyzer:
         self._estimator = Estimators(
             treatment_col,
             instrument_col,
-            target_ipw_effect,
+            target_effect,
             self._target_weights,
             alpha,
             min_ps_score,
@@ -355,17 +355,15 @@ class ExperimentAnalyzer:
 
         model = {
             None: self._estimator.linear_regression,
-            "IPW": self._estimator.weighted_least_squares,
+            "balance": self._estimator.weighted_least_squares,
             "IV": self._estimator.iv_regression,
         }
 
-        propensity_model = {
-            "logistic": self._estimator.ipw_logistic,
-            "xgboost": self._estimator.ipw_xgboost,
-            "entropy": self._estimator.entropy_balance,
-        }
+        # Use Estimators.get_balance_method for modularity
+        get_balance_method = self._estimator.get_balance_method
 
         temp_results = []
+        output = {}  # Ensure output is always defined for error handling
 
         if adjustment is None:
             adjustment = self._adjustment
@@ -424,15 +422,14 @@ class ExperimentAnalyzer:
                 balance_mean = balance["balance_flag"].mean() if not balance.empty else np.nan
                 self._logger.info("::::: Balance: %.2f", np.round(balance_mean, 2))
 
-                if adjustment == "IPW":
-                    temp_pd = propensity_model[self._propensity_score_method](
-                        data=temp_pd, covariates=[f"z_{cov}" for cov in final_covariates]
-                    )
+                if adjustment == "balance":
+                    balance_func = get_balance_method(self._balance_method)
+                    temp_pd = balance_func(data=temp_pd, covariates=[f"z_{cov}" for cov in final_covariates])
 
                     adjusted_balance = self.calculate_smd(
                         data=temp_pd,
                         covariates=final_covariates,
-                        weights_col=self._target_weights[self._target_ipw_effect],
+                        weights_col=self._target_weights[self._target_effect],
                     )
                     adjusted_balance["experiment"] = [experiment_tuple] * adjusted_balance.shape[0]
                     adjusted_balance = self.__transform_tuple_column(
@@ -469,7 +466,7 @@ class ExperimentAnalyzer:
             # create adjustment label
             relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
-            adjustment_labels = {"IPW": "IPW", "IV": "IV"}
+            adjustment_labels = {"balance": "balance", "IV": "IV"}
 
             if adjustment in adjustment_labels and len(relevant_covariates) > 0:
                 adjustment_label = adjustment_labels[adjustment] + "+Regression"
@@ -495,37 +492,62 @@ class ExperimentAnalyzer:
                     continue
 
                 try:
-                    if adjustment == "IPW":
-                        # Check if weight column exists and has non-zero variance if needed by estimator
-                        weight_col = self._target_weights[self._target_ipw_effect]
+                    if adjustment == "balance":
+                        # Use correct target_effect for weight column
+                        weight_col = self._target_weights[self._target_effect]
                         if weight_col not in temp_pd.columns:
                             log_and_raise_error(
                                 self._logger,
-                                f"Weight column '{weight_col}' not found after propensity score calculation.",
-                            )  # noqa: E501
+                                f"Weight column '{weight_col}' not found after balance calculation.",
+                            )
                         if temp_pd[weight_col].var() == 0:
                             self._logger.warning(
                                 f"Weight column '{weight_col}' has zero variance for experiment {experiment_tuple}. Results might be unreliable."  # noqa: E501
-                            )  # noqa: E501
-
+                            )
                         output = model[adjustment](
                             data=temp_pd,
                             outcome_variable=outcome,
-                            covariates=list(relevant_covariates),  # noqa: E501
+                            covariates=list(relevant_covariates),
                             weight_column=weight_col,
                         )
                     else:
                         output = model[adjustment](
                             data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates)
-                        )  # noqa: E501
+                        )
 
                     output["adjustment"] = adjustment_label
-                    if adjustment == "IPW" and not adjusted_balance.empty:
+                    if adjustment == "balance" and not adjusted_balance.empty:
                         output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
-                    elif not balance.empty:  # Use initial balance if no adjustment or IPW failed
+                    elif not balance.empty:  # Use initial balance if no adjustment or balance failed
                         output["balance"] = np.round(balance["balance_flag"].mean(), 2)
                     else:
                         output["balance"] = np.nan  # No balance calculated
+
+                    # Compute ESS for treatment and control if balance adjustment
+                    if adjustment == "balance":
+                        weight_col = self._target_weights[self._target_effect]
+                        if weight_col in temp_pd.columns:
+                            treat_mask = temp_pd[self._treatment_col] == 1
+                            control_mask = temp_pd[self._treatment_col] == 0
+                            treat_weights = temp_pd.loc[treat_mask, weight_col]
+                            control_weights = temp_pd.loc[control_mask, weight_col]
+                            ess_treat = self.compute_ess(weights=treat_weights)
+                            ess_control = self.compute_ess(weights=control_weights)
+                            n_treat = treat_mask.sum()
+                            n_control = control_mask.sum()
+                            output["ess_treatment"] = np.floor(ess_treat)
+                            output["ess_control"] = np.floor(ess_control)
+                            output["ess_treatment_reduction"] = (
+                                np.round(1 - (ess_treat / n_treat), 3) if n_treat > 0 else np.nan
+                            )  # noqa: E501
+                            output["ess_control_reduction"] = (
+                                np.round(1 - (ess_control / n_control), 3) if n_control > 0 else np.nan
+                            )  # noqa: E501
+                        else:
+                            output["ess_treatment"] = np.nan
+                            output["ess_control"] = np.nan
+                            output["ess_treatment_reduction"] = np.nan
+                            output["ess_control_reduction"] = np.nan
 
                     output["experiment"] = experiment_tuple
                     output["sample_ratio"] = sample_ratio
@@ -582,29 +604,27 @@ class ExperimentAnalyzer:
             "pvalue",
         ]
 
-        # Check if balance calculation was performed for any experiment
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
         if balance_calculated and "balance" in clean_temp_results.columns:
             index_to_insert = result_columns.index("adjustment") + 1
             result_columns.insert(index_to_insert, "balance")
-        elif "balance" not in clean_temp_results.columns:
-            # Add balance column with NaNs if it wasn't added during processing
-            clean_temp_results["balance"] = np.nan
-            if balance_calculated:
-                index_to_insert = result_columns.index("adjustment") + 1
-                result_columns.insert(index_to_insert, "balance")
-
-        # Check if srm check should be added
+            # insert columns for ESS if balance is calculated at the end
+            result_columns.extend(
+                [
+                    "ess_treatment",
+                    "ess_control",
+                    "ess_treatment_reduction",
+                    "ess_control_reduction",
+                ]
+            )
         if srm_detected is not None and "srm_detected" not in result_columns:
             result_columns.insert(result_columns.index("pvalue") + 1, "srm_detected")
         if srm_pvalue is not None and "srm_pvalue" not in result_columns:
             result_columns.insert(result_columns.index("srm_detected") + 1, "srm_pvalue")
 
-        # Ensure all expected columns exist before selecting
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
 
-        # Concatenate balance dataframes if they exist
         if self._balance:
             self._balance = pd.concat(self._balance, ignore_index=True)
         else:
@@ -957,3 +977,13 @@ class ExperimentAnalyzer:
                 self._logger.error(f"SRM error during proportions_ztest: {e}")
         else:
             return sample_ratio, None, None
+
+    def compute_ess(self, weights: np.ndarray) -> float:
+        """
+        Compute effective sample size (ESS) given a vector of weights.
+        ESS = (sum(w))^2 / sum(w^2)
+        """
+        weights = np.asarray(weights)
+        if np.all(weights == 0):
+            return 0.0
+        return (weights.sum()) ** 2 / (np.sum(weights**2) + 1e-12)
