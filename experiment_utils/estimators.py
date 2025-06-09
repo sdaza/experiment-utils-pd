@@ -263,6 +263,11 @@ class Estimators:
             X = data[covariates]
 
         y = data[self._treatment_col]
+
+        self._logger.info(
+            "Estimating Inverse Probability Weights using logistic regression with covariates: %s",
+            ", ".join(covariates),
+        )
         logistic_model.fit(X, y)
 
         if not logistic_model.n_iter_[0] < logistic_model.max_iter:
@@ -275,6 +280,8 @@ class Estimators:
         data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
 
         data = self.__calculate_stabilized_weights(data)
+
+        self._logger.info("Finished estimating Inverse Probability Weights.")
         return data
 
     def entropy_balancing(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
@@ -303,10 +310,12 @@ class Estimators:
         treatment_indicator = data[self._treatment_col]
         covariate_data = data[covariates]
 
+        self._logger.info("Performing entropy balancing with the following covariates: %s", ", ".join(covariates))
         eb = entbal()
         eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
         data[self._target_weights[self._target_ipw_effect]] = eb.W
 
+        self._logger.info("Finished!")
         return data
 
     def ipw_xgboost(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
