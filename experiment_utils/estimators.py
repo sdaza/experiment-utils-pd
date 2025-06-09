@@ -8,6 +8,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import PolynomialFeatures
 from xgboost import XGBClassifier
 
+from .entbal import entbal, ess
 from .utils import get_logger, log_and_raise_error
 
 
@@ -21,6 +22,7 @@ class Estimators:
         treatment_col: str,
         instrument_col: str | None = None,
         target_ipw_effect: str = "ATT",
+        target_weights: dict[str, str] = None,
         alpha: float = 0.05,
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
@@ -30,6 +32,7 @@ class Estimators:
         self._treatment_col = treatment_col
         self._instrument_col = instrument_col
         self._target_ipw_effect = target_ipw_effect
+        self._target_weights = target_weights
         self._alpha = alpha
         self._max_ps_score = max_ps_score
         self._min_ps_score = min_ps_score
@@ -148,6 +151,15 @@ class Estimators:
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
+        weights = data[weight_column].values
+        treat = data[self._treatment_col].values
+        n_control = np.sum(treat == 0)
+        n_treatment = np.sum(treat == 1)
+        ess_control = round(ess(weights[treat == 0]), 2) if n_control > 0 else np.nan
+        ess_treatment = round(ess(weights[treat == 1]), 2) if n_treatment > 0 else np.nan
+        control_sample_reduction = 100 * (1 - ess_control / n_control) if n_control > 0 else np.nan
+        treatment_sample_reduction = 100 * (1 - ess_treatment / n_treatment) if n_treatment > 0 else np.nan
+
         return {
             "outcome": outcome_variable,
             "treated_units": data[self._treatment_col].sum().astype(int),
@@ -159,6 +171,10 @@ class Estimators:
             "standard_error": standard_error,
             "pvalue": pvalue,
             "stat_significance": 1 if pvalue < self._alpha else 0,
+            "ess_control": ess_control,
+            "ess_treatment": ess_treatment,
+            "control_sample_reduction": control_sample_reduction,
+            "treatment_sample_reduction": treatment_sample_reduction,
         }
 
     def iv_regression(
@@ -259,6 +275,38 @@ class Estimators:
         data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
 
         data = self.__calculate_stabilized_weights(data)
+        return data
+
+    def entropy_balancing(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
+        """
+        Perform entropy balancing to create weights.
+
+        This method generates weights for the control group units such that the covariate moments
+        in the re-weighted control group match those of the treatment group. Treated units
+        receive a weight of 1.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            The input data containing the treatment status and covariates.
+        covariates : list[str]
+            A list of covariate names to use for balancing.
+
+        Returns
+        -------
+        pd.DataFrame
+            The original DataFrame with an added 'eb_weights' column.
+        """
+        if not covariates:
+            log_and_raise_error(self._logger, "Covariates must be specified for entropy balancing.")
+
+        treatment_indicator = data[self._treatment_col]
+        covariate_data = data[covariates]
+
+        eb = entbal()
+        eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
+        data[self._target_weights[self._target_ipw_effect]] = eb.W
+
         return data
 
     def ipw_xgboost(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:

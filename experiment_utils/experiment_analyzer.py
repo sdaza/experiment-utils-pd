@@ -64,9 +64,6 @@ class ExperimentAnalyzer:
         exp_sample_ratio_col: str | None = None,
         target_ipw_effect: str = "ATT",
         propensity_score_method: str = "logistic",
-        bootstrap: bool = False,
-        n_bootstrap: int = 1000,
-        n_jobs: int = -1,
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
         polynomial_ipw: bool = False,
@@ -96,15 +93,23 @@ class ExperimentAnalyzer:
         self._balance = []
         self._adjusted_balance = []
         self._final_covariates = []
-        self._estimator = Estimators(
-            treatment_col, instrument_col, target_ipw_effect, alpha, min_ps_score, max_ps_score, polynomial_ipw
-        )
 
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
             "ATE": "ips_stabilized_weight",
             "ATC": "cips_stabilized_weight",
         }  # noqa: E501
+
+        self._estimator = Estimators(
+            treatment_col,
+            instrument_col,
+            target_ipw_effect,
+            self._target_weights,
+            alpha,
+            min_ps_score,
+            max_ps_score,
+            polynomial_ipw,
+        )
 
     def __check_input(self) -> None:
         # dataframe is empty
@@ -359,7 +364,11 @@ class ExperimentAnalyzer:
             "IV": self._estimator.iv_regression,
         }
 
-        propensity_model = {"logistic": self._estimator.ipw_logistic, "xgboost": self._estimator.ipw_xgboost}
+        propensity_model = {
+            "logistic": self._estimator.ipw_logistic,
+            "xgboost": self._estimator.ipw_xgboost,
+            "entropy": self._estimator.entropy_balancing,
+        }
 
         temp_results = []
 
@@ -591,6 +600,10 @@ class ExperimentAnalyzer:
             "stat_significance",
             "standard_error",
             "pvalue",
+            "ess_control",
+            "ess_treatment",
+            "control_sample_reduction",
+            "treatment_sample_reduction",
         ]
 
         # Check if balance calculation was performed for any experiment

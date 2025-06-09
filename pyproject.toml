@@ -24,6 +24,7 @@ dependencies = [
     "pytest>=8.3.5",
     "ruff>=0.11.7",
     "ipykernel>=6.29.5",
+    "pyeb>=1.0.68",
 ]
 
 [tool.setuptools.packages.find]
@@ -88,3 +89,6 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = false
 docstring-code-line-length = "dynamic"
+
+[tool.uv.sources]
+pyeb = { git = "ssh://git@github.com/bvegetabile/pyeb.git" }
