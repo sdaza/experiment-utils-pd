@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import PolynomialFeatures
 from xgboost import XGBClassifier
 
-from .entbal import entbal
+from .entbal import EntropyBalance
 from .utils import get_logger, log_and_raise_error
 
 
@@ -315,7 +315,7 @@ class Estimators:
         treatment_indicator = data[self._treatment_col]
         covariate_data = data[covariates]
 
-        eb = entbal()
+        eb = EntropyBalance()
         weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_ipw_effect)
         data[self._target_weights[self._target_ipw_effect]] = weights
 
