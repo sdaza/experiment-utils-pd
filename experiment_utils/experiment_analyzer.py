@@ -469,13 +469,13 @@ class ExperimentAnalyzer:
             adjustment_labels = {"balance": "balance", "IV": "IV"}
 
             if adjustment in adjustment_labels and len(relevant_covariates) > 0:
-                adjustment_label = adjustment_labels[adjustment] + "+Regression"
+                adjustment_label = adjustment_labels[adjustment] + "+regression"
             elif adjustment in adjustment_labels:
                 adjustment_label = adjustment_labels[adjustment]
             elif len(relevant_covariates) > 0:
-                adjustment_label = "Regression"
+                adjustment_label = "regression"
             else:
-                adjustment_label = "No adjustment"
+                adjustment_label = "no adjustment"
 
             for outcome in self._outcomes:
                 # Ensure outcome column is numeric
@@ -516,6 +516,8 @@ class ExperimentAnalyzer:
                         )
 
                     output["adjustment"] = adjustment_label
+                    if adjustment == "balance":
+                        output["method"] = self._balance_method
                     if adjustment == "balance" and not adjusted_balance.empty:
                         output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                     elif not balance.empty:  # Use initial balance if no adjustment or balance failed
@@ -572,7 +574,7 @@ class ExperimentAnalyzer:
                         "stat_significance": np.nan,
                         "standard_error": np.nan,
                         "pvalue": np.nan,
-                        "balance": output.get("balance", np.nan),  # Keep balance if calculated
+                        "balance": output.get("balance", np.nan),
                         "experiment": experiment_tuple,
                         "sample_ratio": sample_ratio,
                         "srm_detected": srm_detected,
@@ -607,8 +609,9 @@ class ExperimentAnalyzer:
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
         if balance_calculated and "balance" in clean_temp_results.columns:
             index_to_insert = result_columns.index("adjustment") + 1
+            result_columns.insert(index_to_insert, "method")
+            index_to_insert = result_columns.index("method") + 1
             result_columns.insert(index_to_insert, "balance")
-            # insert columns for ESS if balance is calculated at the end
             result_columns.extend(
                 [
                     "ess_treatment",
