@@ -4,6 +4,7 @@ ExperimentAnalyzer class to analyze and design experiments
 
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from scipy import stats
 from scipy.stats import gaussian_kde
 from statsmodels.stats.proportion import proportions_ztest
@@ -44,6 +45,9 @@ class ExperimentAnalyzer:
         Use polynomial and interaction features for IPW, by default False. It can be slow for large datasets.
     assess_overlap : bool, optional
         Assess overlap between treatment and control groups (slow) when using balance to adjust covariates, by default False
+    overlap_plot: bool, optional
+        Plot overlap between treatment and control groups, by default False
+    assess_overlap : bool, optional
     instrument_col : str, optional
         Column name for the instrument variable, by default None
     alpha : float, optional
@@ -70,6 +74,7 @@ class ExperimentAnalyzer:
         alpha: float = 0.05,
         regression_covariates: list[str] | None = None,
         assess_overlap: bool = False,
+        overlap_plot: bool = False,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -82,6 +87,7 @@ class ExperimentAnalyzer:
         self._balance_method = balance_method
         self._target_effect = target_effect
         self._assess_overlap = assess_overlap
+        self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
         self.__check_input()
@@ -378,7 +384,7 @@ class ExperimentAnalyzer:
 
         for experiment_tuple, temp_pd in grouped_data:
             self._logger.info("Processing: %s", experiment_tuple)
-
+            final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
             binary_covariates = self.__get_binary_covariates(data=temp_pd)
 
@@ -406,6 +412,11 @@ class ExperimentAnalyzer:
 
             final_covariates = numeric_covariates + binary_covariates
             self._final_covariates = final_covariates
+            if len(self._covariates) > len(self._final_covariates):
+                self._logger.warning(
+                    f"Some covariates were removed due to low variance or frequency in {experiment_tuple}!"
+                )
+
             if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
                 self._logger.warning(f"No valid covariates for {experiment_tuple}, balance can't be assessed!")
 
@@ -440,7 +451,6 @@ class ExperimentAnalyzer:
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
                     self._logger.info("::::: Adjusted balance: %.2f", np.round(adj_balance_mean, 2))
                     if self._assess_overlap:
-                        # Ensure propensity scores exist before calculating overlap
                         if "propensity_score" in temp_pd.columns:
                             treatment_scores = temp_pd.loc[temp_pd[self._treatment_col] == 1, "propensity_score"]
                             control_scores = temp_pd.loc[temp_pd[self._treatment_col] == 0, "propensity_score"]
@@ -453,7 +463,16 @@ class ExperimentAnalyzer:
                                 )  # noqa: E501
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap assessment.")
-
+                    if self._overlap_plot:
+                        if "propensity_score" in temp_pd.columns:
+                            self._plot_common_support(
+                                temp_pd,
+                                treatment_col=self._treatment_col,
+                                propensity_col="propensity_score",
+                                experiment_id=experiment_tuple,
+                            )
+                        else:
+                            self._logger.warning("Propensity score column not found, skipping overlap plot.")
                 if adjustment == "IV":
                     if self._instrument_col is None:
                         log_and_raise_error(self._logger, "Instrument column is required for IV estimation!")
@@ -990,3 +1009,54 @@ class ExperimentAnalyzer:
         if np.all(weights == 0):
             return 0.0
         return (weights.sum()) ** 2 / (np.sum(weights**2) + 1e-12)
+
+    def _plot_common_support(
+        self, df, propensity_col, treatment_col, bw_method=None, grid_size=100, figsize=(10, 6), experiment_id=None
+    ):
+        """
+        Create a mirror density plot for common support showing the distribution
+        of propensity scores for treatment (up) and control (down).
+
+        Parameters:
+        - df: pandas DataFrame containing the data.
+        - propensity_col: string, name of the column with propensity scores.
+        - treatment_col: string, name of the column with treatment indicator (binary).
+        - bw_method: bandwidth method for gaussian_kde (default None).
+        - grid_size: number of grid points for density estimation.
+        - figsize: tuple, figure size.
+        - experiment_id: optional, identifier for the experiment (used in title).
+        """
+
+        treatment_scores = df.loc[df[treatment_col] == 1, propensity_col].dropna()
+        control_scores = df.loc[df[treatment_col] == 0, propensity_col].dropna()
+
+        all_scores = df[propensity_col].dropna()
+        x_min, x_max = all_scores.min(), all_scores.max()
+        x_grid = np.linspace(x_min, x_max, grid_size)
+
+        kde_treat = gaussian_kde(treatment_scores, bw_method=bw_method)
+        kde_control = gaussian_kde(control_scores, bw_method=bw_method)
+        density_treat = kde_treat(x_grid)
+        density_control = kde_control(x_grid)
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        ax.fill_between(x_grid, density_treat, alpha=0.3, color="blue", label="Treatment")
+        ax.plot(x_grid, density_treat, color="blue")
+
+        ax.fill_between(x_grid, -density_control, alpha=0.3, color="red", label="Control")
+        ax.plot(x_grid, -density_control, color="red")
+
+        ax.axhline(0, color="black", linewidth=0.8)
+
+        ax.set_xlabel("Propensity Score")
+        ax.set_ylabel("Density")
+        ax.set_title(f"Common Support {f'for Experiment {experiment_id}' if experiment_id else ''}")
+        ax.legend(loc="best")
+
+        from matplotlib.ticker import FuncFormatter
+
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{abs(x):.2f}"))
+
+        plt.tight_layout()
+        return fig
