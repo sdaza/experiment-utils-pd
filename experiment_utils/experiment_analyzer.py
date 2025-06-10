@@ -4,13 +4,14 @@ ExperimentAnalyzer class to analyze and design experiments
 
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from scipy import stats
 from scipy.stats import gaussian_kde
 from statsmodels.stats.proportion import proportions_ztest
 
 from .estimators import Estimators
 from .utils import get_logger, log_and_raise_error
-from matplotlib import pyplot as plt
+
 
 class ExperimentAnalyzer:
     """
@@ -73,7 +74,7 @@ class ExperimentAnalyzer:
         alpha: float = 0.05,
         regression_covariates: list[str] | None = None,
         assess_overlap: bool = False,
-        overlap_plot: bool = False
+        overlap_plot: bool = False,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -86,6 +87,7 @@ class ExperimentAnalyzer:
         self._balance_method = balance_method
         self._target_effect = target_effect
         self._assess_overlap = assess_overlap
+        self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
         self.__check_input()
@@ -381,7 +383,6 @@ class ExperimentAnalyzer:
             grouped_data = [(None, self._data)]
 
         for experiment_tuple, temp_pd in grouped_data:
-
             self._logger.info("Processing: %s", experiment_tuple)
             final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
@@ -465,15 +466,13 @@ class ExperimentAnalyzer:
                     if self._overlap_plot:
                         if "propensity_score" in temp_pd.columns:
                             self._plot_common_support(
-                                temp_pd, 
+                                temp_pd,
                                 treatment_col=self._treatment_col,
-                                propensity_score_col="propensity_score",
-                                experiment_tuple=experiment_tuple,
-                                )
-                        else:
-                            self._logger.warning(
-                                "Propensity score column not found, skipping overlap plot."
+                                propensity_col="propensity_score",
+                                experiment_id=experiment_tuple,
                             )
+                        else:
+                            self._logger.warning("Propensity score column not found, skipping overlap plot.")
                 if adjustment == "IV":
                     if self._instrument_col is None:
                         log_and_raise_error(self._logger, "Instrument column is required for IV estimation!")
@@ -1056,6 +1055,7 @@ class ExperimentAnalyzer:
         ax.legend(loc="best")
 
         from matplotlib.ticker import FuncFormatter
+
         ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{abs(x):.2f}"))
 
         plt.tight_layout()
