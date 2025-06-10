@@ -7,7 +7,7 @@ import logging
 
 
 def turn_off_package_logger(package: str) -> None:
-    """"
+    """ "
     Turn off logging for a specific package.
 
     :param package: The name of the package to turn off logging for.
@@ -18,7 +18,7 @@ def turn_off_package_logger(package: str) -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """"
+    """ "
     Get a logger with the specified name.
 
     :param name: The name of the logger.
@@ -32,10 +32,7 @@ def get_logger(name: str) -> logging.Logger:
         logger.removeHandler(handler)
 
     console_handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        fmt='%(asctime)s %(message)s',
-        datefmt='%d/%m/%Y %I:%M:%S %p'
-    )
+    formatter = logging.Formatter(fmt="%(asctime)s %(message)s", datefmt="%d/%m/%Y %I:%M:%S %p")
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     logger.propagate = False
@@ -44,7 +41,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def log_and_raise_error(logger: logging.Logger, message: str, exception_type: type[Exception] = ValueError) -> None:
-    """"
+    """ "
     Logs an error message and raises an exception of the specified type.
 
     :param message: The error message to log and raise.
