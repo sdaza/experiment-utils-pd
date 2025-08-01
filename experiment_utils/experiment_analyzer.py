@@ -686,26 +686,36 @@ class ExperimentAnalyzer:
         if self._results is None:
             log_and_raise_error(self._logger, "Must run get_effects() before testing for non-inferiority.")
 
+        # Validate alpha
+        if not (0 < alpha < 1):
+            log_and_raise_error(self._logger, "Alpha must be between 0 and 1 (exclusive).")
+
+        # Validate margin inputs
         if absolute_margin is not None and relative_margin is not None:
-            log_and_raise_error(self._logger, "Please provide either an absolute_margin or a relative_margin, not both.")
+            log_and_raise_error(
+                self._logger, "Please provide either an absolute_margin or a relative_margin, not both."
+            )  # noqa: E501
 
         if absolute_margin is None and relative_margin is None:
             log_and_raise_error(self._logger, "Please provide either an absolute_margin or a relative_margin.")
 
+        if absolute_margin is not None and absolute_margin <= 0:
+            log_and_raise_error(self._logger, "absolute_margin must be a positive value.")
+
+        if relative_margin is not None and relative_margin <= 0:
+            log_and_raise_error(self._logger, "relative_margin must be a positive value.")
+
         results_df = self._results.copy()
         if relative_margin is not None:
-            results_df["non_inferiority_margin"] = relative_margin * results_df["control_value"]
+            results_df["non_inferiority_margin"] = relative_margin * results_df["control_value"].abs()
         else:
             results_df["non_inferiority_margin"] = absolute_margin
 
         z_critical = stats.norm.ppf(1 - alpha)
-        results_df["ci_lower_bound"] = (
-            results_df["absolute_effect"] - z_critical * results_df["standard_error"]
-        )
+        results_df["ci_lower_bound"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
 
-        results_df["is_non_inferior"] = (
-            results_df["ci_lower_bound"] > -results_df["non_inferiority_margin"]
-        )
+        results_df["is_non_inferior"] = results_df["ci_lower_bound"] > -results_df["non_inferiority_margin"]
+
         self._results = results_df
 
     def combine_effects(self, data: pd.DataFrame | None = None, grouping_cols: list[str] | None = None) -> pd.DataFrame:
@@ -1108,4 +1118,3 @@ class ExperimentAnalyzer:
 
         plt.tight_layout()
         return fig
-
