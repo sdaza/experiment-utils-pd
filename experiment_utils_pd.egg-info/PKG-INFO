@@ -1,0 +1,115 @@
+Metadata-Version: 2.4
+Name: experiment-utils-pd
+Version: 0.1.0
+Summary: Set of utility functions for analyzing experimental and observational data
+Author-email: Sebastian Daza <sebastian.daza@gmail.com>
+License: MIT License
+        
+        Copyright (c) 2025 Sebastian Daza
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Information Analysis
+Classifier: Development Status :: 3 - Alpha
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.21.5
+Requires-Dist: pandas>=1.4.4
+Requires-Dist: matplotlib>=3.5.2
+Requires-Dist: seaborn>=0.11.2
+Requires-Dist: multiprocess>=0.70.14
+Requires-Dist: threadpoolctl>=3.5.0
+Requires-Dist: statsmodels>=0.13.2
+Requires-Dist: scipy>=1.9.1
+Requires-Dist: linearmodels>=6.1
+Requires-Dist: scikit-learn==1.5.2
+Requires-Dist: xgboost>=2.1.3
+Requires-Dist: pytest>=8.3.5
+Requires-Dist: ruff>=0.11.7
+Requires-Dist: ipykernel>=6.29.5
+Requires-Dist: build>=1.3.0
+Requires-Dist: twine>=6.1.0
+Dynamic: license-file
+
+![ci](https://github.com/sdaza/experiment-utils/actions/workflows/ci.yaml/badge.svg)
+
+
+# Experiment utils
+
+Generic functions for experiment analysis and design:
+
+- [Experiment utils](#experiment-utils)
+- [Installation](#installation)
+- [How to use it](#how-to-use-it)
+  - [Experiment Analyzer](#experiment-analyzer)
+  - [Power Analysis](#power-analysis)
+
+# Installation
+
+```
+pip install git+https://github.com/sdaza/experiment-utils-pd.git
+```
+
+# How to use it
+
+## Experiment Analyzer
+
+ `df` is a Pandas DataFrame:
+
+
+```python
+from experiment_utils import ExperimentAnalyzer
+
+# Example with balance adjustment and balance_method
+analyzer = ExperimentAnalyzer(
+    df,
+    treatment_col="treatment",
+    outcomes=['registrations', 'visits'],
+    covariates=covariates,
+    experiment_identifier=["campaign_key"],
+    adjustment="balance",  # Options: 'balance', 'IV', or None
+    balance_method="ps-logistic",  # Options: 'ps-logistic', 'ps-xgboost', 'entropy'
+    target_effect="ATT"  # Options: 'ATT', 'ATE', 'ATC'
+)
+
+analyzer.get_effects()
+print(analyzer.results)
+```
+
+**Parameters:**
+- `adjustment`: Choose 'balance' for covariate balancing (using balance_method), 'IV' for instrumental variable adjustment, or None for unadjusted analysis.
+- `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
+- `target_effect`: Specifies the estimand: 'ATT', 'ATE', or 'ATC'.
+
+## Power Analysis
+
+
+```python
+from experiment_utils import PowerSim
+p = PowerSim(metric='proportion', relative_effect=False,
+  variants=1, nsim=1000, alpha=0.05, alternative='two-tailed')
+
+p.get_power(baseline=[0.33], effect=[0.03], sample_size=[3000])
+```
+
