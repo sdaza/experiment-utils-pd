@@ -7,11 +7,21 @@ Generic functions for experiment analysis and design:
 
 - [Experiment utils](#experiment-utils)
 - [Installation](#installation)
+  - [PyPI](#pypi)
+  - [From GitHub](#from-github)
 - [How to use it](#how-to-use-it)
   - [Experiment Analyzer](#experiment-analyzer)
   - [Power Analysis](#power-analysis)
 
 # Installation
+
+## PyPI
+
+```
+pip install experiment-utils-pd
+```
+
+## From GitHub
 
 ```
 pip install git+https://github.com/sdaza/experiment-utils-pd.git
