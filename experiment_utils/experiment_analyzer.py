@@ -1118,3 +1118,67 @@ class ExperimentAnalyzer:
 
         plt.tight_layout()
         return fig
+
+    def adjust_pvalues(
+        self,
+        method: str = "bonferroni",
+        groupby_cols: list[str] | None = None,
+        outcomes: list[str] | None = None,
+        experiments: list | None = None,
+        alpha: float | None = 0.05,
+    ):
+        """
+        Adjust p-values for multiple comparisons within groups using the specified method.
+        Supported methods: 'bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by' (Benjamini–Yekutieli).
+        Adds 'pvalue_adj' and 'stat_significance_adj' columns to results.
+
+        Parameters
+        ----------
+        method : str
+            Adjustment method. Default is 'bonferroni'.
+        groupby_cols : list[str], optional
+            Columns to group by for adjustment. Defaults to experiment identifier.
+        outcomes : list[str], optional
+            Only adjust for these outcomes. If None, adjust all.
+        experiments : list, optional
+            Only adjust for these experiments. If None, adjust all.
+        alpha : float, optional
+            Significance threshold for adjusted p-values. Defaults to self._alpha.
+        """
+        if self._results is None:
+            log_and_raise_error(self._logger, "Run get_effects() first.")
+
+        df = self._results.copy()
+        group_cols = groupby_cols or self._experiment_identifier or ["experiment"]
+        if not all(col in df.columns for col in group_cols):
+            log_and_raise_error(self._logger, f"Grouping columns {group_cols} not found in results.")
+
+        # Filter by outcomes/experiments if specified
+        mask = pd.Series([True] * len(df))
+        if outcomes is not None:
+            mask &= df["outcome"].isin(outcomes)
+        if experiments is not None:
+            for col, vals in zip(group_cols, zip(*experiments, strict=False), strict=False):
+                mask &= df[col].isin(vals)
+        df_adj = df[mask].copy()
+        df_rest = df[~mask].copy()
+
+        def adjust_group(group):
+            pvals = group["pvalue"].values
+            m = method.lower()
+            if m == "bonferroni":
+                pvals_adj = np.minimum(pvals * len(pvals), 1.0)
+            elif m in {"holm", "fdr_bh", "sidak", "hommel", "hochberg", "by"}:
+                from statsmodels.stats.multitest import multipletests
+                pvals_adj = multipletests(pvals, method=m)[1]
+            else:
+                raise ValueError(f"Unknown adjustment method: {method}")
+            group["pvalue_adj"] = pvals_adj
+            thres = alpha if alpha is not None else self._alpha
+            group["stat_significance_adj"] = (pvals_adj < thres).astype(int)
+            group["adj_method"] = method
+            return group
+
+        df_adj = df_adj.groupby(group_cols, group_keys=False).apply(adjust_group)
+        df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
+        self._results = df_final
