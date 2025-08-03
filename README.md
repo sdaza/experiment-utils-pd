@@ -1,4 +1,6 @@
-![ci](https://github.com/sdaza/experiment-utils/actions/workflows/ci.yaml/badge.svg)
+
+[![ci](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
+[![PyPI version](https://img.shields.io/pypi/v/experiment-utils-pd.svg)](https://pypi.org/project/experiment-utils-pd/)
 
 
 # Experiment utils
@@ -20,6 +22,7 @@ Generic functions for experiment analysis and design:
 ```
 pip install experiment-utils-pd
 ```
+
 
 ## From GitHub
 
