@@ -58,6 +58,7 @@ print(analyzer.results)
 - `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
 - `target_effect`: Specifies the estimand: 'ATT', 'ATE', or 'ATC'.
 
+
 ## Power Analysis
 
 
