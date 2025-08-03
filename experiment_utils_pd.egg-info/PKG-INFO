@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: experiment-utils-pd
-Version: 0.1.0
+Version: 0.1.3
 Summary: Set of utility functions for analyzing experimental and observational data
 Author-email: Sebastian Daza <sebastian.daza@gmail.com>
 License: MIT License
@@ -61,11 +61,21 @@ Generic functions for experiment analysis and design:
 
 - [Experiment utils](#experiment-utils)
 - [Installation](#installation)
+  - [PyPI](#pypi)
+  - [From GitHub](#from-github)
 - [How to use it](#how-to-use-it)
   - [Experiment Analyzer](#experiment-analyzer)
   - [Power Analysis](#power-analysis)
 
 # Installation
+
+## PyPI
+
+```
+pip install experiment-utils-pd
+```
+
+## From GitHub
 
 ```
 pip install git+https://github.com/sdaza/experiment-utils-pd.git
@@ -101,6 +111,7 @@ print(analyzer.results)
 - `adjustment`: Choose 'balance' for covariate balancing (using balance_method), 'IV' for instrumental variable adjustment, or None for unadjusted analysis.
 - `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
 - `target_effect`: Specifies the estimand: 'ATT', 'ATE', or 'ATC'.
+
 
 ## Power Analysis
 
