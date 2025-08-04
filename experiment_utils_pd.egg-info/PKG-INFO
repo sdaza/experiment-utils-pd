@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: experiment-utils-pd
-Version: 0.1.3
+Version: 0.1.4
 Summary: Set of utility functions for analyzing experimental and observational data
 Author-email: Sebastian Daza <sebastian.daza@gmail.com>
 License: MIT License
@@ -35,7 +35,7 @@ Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: numpy>=1.21.5
-Requires-Dist: pandas>=1.4.4
+Requires-Dist: pandas>=2.3.1
 Requires-Dist: matplotlib>=3.5.2
 Requires-Dist: seaborn>=0.11.2
 Requires-Dist: multiprocess>=0.70.14
@@ -52,7 +52,9 @@ Requires-Dist: build>=1.3.0
 Requires-Dist: twine>=6.1.0
 Dynamic: license-file
 
-![ci](https://github.com/sdaza/experiment-utils/actions/workflows/ci.yaml/badge.svg)
+
+[![ci](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
+[![PyPI version](https://img.shields.io/pypi/v/experiment-utils-pd.svg)](https://pypi.org/project/experiment-utils-pd/)
 
 
 # Experiment utils
@@ -74,6 +76,7 @@ Generic functions for experiment analysis and design:
 ```
 pip install experiment-utils-pd
 ```
+
 
 ## From GitHub
 
