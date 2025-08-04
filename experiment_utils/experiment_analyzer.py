@@ -650,15 +650,24 @@ class ExperimentAnalyzer:
         if self._balance:
             self._balance = pd.concat(self._balance, ignore_index=True)
         else:
-            self._balance = pd.DataFrame()  # Ensure it's an empty DF if no balance calculated
+            self._balance = pd.DataFrame()
 
         if self._adjusted_balance:
             self._adjusted_balance = pd.concat(self._adjusted_balance, ignore_index=True)
         else:
-            self._adjusted_balance = pd.DataFrame()  # Ensure it's an empty DF
+            self._adjusted_balance = pd.DataFrame()
 
         # Transform tuple column in the final results dataframe
-        self._results = self.__transform_tuple_column(clean_temp_results, "experiment", self._experiment_identifier)
+        results_df = self.__transform_tuple_column(clean_temp_results, "experiment", self._experiment_identifier)
+
+        # Add confidence intervals for absolute effect
+        if not results_df.empty and "absolute_effect" in results_df.columns and "standard_error" in results_df.columns:
+            alpha = getattr(self, "_alpha", 0.05)
+            z_critical = stats.norm.ppf(1 - alpha / 2)
+            results_df["abs_effect_lower"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
+            results_df["abs_effect_upper"] = results_df["absolute_effect"] + z_critical * results_df["standard_error"]
+
+        self._results = results_df
 
     def test_non_inferiority(
         self, absolute_margin: float | None = None, relative_margin: float | None = None, alpha: float = 0.05
@@ -1170,7 +1179,7 @@ class ExperimentAnalyzer:
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
         cols_to_add = ["pvalue_adj", "stat_significance_adj", "adj_method"]
 
-        df_adj = df_adj.drop(columns=cols_to_add, errors='ignore')
+        df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
         df_adj = df_adj.join(adjustments)
         df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
         self._results = df_final
