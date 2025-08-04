@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: experiment-utils-pd
-Version: 0.1.4
+Version: 0.1.5
 Summary: Set of utility functions for analyzing experimental and observational data
 Author-email: Sebastian Daza <sebastian.daza@gmail.com>
 License: MIT License
