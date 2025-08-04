@@ -1170,9 +1170,7 @@ class ExperimentAnalyzer:
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
         cols_to_add = ["pvalue_adj", "stat_significance_adj", "adj_method"]
 
-        cols_to_drop = [col for col in cols_to_add if col in df_adj.columns]
-        if cols_to_drop:
-            df_adj = df_adj.drop(columns=cols_to_drop)
+        df_adj = df_adj.drop(columns=cols_to_add, errors='ignore')
         df_adj = df_adj.join(adjustments)
         df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
         self._results = df_final
