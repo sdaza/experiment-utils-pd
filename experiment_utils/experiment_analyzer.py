@@ -54,6 +54,8 @@ class ExperimentAnalyzer:
         Significance level, by default 0.05
     regression_covariates : List, optional
         List of covariates to include in the final linear regression model, by default None
+    unit_identifier : str, optional
+        Column name for the unit/user identifier to connect weights to specific units, by default None
     """  # noqa: E501
 
     def __init__(
@@ -75,6 +77,7 @@ class ExperimentAnalyzer:
         regression_covariates: list[str] | None = None,
         assess_overlap: bool = False,
         overlap_plot: bool = False,
+        unit_identifier: str | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -90,11 +93,13 @@ class ExperimentAnalyzer:
         self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
+        self._unit_identifier = unit_identifier
         self.__check_input()
         self._alpha = alpha
         self._results = None
         self._balance = []
         self._adjusted_balance = []
+        self._weights = None
         self._final_covariates = []
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
@@ -146,6 +151,7 @@ class ExperimentAnalyzer:
             + self._covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
             + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
+            + ([self._unit_identifier] if self._unit_identifier is not None else [])
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -370,6 +376,7 @@ class ExperimentAnalyzer:
 
         temp_results = []
         output = {}  # Ensure output is always defined for error handling
+        weights_list = []
 
         if adjustment is None:
             adjustment = self._adjustment
@@ -473,6 +480,17 @@ class ExperimentAnalyzer:
                             )
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
+
+                # Save weights for this experiment when balance adjustment is used
+                if adjustment == "balance":
+                    weight_col = self._target_weights[self._target_effect]
+                    if weight_col in temp_pd.columns:
+                        weight_columns = [*self._experiment_identifier, weight_col]
+                        if self._unit_identifier and self._unit_identifier in temp_pd.columns:
+                            weight_columns.insert(-1, self._unit_identifier)
+                        weights_df = temp_pd[weight_columns].copy()
+                        weights_list.append(weights_df)
+
                 if adjustment == "IV":
                     if self._instrument_col is None:
                         log_and_raise_error(self._logger, "Instrument column is required for IV estimation!")
@@ -607,6 +625,12 @@ class ExperimentAnalyzer:
             return
 
         clean_temp_results = pd.DataFrame(temp_results)
+
+        # Save all weights if balance adjustment was used
+        if weights_list:
+            self._weights = pd.concat(weights_list, ignore_index=True)
+        else:
+            self._weights = None
 
         # Define result columns, ensure 'balance' is included conditionally
         result_columns = [
@@ -996,6 +1020,17 @@ class ExperimentAnalyzer:
             return self._adjusted_balance
         else:
             self._logger.warning("No adjusted balance information available!")
+            return None
+
+    @property
+    def weights(self) -> pd.DataFrame | None:
+        """
+        Returns the weights DataFrame from balance adjustment
+        """
+        if self._weights is not None:
+            return self._weights
+        else:
+            self._logger.warning("No weights available! Weights are only saved when balance adjustment is used.")
             return None
 
     def get_attribute(self, attribute: str) -> str | None:
