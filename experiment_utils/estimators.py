@@ -111,7 +111,7 @@ class Estimators:
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
-        relative_effect = coefficient / abs(intercept) if intercept != 0 else 0
+        relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
@@ -213,7 +213,7 @@ class Estimators:
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
-        relative_effect = coefficient / abs(intercept) if intercept != 0 else 0
+        relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.std_errors[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
