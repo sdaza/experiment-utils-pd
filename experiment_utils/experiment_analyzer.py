@@ -389,7 +389,18 @@ class ExperimentAnalyzer:
         else:
             grouped_data = [(None, self._data)]
 
-        for experiment_tuple, temp_pd in grouped_data:
+        for experiment_tuple, temp_pd_from_group in grouped_data:
+            temp_pd = temp_pd_from_group.copy()  # Work on a copy to avoid SettingWithCopyWarning
+            # Add experiment identifiers back to the dataframe
+            if self._experiment_identifier:
+                if isinstance(experiment_tuple, tuple):
+                    # If multiple identifiers, experiment_tuple is a tuple
+                    for i, col_name in enumerate(self._experiment_identifier):
+                        temp_pd[col_name] = experiment_tuple[i]
+                else:
+                    # If single identifier, experiment_tuple is the value
+                    temp_pd[self._experiment_identifier[0]] = experiment_tuple
+
             self._logger.info("Processing: %s", experiment_tuple)
             final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
@@ -407,7 +418,7 @@ class ExperimentAnalyzer:
             sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(temp_pd)
 
             temp_pd = self.impute_missing_values(
-                data=temp_pd.copy(),
+                data=temp_pd,
                 num_covariates=numeric_covariates,
                 bin_covariates=binary_covariates,
             )
