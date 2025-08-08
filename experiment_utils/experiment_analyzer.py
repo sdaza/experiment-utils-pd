@@ -143,6 +143,9 @@ class ExperimentAnalyzer:
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
+        # Ensure unit_identifier is a list
+        self._unit_identifier = self.__ensure_list(self._unit_identifier)
+
         # check if all required columns are present
         required_columns = (
             self._experiment_identifier
@@ -151,7 +154,7 @@ class ExperimentAnalyzer:
             + self._covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
             + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
-            + ([self._unit_identifier] if self._unit_identifier is not None else [])
+            + self._unit_identifier
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -496,9 +499,7 @@ class ExperimentAnalyzer:
                 if adjustment == "balance":
                     weight_col = self._target_weights[self._target_effect]
                     if weight_col in temp_pd.columns:
-                        weight_columns = [*self._experiment_identifier, weight_col]
-                        if self._unit_identifier and self._unit_identifier in temp_pd.columns:
-                            weight_columns.insert(-1, self._unit_identifier)
+                        weight_columns = [*self._experiment_identifier, *self._unit_identifier, weight_col]
                         weights_df = temp_pd[weight_columns].copy()
                         weights_list.append(weights_df)
 
