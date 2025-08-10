@@ -54,6 +54,8 @@ class ExperimentAnalyzer:
         Significance level, by default 0.05
     regression_covariates : List, optional
         List of covariates to include in the final linear regression model, by default None
+    unit_identifier : str, optional
+        Column name for the unit/user identifier to connect weights to specific units, by default None
     """  # noqa: E501
 
     def __init__(
@@ -75,6 +77,7 @@ class ExperimentAnalyzer:
         regression_covariates: list[str] | None = None,
         assess_overlap: bool = False,
         overlap_plot: bool = False,
+        unit_identifier: str | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -90,11 +93,13 @@ class ExperimentAnalyzer:
         self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
+        self._unit_identifier = unit_identifier
         self.__check_input()
         self._alpha = alpha
         self._results = None
         self._balance = []
         self._adjusted_balance = []
+        self._weights = None
         self._final_covariates = []
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
@@ -138,6 +143,9 @@ class ExperimentAnalyzer:
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
+        # Ensure unit_identifier is a list
+        self._unit_identifier = self.__ensure_list(self._unit_identifier)
+
         # check if all required columns are present
         required_columns = (
             self._experiment_identifier
@@ -146,6 +154,7 @@ class ExperimentAnalyzer:
             + self._covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
             + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
+            + self._unit_identifier
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -370,6 +379,7 @@ class ExperimentAnalyzer:
 
         temp_results = []
         output = {}  # Ensure output is always defined for error handling
+        weights_list = []
 
         if adjustment is None:
             adjustment = self._adjustment
@@ -382,7 +392,18 @@ class ExperimentAnalyzer:
         else:
             grouped_data = [(None, self._data)]
 
-        for experiment_tuple, temp_pd in grouped_data:
+        for experiment_tuple, temp_pd_from_group in grouped_data:
+            temp_pd = temp_pd_from_group.copy()  # Work on a copy to avoid SettingWithCopyWarning
+            # Add experiment identifiers back to the dataframe
+            if self._experiment_identifier:
+                if isinstance(experiment_tuple, tuple):
+                    # If multiple identifiers, experiment_tuple is a tuple
+                    for i, col_name in enumerate(self._experiment_identifier):
+                        temp_pd[col_name] = experiment_tuple[i]
+                else:
+                    # If single identifier, experiment_tuple is the value
+                    temp_pd[self._experiment_identifier[0]] = experiment_tuple
+
             self._logger.info("Processing: %s", experiment_tuple)
             final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
@@ -400,7 +421,7 @@ class ExperimentAnalyzer:
             sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(temp_pd)
 
             temp_pd = self.impute_missing_values(
-                data=temp_pd.copy(),
+                data=temp_pd,
                 num_covariates=numeric_covariates,
                 bin_covariates=binary_covariates,
             )
@@ -473,6 +494,15 @@ class ExperimentAnalyzer:
                             )
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
+
+                # Save weights for this experiment when balance adjustment is used
+                if adjustment == "balance":
+                    weight_col = self._target_weights[self._target_effect]
+                    if weight_col in temp_pd.columns:
+                        weight_columns = [*self._experiment_identifier, *self._unit_identifier, weight_col]
+                        weights_df = temp_pd[weight_columns].copy()
+                        weights_list.append(weights_df)
+
                 if adjustment == "IV":
                     if self._instrument_col is None:
                         log_and_raise_error(self._logger, "Instrument column is required for IV estimation!")
@@ -608,6 +638,12 @@ class ExperimentAnalyzer:
 
         clean_temp_results = pd.DataFrame(temp_results)
 
+        # Save all weights if balance adjustment was used
+        if weights_list:
+            self._weights = pd.concat(weights_list, ignore_index=True)
+        else:
+            self._weights = None
+
         # Define result columns, ensure 'balance' is included conditionally
         result_columns = [
             "experiment",
@@ -650,15 +686,24 @@ class ExperimentAnalyzer:
         if self._balance:
             self._balance = pd.concat(self._balance, ignore_index=True)
         else:
-            self._balance = pd.DataFrame()  # Ensure it's an empty DF if no balance calculated
+            self._balance = pd.DataFrame()
 
         if self._adjusted_balance:
             self._adjusted_balance = pd.concat(self._adjusted_balance, ignore_index=True)
         else:
-            self._adjusted_balance = pd.DataFrame()  # Ensure it's an empty DF
+            self._adjusted_balance = pd.DataFrame()
 
         # Transform tuple column in the final results dataframe
-        self._results = self.__transform_tuple_column(clean_temp_results, "experiment", self._experiment_identifier)
+        results_df = self.__transform_tuple_column(clean_temp_results, "experiment", self._experiment_identifier)
+
+        # Add confidence intervals for absolute effect
+        if not results_df.empty and "absolute_effect" in results_df.columns and "standard_error" in results_df.columns:
+            alpha = getattr(self, "_alpha", 0.05)
+            z_critical = stats.norm.ppf(1 - alpha / 2)
+            results_df["abs_effect_lower"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
+            results_df["abs_effect_upper"] = results_df["absolute_effect"] + z_critical * results_df["standard_error"]
+
+        self._results = results_df
 
     def test_non_inferiority(
         self, absolute_margin: float | None = None, relative_margin: float | None = None, alpha: float = 0.05
@@ -989,6 +1034,17 @@ class ExperimentAnalyzer:
             self._logger.warning("No adjusted balance information available!")
             return None
 
+    @property
+    def weights(self) -> pd.DataFrame | None:
+        """
+        Returns the weights DataFrame from balance adjustment
+        """
+        if self._weights is not None:
+            return self._weights
+        else:
+            self._logger.warning("No weights available! Weights are only saved when balance adjustment is used.")
+            return None
+
     def get_attribute(self, attribute: str) -> str | None:
         """
         Get an attribute of the class.
@@ -1170,7 +1226,7 @@ class ExperimentAnalyzer:
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
         cols_to_add = ["pvalue_adj", "stat_significance_adj", "adj_method"]
 
-        df_adj = df_adj.drop(columns=cols_to_add, errors='ignore')
+        df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
         df_adj = df_adj.join(adjustments)
         df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
         self._results = df_final
