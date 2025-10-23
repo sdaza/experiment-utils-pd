@@ -5,6 +5,9 @@ assumptions about the format of input data.
 
 import logging
 
+import numpy as np
+import pandas as pd
+
 
 def turn_off_package_logger(package: str) -> None:
     """ "
@@ -50,3 +53,90 @@ def log_and_raise_error(logger: logging.Logger, message: str, exception_type: ty
 
     logger.error(message)
     raise exception_type(message)
+
+
+def balanced_random_assignment(group_df, seed=42, allocation_ratio=0.5, variants=None):
+    """
+    Randomly assign units to variants with forced balance according to allocation ratios.
+    Each call uses fresh randomness from numpy's global state.
+
+    Parameters
+    ----------
+    group_df : pd.DataFrame
+        DataFrame containing the units to assign
+    seed : int, optional
+        Random seed for reproducibility (default is 42)
+    allocation_ratio : float or dict, optional
+        If float: proportion allocated to 'test' (remaining goes to 'control')
+        If dict: mapping of variant names to their allocation ratios (must sum to 1.0)
+        Default is 0.5 (50/50 split between test and control)
+    variants : list, optional
+        List of variant names. If provided, allocation_ratio should be a dict or
+        units will be split equally among variants. If None, uses ['control', 'test']
+
+    Returns
+    -------
+    pd.Series
+        Series with variant assignments indexed by group_df.index
+
+    Examples
+    --------
+    # Binary assignment (test/control)
+    assignment = balanced_random_assignment(df, allocation_ratio=0.5)
+
+    # Multiple variants with equal allocation
+    assignment = balanced_random_assignment(df, variants=['control', 'variant_a', 'variant_b'])
+
+    # Multiple variants with custom allocation
+    assignment = balanced_random_assignment(
+        df,
+        variants=['control', 'variant_a', 'variant_b'],
+        allocation_ratio={'control': 0.5, 'variant_a': 0.3, 'variant_b': 0.2}
+    )
+    """
+
+    np.random.seed(seed)
+    n = len(group_df)
+
+    # Handle different input formats
+    if variants is None:
+        # Binary case: test/control
+        if isinstance(allocation_ratio, dict):
+            raise ValueError("When variants is None, allocation_ratio must be a float")
+        n_test = int(n * allocation_ratio)
+        n_control = n - n_test
+        assignment = ["test"] * n_test + ["control"] * n_control
+    else:
+        # Multiple variants case
+        if isinstance(allocation_ratio, dict):
+            # Validate that ratios sum to 1.0
+            total = sum(allocation_ratio.values())
+            if not np.isclose(total, 1.0):
+                raise ValueError(f"Allocation ratios must sum to 1.0, got {total}")
+
+            # Validate that all variants have ratios
+            if set(variants) != set(allocation_ratio.keys()):
+                raise ValueError("Variants list must match allocation_ratio keys")
+
+            # Allocate based on ratios
+            assignment = []
+            allocated = 0
+            for _, variant in enumerate(variants[:-1]):
+                n_variant = int(n * allocation_ratio[variant])
+                assignment.extend([variant] * n_variant)
+                allocated += n_variant
+            # Assign remaining to last variant to ensure exact total
+            assignment.extend([variants[-1]] * (n - allocated))
+        else:
+            # Equal allocation among all variants
+            n_per_variant = n // len(variants)
+            remainder = n % len(variants)
+
+            assignment = []
+            for i, variant in enumerate(variants):
+                # Distribute remainder across first variants
+                n_variant = n_per_variant + (1 if i < remainder else 0)
+                assignment.extend([variant] * n_variant)
+
+    np.random.shuffle(assignment)
+    return pd.Series(assignment, index=group_df.index)
