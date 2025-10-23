@@ -143,9 +143,6 @@ class ExperimentAnalyzer:
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
-        # Ensure unit_identifier is a list
-        self._unit_identifier = self.__ensure_list(self._unit_identifier)
-
         # check if all required columns are present
         required_columns = (
             self._experiment_identifier
@@ -154,7 +151,7 @@ class ExperimentAnalyzer:
             + self._covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
             + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
-            + self._unit_identifier
+            + ([self._unit_identifier] if self._unit_identifier is not None else [])
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -392,18 +389,7 @@ class ExperimentAnalyzer:
         else:
             grouped_data = [(None, self._data)]
 
-        for experiment_tuple, temp_pd_from_group in grouped_data:
-            temp_pd = temp_pd_from_group.copy()  # Work on a copy to avoid SettingWithCopyWarning
-            # Add experiment identifiers back to the dataframe
-            if self._experiment_identifier:
-                if isinstance(experiment_tuple, tuple):
-                    # If multiple identifiers, experiment_tuple is a tuple
-                    for i, col_name in enumerate(self._experiment_identifier):
-                        temp_pd[col_name] = experiment_tuple[i]
-                else:
-                    # If single identifier, experiment_tuple is the value
-                    temp_pd[self._experiment_identifier[0]] = experiment_tuple
-
+        for experiment_tuple, temp_pd in grouped_data:
             self._logger.info("Processing: %s", experiment_tuple)
             final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
@@ -421,7 +407,7 @@ class ExperimentAnalyzer:
             sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(temp_pd)
 
             temp_pd = self.impute_missing_values(
-                data=temp_pd,
+                data=temp_pd.copy(),
                 num_covariates=numeric_covariates,
                 bin_covariates=binary_covariates,
             )
@@ -499,7 +485,9 @@ class ExperimentAnalyzer:
                 if adjustment == "balance":
                     weight_col = self._target_weights[self._target_effect]
                     if weight_col in temp_pd.columns:
-                        weight_columns = [*self._experiment_identifier, *self._unit_identifier, weight_col]
+                        weight_columns = [*self._experiment_identifier, weight_col]
+                        if self._unit_identifier and self._unit_identifier in temp_pd.columns:
+                            weight_columns.insert(-1, self._unit_identifier)
                         weights_df = temp_pd[weight_columns].copy()
                         weights_list.append(weights_df)
 
