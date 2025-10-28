@@ -66,14 +66,12 @@ print(f"Proportions:\n{df['assignment_5'].value_counts(normalize=True)}\n")
 print("=" * 60)
 print("TEST 6: Block randomization (by segment)")
 print("=" * 60)
-df["assignment_6"] = df.groupby("segment", group_keys=False).apply(
-    lambda x: balanced_random_assignment(
-        x,
-        seed=42,
-        variants=["control", "variant_a", "variant_b"],
-        allocation_ratio={"control": 0.5, "variant_a": 0.3, "variant_b": 0.2},
-    ),
-    include_groups=False
+df["assignment_6"] = balanced_random_assignment(
+    df,
+    seed=42,
+    variants=["control", "variant_a", "variant_b"],
+    allocation_ratio={"control": 0.4, "variant_a": 0.4, "variant_b": 0.2},
+    balance_covariates=["segment"],
 )
 print("Overall distribution:")
 print(df["assignment_6"].value_counts())
@@ -84,5 +82,3 @@ print(pd.crosstab(df["segment"], df["assignment_6"], normalize="index"))
 print("\n" + "=" * 60)
 print("All tests completed successfully!")
 print("=" * 60)
-
-# %%
