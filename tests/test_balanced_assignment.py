@@ -82,5 +82,3 @@ print(pd.crosstab(df["segment"], df["assignment_6"], normalize="index"))
 print("\n" + "=" * 60)
 print("All tests completed successfully!")
 print("=" * 60)
-
-# %%
