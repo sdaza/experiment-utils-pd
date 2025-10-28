@@ -424,7 +424,7 @@ wheels = [
 
 [[package]]
 name = "experiment-utils-pd"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "build" },
