@@ -53,10 +53,10 @@ class TestBootstrapInference:
             bootstrap_seed=123,
         )
 
-        assert analyzer._bootstrap == True
+        assert analyzer._bootstrap
         assert analyzer._bootstrap_iterations == 100
         assert analyzer._bootstrap_ci_method == "percentile"
-        assert analyzer._bootstrap_stratify == True
+        assert analyzer._bootstrap_stratify
         assert analyzer._bootstrap_seed == 123
 
     def test_bootstrap_results_columns(self, sample_data):
@@ -153,7 +153,7 @@ class TestBootstrapInference:
         assert results["inference_method"].values[0] == "bootstrap"
 
         # Original setting should be restored
-        assert analyzer._bootstrap == False
+        assert not analyzer._bootstrap
 
     def test_bootstrap_stratified_resampling(self, sample_data):
         """Test that stratified resampling maintains treatment proportions"""
