@@ -56,6 +56,16 @@ class ExperimentAnalyzer:
         List of covariates to include in the final linear regression model, by default None
     unit_identifier : str, optional
         Column name for the unit/user identifier to connect weights to specific units, by default None
+    bootstrap : bool, optional
+        Whether to use bootstrap inference for p-values and confidence intervals, by default False
+    bootstrap_iterations : int, optional
+        Number of bootstrap iterations, by default 1000
+    bootstrap_ci_method : str, optional
+        Bootstrap CI method ('percentile', 'basic'), by default 'percentile'
+    bootstrap_stratify : bool, optional
+        Whether to stratify bootstrap resampling by treatment group, by default True
+    bootstrap_seed : int, optional
+        Random seed for bootstrap reproducibility, by default None
     """  # noqa: E501
 
     def __init__(
@@ -78,6 +88,11 @@ class ExperimentAnalyzer:
         assess_overlap: bool = False,
         overlap_plot: bool = False,
         unit_identifier: str | None = None,
+        bootstrap: bool = False,
+        bootstrap_iterations: int = 1000,
+        bootstrap_ci_method: str = "percentile",
+        bootstrap_stratify: bool = True,
+        bootstrap_seed: int | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -94,6 +109,11 @@ class ExperimentAnalyzer:
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
         self._unit_identifier = unit_identifier
+        self._bootstrap = bootstrap
+        self._bootstrap_iterations = bootstrap_iterations
+        self._bootstrap_ci_method = bootstrap_ci_method
+        self._bootstrap_stratify = bootstrap_stratify
+        self._bootstrap_seed = bootstrap_seed
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -327,7 +347,9 @@ class ExperimentAnalyzer:
 
         return overlap_coefficient
 
-    def get_effects(self, min_binary_count: int = 100, adjustment: str | None = None) -> None:
+    def get_effects(
+        self, min_binary_count: int = 100, adjustment: str | None = None, bootstrap: bool | None = None
+    ) -> None:
         """ "
         Calculate effects (uplifts), given the data and experimental units.
 
@@ -337,6 +359,8 @@ class ExperimentAnalyzer:
             The minimum number of observations required for a binary covariate to be included in the analysis. Defaults to 100.
         adjustment : str, optional
             The type of adjustment to apply to estimation: 'IPW', 'IV'. Default is None.
+        bootstrap : bool, optional
+            Whether to use bootstrap inference. If None, uses the value set in __init__. Default is None.
 
         Updates
         -------
@@ -380,6 +404,13 @@ class ExperimentAnalyzer:
 
         if adjustment is None:
             adjustment = self._adjustment
+
+        # Allow overriding bootstrap setting for this call
+        if bootstrap is not None:
+            original_bootstrap = self._bootstrap
+            self._bootstrap = bootstrap
+        else:
+            original_bootstrap = None
 
         self._balance = []
         self._adjusted_balance = []
@@ -552,6 +583,37 @@ class ExperimentAnalyzer:
                             data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates)
                         )
 
+                    # Bootstrap inference if requested
+                    if self._bootstrap:
+                        self._logger.info(
+                            f"Running bootstrap for outcome '{outcome}' with {self._bootstrap_iterations} iterations..."
+                        )
+                        bootstrap_effects = self.__bootstrap_single_effect(
+                            data=temp_pd,
+                            outcome=outcome,
+                            adjustment=adjustment,
+                            model_func=model[adjustment],
+                            relevant_covariates=list(relevant_covariates),
+                            numeric_covariates=numeric_covariates,
+                            binary_covariates=binary_covariates,
+                            min_binary_count=min_binary_count,
+                        )
+                        bootstrap_results = self.__calculate_bootstrap_inference(
+                            bootstrap_effects, output["absolute_effect"]
+                        )
+                        # Replace asymptotic inference with bootstrap inference
+                        output["standard_error"] = bootstrap_results["standard_error"]
+                        output["pvalue"] = bootstrap_results["pvalue"]
+                        output["abs_effect_lower"] = bootstrap_results["abs_effect_lower"]
+                        output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
+                        output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
+                    else:
+                        # For asymptotic, add CI columns for consistency
+                        output["abs_effect_lower"] = output.get("abs_effect_lower", np.nan)
+                        output["abs_effect_upper"] = output.get("abs_effect_upper", np.nan)
+
+                    # Add inference_method after all inference columns for consistent ordering
+                    output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
                     output["adjustment"] = adjustment_label
                     if adjustment == "balance":
                         output["method"] = self._balance_method
@@ -638,15 +700,18 @@ class ExperimentAnalyzer:
             "outcome",
             "sample_ratio",
             "adjustment",
+            "inference_method",
             "treated_units",
             "control_units",
             "control_value",
             "treatment_value",
             "absolute_effect",
             "relative_effect",
-            "stat_significance",
             "standard_error",
             "pvalue",
+            "stat_significance",
+            "abs_effect_lower",
+            "abs_effect_upper",
         ]
 
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
@@ -664,9 +729,9 @@ class ExperimentAnalyzer:
                 ]
             )
         if srm_detected is not None and "srm_detected" not in result_columns:
-            result_columns.insert(result_columns.index("pvalue") + 1, "srm_detected")
+            result_columns.append("srm_detected")
         if srm_pvalue is not None and "srm_pvalue" not in result_columns:
-            result_columns.insert(result_columns.index("srm_detected") + 1, "srm_pvalue")
+            result_columns.append("srm_pvalue")
 
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
@@ -684,14 +749,35 @@ class ExperimentAnalyzer:
         # Transform tuple column in the final results dataframe
         results_df = self.__transform_tuple_column(clean_temp_results, "experiment", self._experiment_identifier)
 
-        # Add confidence intervals for absolute effect
+        # Add confidence intervals based on inference method
         if not results_df.empty and "absolute_effect" in results_df.columns and "standard_error" in results_df.columns:
             alpha = getattr(self, "_alpha", 0.05)
             z_critical = stats.norm.ppf(1 - alpha / 2)
-            results_df["abs_effect_lower"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
-            results_df["abs_effect_upper"] = results_df["absolute_effect"] + z_critical * results_df["standard_error"]
+
+            # Add CI columns if they don't exist (from bootstrap)
+            if "abs_effect_lower" not in results_df.columns:
+                results_df["abs_effect_lower"] = np.nan
+            if "abs_effect_upper" not in results_df.columns:
+                results_df["abs_effect_upper"] = np.nan
+
+            # Calculate asymptotic CIs for rows using asymptotic inference
+            if "inference_method" in results_df.columns:
+                async_mask = results_df["inference_method"] == "asymptotic"
+                if async_mask.any():
+                    results_df.loc[async_mask, "abs_effect_lower"] = (
+                        results_df.loc[async_mask, "absolute_effect"]
+                        - z_critical * results_df.loc[async_mask, "standard_error"]
+                    )
+                    results_df.loc[async_mask, "abs_effect_upper"] = (
+                        results_df.loc[async_mask, "absolute_effect"]
+                        + z_critical * results_df.loc[async_mask, "standard_error"]
+                    )
 
         self._results = results_df
+
+        # Restore original bootstrap setting if it was overridden
+        if original_bootstrap is not None:
+            self._bootstrap = original_bootstrap
 
     def test_non_inferiority(
         self, absolute_margin: float | None = None, relative_margin: float | None = None, alpha: float = 0.05
@@ -988,6 +1074,206 @@ class ExperimentAnalyzer:
         if item is None:
             return []
         return item if isinstance(item, list) else [item]
+
+    def __stratified_resample(self, data: pd.DataFrame, seed: int | None = None) -> pd.DataFrame:
+        """
+        Perform stratified resampling with replacement, stratified by treatment group.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Data to resample
+        seed : int, optional
+            Random seed for reproducibility
+
+        Returns
+        -------
+        pd.DataFrame
+            Resampled data
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        if self._bootstrap_stratify:
+            # Stratified resampling by treatment group
+            treated = data[data[self._treatment_col] == 1]
+            control = data[data[self._treatment_col] == 0]
+
+            treated_resample = treated.sample(n=len(treated), replace=True)
+            control_resample = control.sample(n=len(control), replace=True)
+
+            resampled_data = pd.concat([treated_resample, control_resample], ignore_index=True)
+        else:
+            # Simple resampling
+            resampled_data = data.sample(n=len(data), replace=True)
+
+        return resampled_data
+
+    def __bootstrap_single_effect(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        adjustment: str | None,
+        model_func,
+        relevant_covariates: list[str],
+        numeric_covariates: list[str],
+        binary_covariates: list[str],
+        min_binary_count: int,
+    ) -> float:
+        """
+        Bootstrap a single effect estimate for one outcome.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Original data
+        outcome : str
+            Outcome variable
+        adjustment : str
+            Adjustment method
+        model_func : callable
+            Model function to use for estimation
+        relevant_covariates : list[str]
+            Relevant covariates for regression
+        numeric_covariates : list[str]
+            Numeric covariates
+        binary_covariates : list[str]
+            Binary covariates
+        min_binary_count : int
+            Minimum count for binary covariates
+
+        Returns
+        -------
+        float
+            Bootstrapped absolute effect estimate
+        """
+        bootstrap_effects = []
+
+        for i in range(self._bootstrap_iterations):
+            seed = self._bootstrap_seed + i if self._bootstrap_seed is not None else None
+            boot_data = self.__stratified_resample(data, seed=seed)
+
+            try:
+                # Impute missing values
+                boot_data = self.impute_missing_values(
+                    data=boot_data.copy(),
+                    num_covariates=numeric_covariates,
+                    bin_covariates=binary_covariates,
+                )
+
+                # Filter covariates
+                boot_numeric = [c for c in numeric_covariates if boot_data[c].std(ddof=0) != 0]
+                boot_binary = [c for c in binary_covariates if boot_data[c].sum() >= min_binary_count]
+                boot_binary = [c for c in boot_binary if boot_data[c].std(ddof=0) != 0]
+
+                boot_final_covariates = boot_numeric + boot_binary
+
+                if len(boot_final_covariates) > 0:
+                    boot_data = self.standardize_covariates(boot_data, boot_final_covariates)
+
+                # Recalculate weights if needed
+                if adjustment == "balance":
+                    get_balance_method = self._estimator.get_balance_method
+                    balance_func = get_balance_method(self._balance_method)
+                    boot_data = balance_func(data=boot_data, covariates=[f"z_{cov}" for cov in boot_final_covariates])
+                    weight_col = self._target_weights[self._target_effect]
+                else:
+                    weight_col = None
+
+                # Estimate effect
+                boot_relevant_covariates = set(boot_final_covariates) & set(relevant_covariates)
+
+                if adjustment == "balance" and weight_col:
+                    output = model_func(
+                        data=boot_data,
+                        outcome_variable=outcome,
+                        covariates=list(boot_relevant_covariates),
+                        weight_column=weight_col,
+                    )
+                else:
+                    output = model_func(
+                        data=boot_data, outcome_variable=outcome, covariates=list(boot_relevant_covariates)
+                    )
+
+                bootstrap_effects.append(output["absolute_effect"])
+
+            except Exception as e:
+                # Skip failed bootstrap iterations
+                self._logger.debug(f"Bootstrap iteration {i} failed: {e}")
+                continue
+
+        if len(bootstrap_effects) < self._bootstrap_iterations * 0.5:
+            self._logger.warning(
+                f"More than 50% of bootstrap iterations failed for outcome {outcome}. Results may be unreliable."
+            )
+
+        return np.array(bootstrap_effects)
+
+    def __calculate_bootstrap_inference(
+        self, bootstrap_effects: np.ndarray, observed_effect: float
+    ) -> dict[str, float]:
+        """
+        Calculate confidence intervals and p-value from bootstrap distribution.
+
+        Parameters
+        ----------
+        bootstrap_effects : np.ndarray
+            Array of bootstrap effect estimates
+        observed_effect : float
+            Observed effect estimate from original data
+
+        Returns
+        -------
+        dict
+            Dictionary with standard error, CI, and p-value (using standard column names)
+        """
+        if len(bootstrap_effects) == 0:
+            return {
+                "standard_error": np.nan,
+                "pvalue": np.nan,
+                "abs_effect_lower": np.nan,
+                "abs_effect_upper": np.nan,
+            }
+
+        # Remove NaN values
+        bootstrap_effects = bootstrap_effects[~np.isnan(bootstrap_effects)]
+
+        if len(bootstrap_effects) == 0:
+            return {
+                "standard_error": np.nan,
+                "pvalue": np.nan,
+                "abs_effect_lower": np.nan,
+                "abs_effect_upper": np.nan,
+            }
+
+        # Calculate bootstrap standard error
+        bootstrap_se = np.std(bootstrap_effects, ddof=1)
+
+        # Confidence intervals
+        alpha = self._alpha
+        if self._bootstrap_ci_method == "percentile":
+            ci_lower = np.percentile(bootstrap_effects, alpha / 2 * 100)
+            ci_upper = np.percentile(bootstrap_effects, (1 - alpha / 2) * 100)
+        elif self._bootstrap_ci_method == "basic":
+            # Basic bootstrap CI
+            ci_lower = 2 * observed_effect - np.percentile(bootstrap_effects, (1 - alpha / 2) * 100)
+            ci_upper = 2 * observed_effect - np.percentile(bootstrap_effects, alpha / 2 * 100)
+        else:
+            # Default to percentile
+            ci_lower = np.percentile(bootstrap_effects, alpha / 2 * 100)
+            ci_upper = np.percentile(bootstrap_effects, (1 - alpha / 2) * 100)
+
+        # P-value (two-sided)
+        # Count how many bootstrap effects are as extreme as observed
+        pvalue = np.mean(np.abs(bootstrap_effects - np.mean(bootstrap_effects)) >= np.abs(observed_effect)) * 2
+        pvalue = min(pvalue, 1.0)  # Ensure p-value doesn't exceed 1
+
+        return {
+            "standard_error": bootstrap_se,
+            "pvalue": pvalue,
+            "abs_effect_lower": ci_lower,
+            "abs_effect_upper": ci_upper,
+        }
 
     @property
     def results(self) -> pd.DataFrame | None:
