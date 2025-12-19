@@ -5,3 +5,4 @@ __pycache__
 experiment_utils.egg-info
 tests/interactive_testing.py
 .venv
+.*cache
