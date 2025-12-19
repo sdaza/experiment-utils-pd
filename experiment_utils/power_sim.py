@@ -751,7 +751,7 @@ class PowerSim:
         Uses binary search to efficiently find the sample size that achieves
         the target power within the specified tolerance. The total sample size
         is distributed across groups according to allocation_ratio.
-        
+
         Multiple comparison corrections (specified during PowerSim initialization)
         are automatically applied when calculating power. More conservative corrections
         (e.g., Bonferroni) will require larger sample sizes than less conservative
@@ -786,13 +786,13 @@ class PowerSim:
         -------
         pd.DataFrame
             DataFrame with comparison, sample_size, allocation, and achieved_power columns.
-            
+
         Examples
         --------
         # Basic usage with equal allocation
         >>> p = PowerSim(metric='proportion', variants=1, nsim=500, correction='bonferroni')
         >>> result = p.find_sample_size(target_power=0.80, baseline=[0.10], effect=[0.02])
-        
+
         # Custom allocation (30% control, 70% treatment)
         >>> result = p.find_sample_size(
         ...     target_power=0.80,
@@ -800,7 +800,7 @@ class PowerSim:
         ...     effect=[0.02],
         ...     allocation_ratio=[0.3, 0.7]
         ... )
-        
+
         # Compare different multiple comparison corrections
         >>> p_bonf = PowerSim(metric='proportion', variants=2, correction='bonferroni')
         >>> p_fdr = PowerSim(metric='proportion', variants=2, correction='fdr')
@@ -815,22 +815,21 @@ class PowerSim:
             compliance = [1.0]
         if standard_deviation is None:
             standard_deviation = [1]
-        
+
         # Default to equal allocation across all groups
         num_groups = self.variants + 1
         if allocation_ratio is None:
             allocation_ratio = [1.0 / num_groups] * num_groups
-        
+
         # Validate allocation_ratio
         if len(allocation_ratio) != num_groups:
             log_and_raise_error(
-                self.logger,
-                f"allocation_ratio must have {num_groups} elements (control + {self.variants} variants)"
+                self.logger, f"allocation_ratio must have {num_groups} elements (control + {self.variants} variants)"
             )
-        
+
         if not np.isclose(sum(allocation_ratio), 1.0):
             log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
-        
+
         if any(r <= 0 for r in allocation_ratio):
             log_and_raise_error(self.logger, "All allocation_ratio values must be positive")
 
@@ -853,7 +852,7 @@ class PowerSim:
             while current_total_size <= max_sample_size:
                 # Distribute total sample size by allocation ratio
                 sample_sizes = [int(current_total_size * ratio) for ratio in allocation_ratio]
-                
+
                 power_result = self.get_power(
                     baseline=baseline,
                     effect=effect,
@@ -893,7 +892,7 @@ class PowerSim:
                 while high - low > step_size // 2:
                     mid = (low + high) // 2
                     sample_sizes = [int(mid * ratio) for ratio in allocation_ratio]
-                    
+
                     power_result = self.get_power(
                         baseline=baseline,
                         effect=effect,
@@ -916,7 +915,7 @@ class PowerSim:
 
             # Calculate final allocation
             final_sample_sizes = [int(best_total_size * ratio) for ratio in allocation_ratio]
-            
+
             results.append(
                 {
                     "comparison": (group1, group2),
