@@ -121,7 +121,10 @@ analyzer = ExperimentAnalyzer(
     unit_identifier=["user_id"], # Optional: To retrieve balance weights
     adjustment="balance",  # Options: 'balance', 'IV', or None
     balance_method="ps-logistic",  # Options: 'ps-logistic', 'ps-xgboost', 'entropy'
-    target_effect="ATE"  # Options: 'ATT', 'ATE', 'ATC'
+    target_effect="ATE",  # Options: 'ATT', 'ATE', 'ATC'
+    bootstrap=True,  # Enable bootstrap inference (default: False)
+    bootstrap_iterations=1000,  # Number of bootstrap iterations (default: 1000)
+    bootstrap_seed=42  # Seed for reproducibility (optional)
 )
 
 # Estimate effects
@@ -133,6 +136,11 @@ print(analyzer.results)
 - `adjustment`: Choose 'balance' for covariate balancing (using balance_method), 'IV' for instrumental variable adjustment, or None for unadjusted analysis.
 - `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
 - `target_effect`: Specifies the estimand: 'ATT', 'ATE', or 'ATC'.
+- `bootstrap`: Enable bootstrap inference for p-values and confidence intervals (default: False for asymptotic inference).
+- `bootstrap_iterations`: Number of bootstrap resampling iterations (default: 1000).
+- `bootstrap_ci_method`: Method for computing bootstrap CIs: 'percentile' or 'basic' (default: 'percentile').
+- `bootstrap_stratify`: Whether to use stratified resampling by treatment group (default: True).
+- `bootstrap_seed`: Random seed for reproducible bootstrap results (optional).
 
 
 ### Retrieve IPW Weights
