@@ -311,6 +311,9 @@ class PowerSim:
                 significant = correction_methods[self.correction](
                     np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
                 )  # noqa: E501
+            else:
+                # No correction - compare each p-value to alpha directly
+                significant = [p < self.alpha for p in l_pvalues]
 
             for v, p in enumerate(significant):
                 pvalues[v].append(p)
@@ -732,21 +735,141 @@ class PowerSim:
             significant[sort_ind[0 : k[-1] + 1]] = True
         return significant
 
+    def _optimize_allocation(
+        self,
+        power_dict: dict,
+        target_comparisons: list,
+        baseline: list,
+        effect: list,
+        compliance: list,
+        standard_deviation: list,
+        num_groups: int,
+        min_sample_size: int,
+        max_sample_size: int,
+        tolerance: float,
+        step_size: int,
+    ) -> list[float]:
+        """
+        Find optimal allocation using greedy heuristic.
+        
+        For each comparison (sorted by effect size), finds the minimum sample size
+        needed with equal allocation between the two groups. Each group gets the
+        maximum sample size needed across all its comparisons.
+        
+        This is fast and provides good allocations, though some overpowering is
+        inevitable when groups participate in multiple comparisons.
+        """
+        import warnings
+        
+        # Check for symmetric case: all effects equal and all power targets equal
+        # For control vs variants comparisons only
+        control_comparisons = [(g1, g2) for g1, g2 in target_comparisons if 0 in (g1, g2)]
+        
+        if len(control_comparisons) == len(target_comparisons):
+            # All comparisons involve control
+            variant_effects = [abs(effect[max(g1, g2) - 1]) for g1, g2 in target_comparisons]
+            power_targets = [power_dict[comp] for comp in target_comparisons]
+            
+            # Check if all effects are the same (within tolerance) and all power targets are the same
+            if (len(set(variant_effects)) == 1 or max(variant_effects) - min(variant_effects) < 0.001) and \
+               (len(set(power_targets)) == 1):
+                # Symmetric case - use equal allocation
+                self.logger.info("Symmetric effects and power targets detected - using equal allocation")
+                return [1.0 / num_groups] * num_groups
+        
+        group_samples = [0] * num_groups
+        
+        # Sort comparisons by absolute effect size (smallest = hardest to detect)
+        def get_effect_size(comp):
+            g1, g2 = comp
+            if g1 == 0:
+                return abs(effect[g2 - 1]) if g2 > 0 else 0
+            elif g2 == 0:
+                return abs(effect[g1 - 1]) if g1 > 0 else 0
+            else:
+                e1 = effect[g1 - 1] if g1 > 0 else 0
+                e2 = effect[g2 - 1] if g2 > 0 else 0
+                return abs(e2 - e1)
+        
+        sorted_comparisons = sorted(target_comparisons, key=get_effect_size)
+        
+        # For each comparison, find minimum sample size
+        # Note: We need to test with ALL groups to properly account for multiple comparison corrections
+        for (group1, group2) in sorted_comparisons:
+            comp_target_power = power_dict[(group1, group2)]
+            comp_result_idx = self.comparisons.index((group1, group2))
+            
+            low = min_sample_size
+            high = max_sample_size
+            found_size = None
+            
+            current_size = low
+            while current_size <= high:
+                per_group = int(current_size / 2)
+                
+                # Test with ALL groups, using current max for groups already processed
+                # and per_group for the groups in this comparison
+                sample_sizes = list(group_samples)  # Start with current max for each group
+                sample_sizes[group1] = max(sample_sizes[group1], per_group)
+                sample_sizes[group2] = max(sample_sizes[group2], per_group)
+                
+                # Ensure all groups have at least some samples for proper correction calculation
+                sample_sizes = [max(s, 100) for s in sample_sizes]
+                
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        power_result = self.get_power(
+                            baseline=baseline,
+                            effect=effect,
+                            sample_size=sample_sizes,
+                            compliance=compliance,
+                            standard_deviation=standard_deviation,
+                        )
+                    current_power = power_result.iloc[comp_result_idx]["power"]
+                    
+                    if current_power >= comp_target_power - tolerance:
+                        found_size = per_group
+                        break
+                except Exception:
+                    pass
+                
+                current_size += step_size
+            
+            if found_size is None:
+                found_size = int(high / 2)
+            
+            group_samples[group1] = max(group_samples[group1], found_size)
+            group_samples[group2] = max(group_samples[group2], found_size)
+        
+        # Convert to allocation ratios
+        total_samples = sum(group_samples)
+        
+        if total_samples == 0:
+            allocation = [1.0 / num_groups] * num_groups
+        else:
+            allocation = [s / total_samples for s in group_samples]
+        
+        return allocation
+
     def find_sample_size(
         self,
-        target_power: float,
+        target_power: float | dict[tuple[int, int], float] = 0.80,
         baseline: list[float] = None,
         effect: list[float] = None,
         compliance: list[float] = None,
         standard_deviation: list[float] = None,
         allocation_ratio: list[float] = None,
+        target_comparisons: list[tuple[int, int]] = None,
+        power_criteria: str = "all",
+        optimize_allocation: bool = False,
         min_sample_size: int = 100,
         max_sample_size: int = 100000,
         tolerance: float = 0.01,
         step_size: int = 100,
     ) -> pd.DataFrame:
         """
-        Find the minimum total sample size needed to achieve a target power level.
+        Find the minimum total sample size needed to achieve target power level(s).
 
         Uses binary search to efficiently find the sample size that achieves
         the target power within the specified tolerance. The total sample size
@@ -759,12 +882,15 @@ class PowerSim:
 
         Parameters
         ----------
-        target_power : float
-            The desired power level (e.g., 0.80 for 80% power).
+        target_power : float or dict
+            The desired power level. Can be either:
+            - A single float (e.g., 0.80) to apply the same target to all comparisons
+            - A dict mapping comparisons to their specific power targets
+              (e.g., {(0,1): 0.90, (0,2): 0.80})
         baseline : list
             List baseline rates for counts or proportions, or base average for mean comparisons.
         effect : list
-            List with effect sizes.
+            List with effect sizes for each variant.
         compliance : list
             List with compliance values.
         standard_deviation : list
@@ -773,6 +899,17 @@ class PowerSim:
             Proportion of total sample size for each group (control + variants).
             Must sum to 1.0. Default is equal allocation across all groups.
             Example: [0.3, 0.7] for 30% control, 70% treatment.
+        target_comparisons : list of tuples, optional
+            Which comparisons to power for. Defaults to all comparisons defined in the instance.
+            Example: [(0, 1), (0, 2)] to only consider control vs variant 1 and 2.
+        power_criteria : str
+            How to handle multiple target comparisons:
+            - "all": All target comparisons must reach their target power (conservative)
+            - "any": At least one target comparison reaches its target power
+        optimize_allocation : bool
+            If True, automatically finds the optimal allocation ratio that minimizes
+            total sample size while meeting all power targets. Ignores allocation_ratio
+            parameter if provided. Default is False (uses equal or provided allocation).
         min_sample_size : int
             Minimum total sample size to consider (default: 100).
         max_sample_size : int
@@ -785,26 +922,48 @@ class PowerSim:
         Returns
         -------
         pd.DataFrame
-            DataFrame with comparison, sample_size, allocation, and achieved_power columns.
+            DataFrame with comparison, target_power, sample_size, allocation, and achieved_power columns.
 
         Examples
         --------
-        # Basic usage with equal allocation
-        >>> p = PowerSim(metric='proportion', variants=1, nsim=500, correction='bonferroni')
+        # Basic usage: same power target for all comparisons
+        >>> p = PowerSim(metric='proportion', variants=1, nsim=500)
         >>> result = p.find_sample_size(target_power=0.80, baseline=[0.10], effect=[0.02])
 
-        # Custom allocation (30% control, 70% treatment)
+        # Different power targets per comparison
+        >>> p = PowerSim(metric='proportion', variants=2, nsim=500)
+        >>> result = p.find_sample_size(
+        ...     target_power={(0,1): 0.90, (0,2): 0.80},  # Primary comparison needs 90% power
+        ...     baseline=[0.10],
+        ...     effect=[0.05, 0.03]
+        ... )
+
+        # Optimize allocation automatically
+        >>> p = PowerSim(metric='proportion', variants=3, nsim=500)
+        >>> result = p.find_sample_size(
+        ...     target_power=0.80,
+        ...     baseline=[0.10],
+        ...     effect=[0.05, 0.03, 0.07],  # Different effects
+        ...     optimize_allocation=True  # Find optimal allocation!
+        ... )
+
+        # Power only specific comparisons
+        >>> p = PowerSim(metric='proportion', variants=3, nsim=500)
+        >>> result = p.find_sample_size(
+        ...     target_power=0.80,
+        ...     baseline=[0.10],
+        ...     effect=[0.05, 0.03, 0.07],
+        ...     target_comparisons=[(0, 1), (0, 2)]  # Only power first two variants
+        ... )
+
+        # Custom allocation with power criteria
         >>> result = p.find_sample_size(
         ...     target_power=0.80,
         ...     baseline=[0.10],
         ...     effect=[0.02],
-        ...     allocation_ratio=[0.3, 0.7]
+        ...     allocation_ratio=[0.3, 0.7],  # 30% control, 70% treatment
+        ...     power_criteria="all"  # All target comparisons must be powered
         ... )
-
-        # Compare different multiple comparison corrections
-        >>> p_bonf = PowerSim(metric='proportion', variants=2, correction='bonferroni')
-        >>> p_fdr = PowerSim(metric='proportion', variants=2, correction='fdr')
-        >>> # Bonferroni will require larger sample size than FDR
         """
         # Set default values
         if baseline is None:
@@ -818,29 +977,81 @@ class PowerSim:
 
         # Default to equal allocation across all groups
         num_groups = self.variants + 1
-        if allocation_ratio is None:
+        if allocation_ratio is None or optimize_allocation:
             allocation_ratio = [1.0 / num_groups] * num_groups
 
-        # Validate allocation_ratio
-        if len(allocation_ratio) != num_groups:
-            log_and_raise_error(
-                self.logger, f"allocation_ratio must have {num_groups} elements (control + {self.variants} variants)"
+        # Validate allocation_ratio (unless optimizing)
+        if not optimize_allocation:
+            if len(allocation_ratio) != num_groups:
+                log_and_raise_error(
+                    self.logger, f"allocation_ratio must have {num_groups} elements (control + {self.variants} variants)"
+                )
+
+            if not np.isclose(sum(allocation_ratio), 1.0):
+                log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
+
+            if any(r <= 0 for r in allocation_ratio):
+                log_and_raise_error(self.logger, "All allocation_ratio values must be positive")
+
+        # Handle target_comparisons
+        if target_comparisons is None:
+            target_comparisons = self.comparisons
+        else:
+            # Validate that target_comparisons are in self.comparisons
+            invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
+            if invalid_comps:
+                log_and_raise_error(
+                    self.logger,
+                    f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
+                )
+
+        # Validate power_criteria
+        if power_criteria not in ["all", "any"]:
+            log_and_raise_error(self.logger, "power_criteria must be 'all' or 'any'")
+
+        # Handle target_power - can be single value or dict
+        if isinstance(target_power, dict):
+            # Validate dict keys are tuples in target_comparisons
+            invalid_keys = [k for k in target_power.keys() if k not in target_comparisons]
+            if invalid_keys:
+                log_and_raise_error(
+                    self.logger, f"target_power dict contains invalid comparisons: {invalid_keys}"
+                )
+            # Validate all values are valid probabilities
+            if any(not (0 < p < 1) for p in target_power.values()):
+                log_and_raise_error(self.logger, "All target_power values must be between 0 and 1")
+            power_dict = target_power
+        else:
+            # Single value - validate and apply to all target comparisons
+            if not 0 < target_power < 1:
+                log_and_raise_error(self.logger, "target_power must be between 0 and 1")
+            power_dict = {comp: target_power for comp in target_comparisons}
+
+        # If optimize_allocation is True, find optimal allocation
+        if optimize_allocation:
+            allocation_ratio = self._optimize_allocation(
+                power_dict=power_dict,
+                target_comparisons=target_comparisons,
+                baseline=baseline,
+                effect=effect,
+                compliance=compliance,
+                standard_deviation=standard_deviation,
+                num_groups=num_groups,
+                min_sample_size=min_sample_size,
+                max_sample_size=max_sample_size,
+                tolerance=tolerance,
+                step_size=step_size,
             )
-
-        if not np.isclose(sum(allocation_ratio), 1.0):
-            log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
-
-        if any(r <= 0 for r in allocation_ratio):
-            log_and_raise_error(self.logger, "All allocation_ratio values must be positive")
-
-        # Validate target_power
-        if not 0 < target_power < 1:
-            log_and_raise_error(self.logger, "target_power must be between 0 and 1")
 
         results = []
 
-        # For each comparison, find the required sample size
-        for comp_idx, (group1, group2) in enumerate(self.comparisons):
+        # For each target comparison, find the required sample size
+        for (group1, group2) in target_comparisons:
+            comp_target_power = power_dict[(group1, group2)]
+            
+            # Find the index of this comparison in self.comparisons for power_result indexing
+            comp_result_idx = self.comparisons.index((group1, group2))
+
             # Binary search for optimal total sample size
             low = min_sample_size
             high = max_sample_size
@@ -860,9 +1071,9 @@ class PowerSim:
                     compliance=compliance,
                     standard_deviation=standard_deviation,
                 )
-                current_power = power_result.iloc[comp_idx]["power"]
+                current_power = power_result.iloc[comp_result_idx]["power"]
 
-                if current_power >= target_power - tolerance:
+                if current_power >= comp_target_power - tolerance:
                     high = current_total_size
                     best_total_size = current_total_size
                     best_power = current_power
@@ -874,7 +1085,7 @@ class PowerSim:
             # If we didn't find a solution in coarse search, max out
             if best_total_size is None:
                 self.logger.warning(
-                    f"Could not achieve target power {target_power} for comparison {(group1, group2)} "
+                    f"Could not achieve target power {comp_target_power} for comparison {(group1, group2)} "
                     f"within max_sample_size {max_sample_size}"
                 )
                 best_total_size = max_sample_size
@@ -886,7 +1097,7 @@ class PowerSim:
                     compliance=compliance,
                     standard_deviation=standard_deviation,
                 )
-                best_power = power_result.iloc[comp_idx]["power"]
+                best_power = power_result.iloc[comp_result_idx]["power"]
             else:
                 # Refine with binary search
                 while high - low > step_size // 2:
@@ -900,13 +1111,13 @@ class PowerSim:
                         compliance=compliance,
                         standard_deviation=standard_deviation,
                     )
-                    current_power = power_result.iloc[comp_idx]["power"]
+                    current_power = power_result.iloc[comp_result_idx]["power"]
 
-                    if abs(current_power - target_power) <= tolerance:
+                    if abs(current_power - comp_target_power) <= tolerance:
                         best_total_size = mid
                         best_power = current_power
                         break
-                    elif current_power < target_power:
+                    elif current_power < comp_target_power:
                         low = mid
                     else:
                         high = mid
@@ -919,7 +1130,7 @@ class PowerSim:
             results.append(
                 {
                     "comparison": (group1, group2),
-                    "target_power": target_power,
+                    "target_power": comp_target_power,
                     "total_sample_size": best_total_size,
                     "allocation_ratio": str(allocation_ratio),
                     "sample_sizes": str(final_sample_sizes),
@@ -927,4 +1138,62 @@ class PowerSim:
                 }
             )
 
-        return pd.DataFrame(results)
+        # Determine final sample size based on power_criteria
+        df_results = pd.DataFrame(results)
+        
+        if power_criteria == "all":
+            # Find the maximum sample size needed (most conservative)
+            max_sample_idx = df_results["total_sample_size"].idxmax()
+            max_sample_size_needed = df_results.loc[max_sample_idx, "total_sample_size"]
+            limiting_comparison = df_results.loc[max_sample_idx, "comparison"]
+        else:  # power_criteria == "any"
+            # Find the minimum sample size needed (least conservative)
+            max_sample_idx = df_results["total_sample_size"].idxmin()
+            max_sample_size_needed = df_results.loc[max_sample_idx, "total_sample_size"]
+            limiting_comparison = df_results.loc[max_sample_idx, "comparison"]
+
+        # Recalculate power for all comparisons using this final sample size
+        final_sample_sizes = [int(max_sample_size_needed * ratio) for ratio in allocation_ratio]
+
+        power_result = self.get_power(
+            baseline=baseline,
+            effect=effect,
+            sample_size=final_sample_sizes,
+            compliance=compliance,
+            standard_deviation=standard_deviation,
+        )
+
+        # Create result with dictionaries for comparison-level details
+        sample_sizes_dict = {"control": final_sample_sizes[0]}
+        for i in range(1, len(final_sample_sizes)):
+            sample_sizes_dict[f"variant_{i}"] = final_sample_sizes[i]
+        
+        # Log optimized sample sizes (only if optimization was used)
+        if optimize_allocation:
+            self.logger.info(f"Optimized sample sizes: {sample_sizes_dict}")
+
+        # Build dictionaries for target power and achieved power by comparison
+        target_power_by_comparison = {}
+        achieved_power_by_comparison = {}
+        
+        for _idx, row in power_result.iterrows():
+            comp = row["comparisons"]
+            if comp in target_comparisons:
+                target_power_by_comparison[str(comp)] = round(power_dict[comp], 3)
+                achieved_power_by_comparison[str(comp)] = round(row["power"], 3)
+        
+        # Log achieved power
+        self.logger.info(f"Achieved power: {achieved_power_by_comparison}")
+
+        # Create single result row
+        result = {
+            "total_sample_size": max_sample_size_needed,
+            "sample_sizes_by_group": sample_sizes_dict,
+            "power_criteria": power_criteria,
+            "correction": self.correction,
+            "limiting_comparison": str(limiting_comparison),
+            "target_power_by_comparison": target_power_by_comparison,
+            "achieved_power_by_comparison": achieved_power_by_comparison,
+        }
+
+        return pd.DataFrame([result])
