@@ -871,7 +871,7 @@ class ExperimentAnalyzer:
 
         pooled_results = (
             data.groupby(grouping_cols)
-            .apply(lambda df: pd.Series(self.__get_fixed_meta_analysis_estimate(df)))
+            .apply(lambda df: pd.Series(self.__get_fixed_meta_analysis_estimate(df)), include_groups=False)
             .reset_index()
         )
 
