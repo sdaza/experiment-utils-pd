@@ -25,7 +25,7 @@ class PowerSim:
         metric: str = "proportion",
         relative_effect: bool = False,
         nsim: int = 100,
-        variants: int = None,
+        variants: int | None = None,
         comparisons: list[tuple[int, int]] = None,
         alternative: str = "two-tailed",
         alpha: float = 0.05,  # noqa: E501
@@ -41,8 +41,9 @@ class PowerSim:
             Count, proportion, or average
         relative effect : bool
             True when change is percentual (not absolute).
-        variants : int
-            Number of cohorts or variants to use (remember, total number of groups = control + number of variants)
+        variants : int, optional
+            Number of variants (treatment groups). If not specified, defaults to 1
+            (total groups = control + 1 variant). Must be >= 1.
         comparisons : list
             List of tuple with the tests to run
         nsim : int
@@ -61,7 +62,18 @@ class PowerSim:
         self.logger = get_logger("Power Simulator")
         self.metric = metric
         self.relative_effect = relative_effect
-        self.variants = variants
+
+        # Handle default for variants
+        if variants is None:
+            self.logger.info("'variants' not specified. Defaulting to 1 (control + 1 variant).")
+            self.variants = 1
+        else:
+            self.variants = variants
+
+        # Validate variants
+        if not isinstance(self.variants, int) or self.variants < 1:
+            log_and_raise_error(self.logger, "'variants' must be an integer >= 1")
+
         self.comparisons = (
             list(itertools.combinations(range(self.variants + 1), 2)) if comparisons is None else comparisons
         )  # noqa: E501
@@ -216,27 +228,28 @@ class PowerSim:
 
     def get_power(
         self,
-        baseline: list[float] = None,
-        effect: list[float] = None,
-        sample_size: list[int] = None,
-        compliance: list[float] = None,
-        standard_deviation: list[float] = None,
+        baseline: float | list[float] = None,
+        effect: float | list[float] = None,
+        sample_size: int | list[int] = None,
+        compliance: float | list[float] = None,
+        standard_deviation: float | list[float] = None,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate power using simulation.
 
         Parameters
         ----------
-        baseline : list
-            List baseline rates for counts or proportions, or base average for mean comparisons.
-        effect : list
-            List with effect sizes.
-        sample_size : list
-            List with sample for control and arm groups.
-        compliance : list
-            List with compliance values.
-        standard_deviation : list
-            List of standard deviations of control and variants.
+        baseline : float or list
+            Baseline rate for counts or proportions, or base average for mean comparisons.
+            Can be a single float or list of floats.
+        effect : float or list
+            Effect size(s). Can be a single float or list of floats.
+        sample_size : int or list
+            Total sample per group (control + variants). Provide a single int to apply equally, or a list per group.
+        compliance : float or list
+            Compliance value(s). Provide a single float or list per variant.
+        standard_deviation : float or list
+            Standard deviation(s) for control and variants. Provide a single float or list per group.
 
         Returns
         -------
@@ -246,14 +259,24 @@ class PowerSim:
         # Set default values for mutable arguments
         if baseline is None:
             baseline = [1.0]
+        elif isinstance(baseline, (int, float)):
+            baseline = [float(baseline)]
         if effect is None:
             effect = [0.10]
+        elif isinstance(effect, (int, float)):
+            effect = [float(effect)]
         if sample_size is None:
             sample_size = [1000]
+        elif isinstance(sample_size, (int, float)):
+            sample_size = [int(sample_size)]
         if compliance is None:
             compliance = [1.0]
+        elif isinstance(compliance, (int, float)):
+            compliance = [float(compliance)]
         if standard_deviation is None:
             standard_deviation = [1]
+        elif isinstance(standard_deviation, (int, float)):
+            standard_deviation = [float(standard_deviation)]
 
         # create empty values for results
         pvalues = {}
@@ -308,9 +331,13 @@ class PowerSim:
             }
 
             if self.correction in correction_methods:
-                significant = correction_methods[self.correction](
-                    np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
-                )  # noqa: E501
+                # If only one comparison, correction is equivalent to no correction; skip for clarity
+                if len(l_pvalues) == 1:
+                    significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
+                else:
+                    significant = correction_methods[self.correction](
+                        np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
+                    )  # noqa: E501
             else:
                 # No correction - compare each p-value to alpha directly
                 significant = [p < self.alpha for p in l_pvalues]
@@ -328,9 +355,9 @@ class PowerSim:
         self,
         df: pd.DataFrame,
         metric_col: str,
-        sample_size: list[int] = None,
-        effect: list[float] = None,
-        compliance: list[float] = None,
+        sample_size: int | list[int] = None,
+        effect: float | list[float] = None,
+        compliance: float | list[float] = None,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Simulate statistical power using samples from the provided data.
@@ -341,12 +368,12 @@ class PowerSim:
             Input dataframe containing the metric data.
         metric_col : str
             Name of the column in the dataframe that contains the measurement used for testing.
-        sample_size : list
-            List of sample sizes for control and each variant group.
-        effect : list
-            List of effect sizes for each variant group.
-        compliance : list
-            List of compliance rates for each variant group.
+        sample_size : int or list
+            Sample sizes for control and variants. Provide a single int to apply equally, or a list per group.
+        effect : float or list
+            Effect sizes for each variant group. Provide a single float or list per variant.
+        compliance : float or list
+            Compliance rates for each variant group. Provide a single float or list per variant.
 
         Returns
         -------
@@ -356,10 +383,16 @@ class PowerSim:
         # Set default values for mutable arguments
         if sample_size is None:
             sample_size = [100]
+        elif isinstance(sample_size, (int, float)):
+            sample_size = [int(sample_size)]
         if effect is None:
             effect = [0.10]
+        elif isinstance(effect, (int, float)):
+            effect = [float(effect)]
         if compliance is None:
             compliance = [1.0]
+        elif isinstance(compliance, (int, float)):
+            compliance = [float(compliance)]
 
         # Verify metric column exists
         if metric_col not in df.columns:
@@ -682,12 +715,21 @@ class PowerSim:
 
         m, pvals = len(pvals), np.asarray(pvals)
         ind = np.argsort(pvals)
-        test = [p > alpha / (m + 1 - k) for k, p in enumerate(pvals[ind])]
 
-        """The minimal index k is m-np.sum(test) + 1 and the hypotheses 1, ..., k-1
-        are rejected. Hence m-np.sum(test) gives the correct number."""
+        # Holm-Bonferroni: compare p_(i) to alpha / (m - i + 1)
+        # With zero-based k, threshold is alpha / (m - k)
+        thresholds = [alpha / (m - k) for k in range(m)]
+
+        # Count how many nulls to reject (sequentially until first failure)
+        reject_count = 0
+        for k, p in enumerate(pvals[ind]):
+            if p <= thresholds[k]:
+                reject_count += 1
+            else:
+                break
+
         significant = np.zeros(np.shape(pvals), dtype="bool")
-        significant[ind[0 : m - np.sum(test)]] = True
+        significant[ind[0:reject_count]] = True
         return significant
 
     def sidak(self, pvals: np.ndarray, alpha: float = 0.05) -> np.ndarray:
@@ -855,8 +897,8 @@ class PowerSim:
     def find_sample_size(
         self,
         target_power: float | dict[tuple[int, int], float] = 0.80,
-        baseline: list[float] = None,
-        effect: list[float] = None,
+        baseline: float | list[float] = None,
+        effect: float | list[float] = None,
         compliance: list[float] = None,
         standard_deviation: list[float] = None,
         allocation_ratio: list[float] = None,
@@ -887,10 +929,11 @@ class PowerSim:
             - A single float (e.g., 0.80) to apply the same target to all comparisons
             - A dict mapping comparisons to their specific power targets
               (e.g., {(0,1): 0.90, (0,2): 0.80})
-        baseline : list
-            List baseline rates for counts or proportions, or base average for mean comparisons.
-        effect : list
-            List with effect sizes for each variant.
+        baseline : float or list
+            Baseline rate for counts or proportions, or base average for mean comparisons.
+            Can be a single float or list of floats.
+        effect : float or list
+            Effect size(s) for each variant. Can be a single float or list of floats.
         compliance : list
             List with compliance values.
         standard_deviation : list
@@ -968,8 +1011,12 @@ class PowerSim:
         # Set default values
         if baseline is None:
             baseline = [1.0]
+        elif isinstance(baseline, (int, float)):
+            baseline = [float(baseline)]
         if effect is None:
             effect = [0.10]
+        elif isinstance(effect, (int, float)):
+            effect = [float(effect)]
         if compliance is None:
             compliance = [1.0]
         if standard_deviation is None:
