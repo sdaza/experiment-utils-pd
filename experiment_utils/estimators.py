@@ -94,10 +94,10 @@ class Estimators:
         Returns:
         Dict: A dictionary containing the results of the regression, including:
             - "outcome" (str): The name of the outcome variable.
-            - "treated_units" (int): The number of treated units in the data.
-            - "control_units" (int): The number of control units in the data.
-            - "control_value" (float): The intercept of the regression model.
-            - "treatment_value" (float): The predicted value for the treatment group.
+            - "comparison_units" (int): The number of units in the comparison group.
+            - "reference_units" (int): The number of units in the reference group.
+            - "reference_value" (float): The intercept of the regression model.
+            - "comparison_value" (float): The predicted value for the comparison group.
             - "absolute_effect" (float): The coefficient of the treatment variable.
             - "relative_effect" (float): The relative effect of the treatment.
             - "standard_error" (float): The standard error of the treatment coefficient.
@@ -117,10 +117,10 @@ class Estimators:
 
         return {
             "outcome": outcome_variable,
-            "treated_units": data[self._treatment_col].sum(),
-            "control_units": data[self._treatment_col].count() - data[self._treatment_col].sum(),
-            "control_value": intercept,
-            "treatment_value": intercept + coefficient,
+            "comparison_units": data[self._treatment_col].sum(),
+            "reference_units": data[self._treatment_col].count() - data[self._treatment_col].sum(),
+            "reference_value": intercept,
+            "comparison_value": intercept + coefficient,
             "absolute_effect": coefficient,
             "relative_effect": relative_effect,
             "standard_error": standard_error,
@@ -143,10 +143,10 @@ class Estimators:
         Returns:
         Dict: A dictionary containing the results of the regression, including:
             - "outcome" (str): The name of the outcome variable.
-            - "treated_units" (int): The number of treated units in the data.
-            - "control_units" (int): The number of control units in the data.
-            - "control_value" (float): The intercept of the regression model.
-            - "treatment_value" (float): The predicted value for the treatment group.
+            - "comparison_units" (int): The number of units in the comparison group.
+            - "reference_units" (int): The number of units in the reference group.
+            - "reference_value" (float): The intercept of the regression model.
+            - "comparison_value" (float): The predicted value for the comparison group.
             - "absolute_effect" (float): The coefficient of the treatment variable.
             - "relative_effect" (float): The relative effect of the treatment.
             - "standard_error" (float): The standard error of the treatment coefficient.
@@ -169,10 +169,10 @@ class Estimators:
 
         return {
             "outcome": outcome_variable,
-            "treated_units": data[self._treatment_col].sum().astype(int),
-            "control_units": (data[self._treatment_col].count() - data[self._treatment_col].sum()).astype(int),
-            "control_value": intercept,
-            "treatment_value": intercept + coefficient,
+            "comparison_units": data[self._treatment_col].sum().astype(int),
+            "reference_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "reference_value": intercept,
+            "comparison_value": intercept + coefficient,
             "absolute_effect": coefficient,
             "relative_effect": relative_effect,
             "standard_error": standard_error,
@@ -194,10 +194,10 @@ class Estimators:
         Returns:
         Dict: A dictionary containing the results of the regression, including:
             - "outcome" (str): The name of the outcome variable.
-            - "treated_units" (int): The number of treated units in the data.
-            - "control_units" (int): The number of control units in the data.
-            - "control_value" (float): The intercept of the regression model.
-            - "treatment_value" (float): The predicted value for the treatment group.
+            - "comparison_units" (int): The number of units in the comparison group.
+            - "reference_units" (int): The number of units in the reference group.
+            - "reference_value" (float): The intercept of the regression model.
+            - "comparison_value" (float): The predicted value for the comparison group.
             - "absolute_effect" (float): The coefficient of the treatment variable.
             - "relative_effect" (float): The relative effect of the treatment.
             - "standard_error" (float): The standard error of the treatment coefficient.
@@ -219,10 +219,10 @@ class Estimators:
 
         return {
             "outcome": outcome_variable,
-            "treated_units": data[self._treatment_col].sum().astype(int),
-            "control_units": (data[self._treatment_col].count() - data[self._treatment_col].sum()).astype(int),
-            "control_value": intercept,
-            "treatment_value": intercept + coefficient,
+            "comparison_units": data[self._treatment_col].sum().astype(int),
+            "reference_units": (data[self._treatment_col].count() - data[self._treatment_col].sum()).astype(int),
+            "reference_value": intercept,
+            "comparison_value": intercept + coefficient,
             "absolute_effect": coefficient,
             "relative_effect": relative_effect,
             "standard_error": standard_error,
