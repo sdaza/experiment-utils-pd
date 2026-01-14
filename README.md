@@ -15,7 +15,10 @@ Generic functions for experiment analysis and design:
     - [Retrieve IPW Weights](#retrieve-ipw-weights)
     - [Non-inferiority test](#non-inferiority-test)
     - [Multiple comparison adjustment](#multiple-comparison-adjustment)
+    - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
+    - [Find Sample Size](#find-sample-size)
+    - [Simulate Retrodesign](#simulate-retrodesign)
   - [Utilities](#utilities)
     - [Balanced Random Assignment](#balanced-random-assignment)
 
@@ -81,7 +84,7 @@ print(analyzer.results)
 **Parameters:**
 - `adjustment`: Choose 'balance' for covariate balancing (using balance_method), 'IV' for instrumental variable adjustment, or None for unadjusted analysis.
 - `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
-- `target_effect`: Specifies the estimand: 'ATT', 'ATE', or 'ATC'.
+- `target_effect`: Specifies the estimand 'ATT', 'ATE', or 'ATC'.
 - `bootstrap`: Enable bootstrap inference for p-values and confidence intervals (default: False for asymptotic inference).
 - `bootstrap_iterations`: Number of bootstrap resampling iterations (default: 1000).
 - `bootstrap_ci_method`: Method for computing bootstrap CIs: 'percentile' or 'basic' (default: 'percentile').
@@ -120,8 +123,24 @@ analyzer.adjust_pvalues(method="fdr_bh")
 print(analyzer.results[["outcome1", "pvalue", "pvalue_adj", "stat_significance_adj"]])
 ```
 
-## Power Analysis
+### Retrodesign Analysis
 
+Calculate Type S and Type M errors to assess reliability of significant results:
+```python
+# Calculate retrodesign metrics assuming true effect is 0.02
+retro = analyzer.calculate_retrodesign(true_effect=0.02)
+print(retro[["outcome", "power", "type_s_error", "type_m_error"]])
+
+# Specify different true effects per comparison
+retro = analyzer.calculate_retrodesign(
+    true_effect={
+        ('treatment_a', 'control'): 0.02,
+        ('treatment_b', 'control'): 0.05
+    }
+)
+```
+
+## Power Analysis
 
 ```python
 from experiment_utils import PowerSim
@@ -129,6 +148,32 @@ p = PowerSim(metric='proportion', relative_effect=False,
   variants=1, nsim=1000, alpha=0.05, alternative='two-tailed')
 
 p.get_power(baseline=[0.33], effect=[0.03], sample_size=[3000])
+```
+
+### Find Sample Size
+
+Find the minimum sample size needed to achieve target power:
+```python
+# Find sample size for 80% power
+result = p.find_sample_size(
+    target_power=0.80,
+    baseline=[0.10],
+    effect=[0.02]
+)
+print(result[["total_sample_size", "achieved_power_by_comparison"]])
+```
+
+### Simulate Retrodesign
+
+Simulate Type S and Type M errors for study planning:
+```python
+# Simulate what happens with underpowered study
+retro = p.simulate_retrodesign(
+    true_effect=0.02,
+    sample_size=500,
+    baseline=0.10
+)
+print(retro[["power", "type_s_error", "exaggeration_ratio"]])
 ```
 
 ## Utilities

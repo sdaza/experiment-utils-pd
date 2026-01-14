@@ -66,6 +66,8 @@ class ExperimentAnalyzer:
         Whether to stratify bootstrap resampling by treatment group, by default True
     bootstrap_seed : int, optional
         Random seed for bootstrap reproducibility, by default None
+    pvalue_adjustment : str, optional
+        P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     """  # noqa: E501
 
     def __init__(
@@ -93,6 +95,8 @@ class ExperimentAnalyzer:
         bootstrap_ci_method: str = "percentile",
         bootstrap_stratify: bool = True,
         bootstrap_seed: int | None = None,
+        treatment_comparisons: list[tuple] | None = None,
+        pvalue_adjustment: str | None = "bonferroni",
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -114,6 +118,8 @@ class ExperimentAnalyzer:
         self._bootstrap_ci_method = bootstrap_ci_method
         self._bootstrap_stratify = bootstrap_stratify
         self._bootstrap_seed = bootstrap_seed
+        self._pvalue_adjustment = pvalue_adjustment
+        self._treatment_comparisons = treatment_comparisons
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -373,14 +379,14 @@ class ExperimentAnalyzer:
         The results are stored in self._results, which contains the following columns:
         - experiment: The experiment identifier.
         - outcome: The outcome variable.
-        - sample_ratio: The sample ratio of the treatment group to the control group.
+        - sample_ratio: The sample ratio of the comparison group to the reference group.
         - adjustment: The type of adjustment applied.
         - balance: The balance metric for the covariates.
-        - treated_units: The number of treated units.
-        - control_units: The number of control units.
-        - control_value: The mean value of the outcome variable in the control group.
-        - treatment_value: The mean value of the outcome variable in the treatment group.
-        - absolute_effect: The absolute effect of the treatment.
+        - comparison_units: The number of units in the comparison group.
+        - reference_units: The number of units in the reference group.
+        - reference_value: The mean value of the outcome variable in the reference group.
+        - comparison_value: The mean value of the outcome variable in the comparison group.
+        - absolute_effect: The absolute effect of the comparison vs reference.
         - relative_effect: The relative effect of the treatment.
         - stat_significance: The statistical significance of the effect.
         - standard_error: The standard error of the effect estimate.
@@ -422,61 +428,80 @@ class ExperimentAnalyzer:
 
         for experiment_tuple, temp_pd in grouped_data:
             self._logger.info("Processing: %s", experiment_tuple)
+            if self._pvalue_adjustment:
+                self._logger.info(f"P-value adjustment: {self._pvalue_adjustment}")
             final_covariates = []
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
             binary_covariates = self.__get_binary_covariates(data=temp_pd)
 
             treatvalues = set(temp_pd[self._treatment_col].unique())
-            if len(treatvalues) != 2:
-                self._logger.warning(f"Skipping {experiment_tuple} as there are no valid treatment-control groups!")
+            if len(treatvalues) < 2:
+                self._logger.warning(f"Skipping {experiment_tuple} as there are not enough treatment groups!")
                 continue
-            if not (0 in treatvalues and 1 in treatvalues):
-                log_and_raise_error(
-                    self._logger, f"The treatment column {self._treatment_col} must contain only 0 and 1"
-                )  # noqa: E501
+            
+            # Get comparison pairs (handles both binary and categorical treatments)
+            comparison_pairs = self.__get_comparison_pairs(treatvalues, temp_pd)
+            if not comparison_pairs:
+                self._logger.warning(f"Skipping {experiment_tuple} as no valid comparison pairs were found!")
+                continue
+            
+            # Loop over comparison pairs for categorical treatments
+            for treatment_val, control_val in comparison_pairs:
+                self._logger.info(f"Processing comparison: {treatment_val} vs {control_val}")
+                
+                # Filter data to only include the treatment and control groups for this comparison
+                comparison_data = temp_pd[temp_pd[self._treatment_col].isin([treatment_val, control_val])].copy()
+                
+                if comparison_data.empty:
+                    self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
+                    continue
+                
+                # Create binary treatment indicator (1 for treatment_val, 0 for control_val)
+                comparison_data[self._treatment_col] = (comparison_data[self._treatment_col] == treatment_val).astype(int)
+                
+                # Calculate sample ratio for this comparison
+                sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(comparison_data)
 
-            sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(temp_pd)
-
-            temp_pd = self.impute_missing_values(
-                data=temp_pd.copy(),
-                num_covariates=numeric_covariates,
-                bin_covariates=binary_covariates,
-            )
-
-            # remove constant or low frequency covariates
-            numeric_covariates = [c for c in numeric_covariates if temp_pd[c].std(ddof=0) != 0]
-            binary_covariates = [c for c in binary_covariates if temp_pd[c].sum() >= min_binary_count]
-            binary_covariates = [c for c in binary_covariates if temp_pd[c].std(ddof=0) != 0]
-
-            final_covariates = numeric_covariates + binary_covariates
-            self._final_covariates = final_covariates
-            if len(self._covariates) > len(self._final_covariates):
-                self._logger.warning(
-                    f"Some covariates were removed due to low variance or frequency in {experiment_tuple}!"
+                comparison_data = self.impute_missing_values(
+                    data=comparison_data.copy(),
+                    num_covariates=numeric_covariates,
+                    bin_covariates=binary_covariates,
                 )
 
-            if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
-                self._logger.warning(f"No valid covariates for {experiment_tuple}, balance can't be assessed!")
+                # remove constant or low frequency covariates for this comparison
+                comp_numeric_covariates = [c for c in numeric_covariates if comparison_data[c].std(ddof=0) != 0]
+                comp_binary_covariates = [c for c in binary_covariates if comparison_data[c].sum() >= min_binary_count]
+                comp_binary_covariates = [c for c in comp_binary_covariates if comparison_data[c].std(ddof=0) != 0]
 
-            balance = pd.DataFrame()
-            adjusted_balance = pd.DataFrame()
+                final_covariates = comp_numeric_covariates + comp_binary_covariates
+                self._final_covariates = final_covariates
+                if len(self._covariates) > len(self._final_covariates):
+                    self._logger.warning(
+                        f"Some covariates were removed due to low variance or frequency for comparison {treatment_val} vs {control_val}!"
+                    )
 
-            if len(final_covariates) > 0:
-                temp_pd["weights"] = 1
-                temp_pd = self.standardize_covariates(temp_pd, final_covariates)
-                balance = self.calculate_smd(data=temp_pd, covariates=final_covariates)
-                balance["experiment"] = [experiment_tuple] * balance.shape[0]
-                balance = self.__transform_tuple_column(balance, "experiment", self._experiment_identifier)
-                self._balance.append(balance)
-                balance_mean = balance["balance_flag"].mean() if not balance.empty else np.nan
-                self._logger.info("::::: Balance: %.2f", np.round(balance_mean, 2))
+                if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
+                    self._logger.warning(f"No valid covariates for comparison {treatment_val} vs {control_val}, balance can't be assessed!")
 
-                if adjustment == "balance":
+                balance = pd.DataFrame()
+                adjusted_balance = pd.DataFrame()
+
+                if len(final_covariates) > 0:
+                    comparison_data["weights"] = 1
+                    comparison_data = self.standardize_covariates(comparison_data, final_covariates)
+                    balance = self.calculate_smd(data=comparison_data, covariates=final_covariates)
+                    balance["experiment"] = [experiment_tuple] * balance.shape[0]
+                    balance = self.__transform_tuple_column(balance, "experiment", self._experiment_identifier)
+                    self._balance.append(balance)
+                    balance_mean = balance["balance_flag"].mean() if not balance.empty else np.nan
+                    self._logger.info("::::: Balance: %.2f", np.round(balance_mean, 2))
+
+                if len(final_covariates) > 0 and adjustment == "balance":
                     balance_func = get_balance_method(self._balance_method)
-                    temp_pd = balance_func(data=temp_pd, covariates=[f"z_{cov}" for cov in final_covariates])
+                    comparison_data = balance_func(data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates])
 
                     adjusted_balance = self.calculate_smd(
-                        data=temp_pd,
+                        data=comparison_data,
                         covariates=final_covariates,
                         weights_col=self._target_weights[self._target_effect],
                     )
@@ -489,9 +514,9 @@ class ExperimentAnalyzer:
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
                     self._logger.info("::::: Adjusted balance: %.2f", np.round(adj_balance_mean, 2))
                     if self._assess_overlap:
-                        if "propensity_score" in temp_pd.columns:
-                            treatment_scores = temp_pd.loc[temp_pd[self._treatment_col] == 1, "propensity_score"]
-                            control_scores = temp_pd.loc[temp_pd[self._treatment_col] == 0, "propensity_score"]
+                        if "propensity_score" in comparison_data.columns:
+                            treatment_scores = comparison_data.loc[comparison_data[self._treatment_col] == 1, "propensity_score"]
+                            control_scores = comparison_data.loc[comparison_data[self._treatment_col] == 0, "propensity_score"]
                             if not treatment_scores.empty and not control_scores.empty:
                                 overlap = self.get_overlap_coefficient(treatment_scores.values, control_scores.values)
                                 self._logger.info("::::: Overlap: %.2f", np.round(overlap, 2))
@@ -502,9 +527,9 @@ class ExperimentAnalyzer:
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap assessment.")
                     if self._overlap_plot:
-                        if "propensity_score" in temp_pd.columns:
+                        if "propensity_score" in comparison_data.columns:
                             self._plot_common_support(
-                                temp_pd,
+                                comparison_data,
                                 treatment_col=self._treatment_col,
                                 propensity_col="propensity_score",
                                 experiment_id=experiment_tuple,
@@ -513,173 +538,180 @@ class ExperimentAnalyzer:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
 
                 # Save weights for this experiment when balance adjustment is used
-                if adjustment == "balance":
+                if len(final_covariates) > 0 and adjustment == "balance":
                     weight_col = self._target_weights[self._target_effect]
-                    if weight_col in temp_pd.columns:
+                    if weight_col in comparison_data.columns:
                         weight_columns = [*self._experiment_identifier, weight_col]
-                        if self._unit_identifier and self._unit_identifier in temp_pd.columns:
+                        if self._unit_identifier and self._unit_identifier in comparison_data.columns:
                             weight_columns.insert(-1, self._unit_identifier)
-                        weights_df = temp_pd[weight_columns].copy()
+                        weights_df = comparison_data[weight_columns].copy()
+                        weights_df['comparison_group'] = treatment_val
+                        weights_df['reference_group'] = control_val
                         weights_list.append(weights_df)
 
-                if adjustment == "IV":
+                if len(final_covariates) > 0 and adjustment == "IV":
                     if self._instrument_col is None:
                         log_and_raise_error(self._logger, "Instrument column is required for IV estimation!")
                     iv_balance = self.calculate_smd(
-                        data=temp_pd, treatment_col=self._instrument_col, covariates=final_covariates
+                        data=comparison_data, treatment_col=self._instrument_col, covariates=final_covariates
                     )
                     iv_balance_mean = iv_balance["balance_flag"].mean() if not iv_balance.empty else np.nan
                     self._logger.info("::::: IV Balance: %.2f", np.round(iv_balance_mean, 2))
 
-            # create adjustment label
-            relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
+                # create adjustment label
+                relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
-            adjustment_labels = {"balance": "balance", "IV": "IV"}
+                adjustment_labels = {"balance": "balance", "IV": "IV"}
 
-            if adjustment in adjustment_labels and len(relevant_covariates) > 0:
-                adjustment_label = adjustment_labels[adjustment] + "+regression"
-            elif adjustment in adjustment_labels:
-                adjustment_label = adjustment_labels[adjustment]
-            elif len(relevant_covariates) > 0:
-                adjustment_label = "regression"
-            else:
-                adjustment_label = "no adjustment"
+                if adjustment in adjustment_labels and len(relevant_covariates) > 0:
+                    adjustment_label = adjustment_labels[adjustment] + "+regression"
+                elif adjustment in adjustment_labels:
+                    adjustment_label = adjustment_labels[adjustment]
+                elif len(relevant_covariates) > 0:
+                    adjustment_label = "regression"
+                else:
+                    adjustment_label = "no adjustment"
 
-            for outcome in self._outcomes:
-                # Ensure outcome column is numeric
-                if not pd.api.types.is_numeric_dtype(temp_pd[outcome]):
-                    self._logger.warning(
-                        f"Outcome '{outcome}' is not numeric for experiment {experiment_tuple}. Skipping."
-                    )  # noqa: E501
-                    continue
-                # Ensure outcome has variance
-                if temp_pd[outcome].var() == 0:
-                    self._logger.warning(
-                        f"Outcome '{outcome}' has zero variance for experiment {experiment_tuple}. Skipping."
-                    )  # noqa: E501
-                    continue
+                for outcome in self._outcomes:
+                    # Ensure outcome column is numeric
+                    if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
+                        self._logger.warning(
+                            f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. Skipping."
+                        )  # noqa: E501
+                        continue
+                    # Ensure outcome has variance
+                    if comparison_data[outcome].var() == 0:
+                        self._logger.warning(
+                            f"Outcome '{outcome}' has zero variance for comparison {treatment_val} vs {control_val}. Skipping."
+                        )  # noqa: E501
+                        continue
 
-                try:
-                    if adjustment == "balance":
-                        # Use correct target_effect for weight column
-                        weight_col = self._target_weights[self._target_effect]
-                        if weight_col not in temp_pd.columns:
-                            log_and_raise_error(
-                                self._logger,
-                                f"Weight column '{weight_col}' not found after balance calculation.",
+                    try:
+                        if adjustment == "balance":
+                            # Use correct target_effect for weight column
+                            weight_col = self._target_weights[self._target_effect]
+                            if weight_col not in comparison_data.columns:
+                                log_and_raise_error(
+                                    self._logger,
+                                    f"Weight column '{weight_col}' not found after balance calculation.",
+                                )
+                            if comparison_data[weight_col].var() == 0:
+                                self._logger.warning(
+                                    f"Weight column '{weight_col}' has zero variance for comparison {treatment_val} vs {control_val}. Results might be unreliable."  # noqa: E501
+                                )
+                            output = model[adjustment](
+                                data=comparison_data,
+                                outcome_variable=outcome,
+                                covariates=list(relevant_covariates),
+                                weight_column=weight_col,
                             )
-                        if temp_pd[weight_col].var() == 0:
-                            self._logger.warning(
-                                f"Weight column '{weight_col}' has zero variance for experiment {experiment_tuple}. Results might be unreliable."  # noqa: E501
-                            )
-                        output = model[adjustment](
-                            data=temp_pd,
-                            outcome_variable=outcome,
-                            covariates=list(relevant_covariates),
-                            weight_column=weight_col,
-                        )
-                    else:
-                        output = model[adjustment](
-                            data=temp_pd, outcome_variable=outcome, covariates=list(relevant_covariates)
-                        )
-
-                    # Bootstrap inference if requested
-                    if self._bootstrap:
-                        self._logger.info(
-                            f"Running bootstrap for outcome '{outcome}' with {self._bootstrap_iterations} iterations..."
-                        )
-                        bootstrap_effects = self.__bootstrap_single_effect(
-                            data=temp_pd,
-                            outcome=outcome,
-                            adjustment=adjustment,
-                            model_func=model[adjustment],
-                            relevant_covariates=list(relevant_covariates),
-                            numeric_covariates=numeric_covariates,
-                            binary_covariates=binary_covariates,
-                            min_binary_count=min_binary_count,
-                        )
-                        bootstrap_results = self.__calculate_bootstrap_inference(
-                            bootstrap_effects, output["absolute_effect"]
-                        )
-                        # Replace asymptotic inference with bootstrap inference
-                        output["standard_error"] = bootstrap_results["standard_error"]
-                        output["pvalue"] = bootstrap_results["pvalue"]
-                        output["abs_effect_lower"] = bootstrap_results["abs_effect_lower"]
-                        output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
-                        output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
-                    else:
-                        # For asymptotic, add CI columns for consistency
-                        output["abs_effect_lower"] = output.get("abs_effect_lower", np.nan)
-                        output["abs_effect_upper"] = output.get("abs_effect_upper", np.nan)
-
-                    # Add inference_method after all inference columns for consistent ordering
-                    output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
-                    output["adjustment"] = adjustment_label
-                    if adjustment == "balance":
-                        output["method"] = self._balance_method
-                    if adjustment == "balance" and not adjusted_balance.empty:
-                        output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
-                    elif not balance.empty:  # Use initial balance if no adjustment or balance failed
-                        output["balance"] = np.round(balance["balance_flag"].mean(), 2)
-                    else:
-                        output["balance"] = np.nan  # No balance calculated
-
-                    # Compute ESS for treatment and control if balance adjustment
-                    if adjustment == "balance":
-                        weight_col = self._target_weights[self._target_effect]
-                        if weight_col in temp_pd.columns:
-                            treat_mask = temp_pd[self._treatment_col] == 1
-                            control_mask = temp_pd[self._treatment_col] == 0
-                            treat_weights = temp_pd.loc[treat_mask, weight_col]
-                            control_weights = temp_pd.loc[control_mask, weight_col]
-                            ess_treat = self.compute_ess(weights=treat_weights)
-                            ess_control = self.compute_ess(weights=control_weights)
-                            n_treat = treat_mask.sum()
-                            n_control = control_mask.sum()
-                            output["ess_treatment"] = np.floor(ess_treat)
-                            output["ess_control"] = np.floor(ess_control)
-                            output["ess_treatment_reduction"] = (
-                                np.round(1 - (ess_treat / n_treat), 3) if n_treat > 0 else np.nan
-                            )  # noqa: E501
-                            output["ess_control_reduction"] = (
-                                np.round(1 - (ess_control / n_control), 3) if n_control > 0 else np.nan
-                            )  # noqa: E501
                         else:
-                            output["ess_treatment"] = np.nan
-                            output["ess_control"] = np.nan
-                            output["ess_treatment_reduction"] = np.nan
-                            output["ess_control_reduction"] = np.nan
+                            output = model[adjustment](
+                                data=comparison_data, outcome_variable=outcome, covariates=list(relevant_covariates)
+                            )
 
-                    output["experiment"] = experiment_tuple
-                    output["sample_ratio"] = sample_ratio
-                    output["srm_detected"] = srm_detected
-                    output["srm_pvalue"] = srm_pvalue
-                    temp_results.append(output)
+                        # Bootstrap inference if requested
+                        if self._bootstrap:
+                            self._logger.info(
+                                f"Running bootstrap for outcome '{outcome}' with {self._bootstrap_iterations} iterations..."
+                            )
+                            bootstrap_effects = self.__bootstrap_single_effect(
+                                data=comparison_data,
+                                outcome=outcome,
+                                adjustment=adjustment,
+                                model_func=model[adjustment],
+                                relevant_covariates=list(relevant_covariates),
+                                numeric_covariates=comp_numeric_covariates,
+                                binary_covariates=comp_binary_covariates,
+                                min_binary_count=min_binary_count,
+                            )
+                            bootstrap_results = self.__calculate_bootstrap_inference(
+                                bootstrap_effects, output["absolute_effect"]
+                            )
+                            # Replace asymptotic inference with bootstrap inference
+                            output["standard_error"] = bootstrap_results["standard_error"]
+                            output["pvalue"] = bootstrap_results["pvalue"]
+                            output["abs_effect_lower"] = bootstrap_results["abs_effect_lower"]
+                            output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
+                            output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
+                        else:
+                            # For asymptotic, add CI columns for consistency
+                            output["abs_effect_lower"] = output.get("abs_effect_lower", np.nan)
+                            output["abs_effect_upper"] = output.get("abs_effect_upper", np.nan)
 
-                except Exception as e:
-                    self._logger.error(
-                        f"Error processing outcome '{outcome}' for experiment {experiment_tuple} with adjustment '{adjustment_label}': {e}"  # noqa: E501
-                    )  # noqa: E501
-                    # Optionally append a row with NaNs or skip
-                    error_output = {
-                        "outcome": outcome,
-                        "adjustment": adjustment_label,
-                        "treated_units": np.nan,
-                        "control_units": np.nan,
-                        "control_value": np.nan,
-                        "treatment_value": np.nan,
-                        "absolute_effect": np.nan,
-                        "relative_effect": np.nan,
-                        "stat_significance": np.nan,
-                        "standard_error": np.nan,
-                        "pvalue": np.nan,
-                        "balance": output.get("balance", np.nan),
-                        "experiment": experiment_tuple,
-                        "sample_ratio": sample_ratio,
-                        "srm_detected": srm_detected,
-                        "srm_pvalue": srm_pvalue,
-                    }
-                    temp_results.append(error_output)
+                        # Add inference_method after all inference columns for consistent ordering
+                        output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
+                        output["adjustment"] = adjustment_label
+                        if adjustment == "balance":
+                            output["method"] = self._balance_method
+                        if adjustment == "balance" and not adjusted_balance.empty:
+                            output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
+                        elif not balance.empty:  # Use initial balance if no adjustment or balance failed
+                            output["balance"] = np.round(balance["balance_flag"].mean(), 2)
+                        else:
+                            output["balance"] = np.nan  # No balance calculated
+
+                        # Compute ESS for treatment and control if balance adjustment
+                        if adjustment == "balance":
+                            weight_col = self._target_weights[self._target_effect]
+                            if weight_col in comparison_data.columns:
+                                treat_mask = comparison_data[self._treatment_col] == 1
+                                control_mask = comparison_data[self._treatment_col] == 0
+                                treat_weights = comparison_data.loc[treat_mask, weight_col]
+                                control_weights = comparison_data.loc[control_mask, weight_col]
+                                ess_treat = self.compute_ess(weights=treat_weights)
+                                ess_control = self.compute_ess(weights=control_weights)
+                                n_treat = treat_mask.sum()
+                                n_control = control_mask.sum()
+                                output["ess_treatment"] = np.floor(ess_treat)
+                                output["ess_control"] = np.floor(ess_control)
+                                output["ess_treatment_reduction"] = (
+                                    np.round(1 - (ess_treat / n_treat), 3) if n_treat > 0 else np.nan
+                                )  # noqa: E501
+                                output["ess_control_reduction"] = (
+                                    np.round(1 - (ess_control / n_control), 3) if n_control > 0 else np.nan
+                                )  # noqa: E501
+                            else:
+                                output["ess_treatment"] = np.nan
+                                output["ess_control"] = np.nan
+                                output["ess_treatment_reduction"] = np.nan
+                                output["ess_control_reduction"] = np.nan
+
+                        # Add treatment and control group identifiers
+                        output["comparison_group"] = treatment_val
+                        output["reference_group"] = control_val
+                        output["experiment"] = experiment_tuple
+                        output["sample_ratio"] = sample_ratio
+                        output["srm_detected"] = srm_detected
+                        output["srm_pvalue"] = srm_pvalue
+                        temp_results.append(output)
+
+                    except Exception as e:
+                        self._logger.error(
+                            f"Error processing outcome '{outcome}' for comparison {treatment_val} vs {control_val} with adjustment '{adjustment_label}': {e}"  # noqa: E501
+                        )  # noqa: E501
+                        # Optionally append a row with NaNs or skip
+                        error_output = {
+                            "outcome": outcome,
+                            "adjustment": adjustment_label,
+                            "comparison_group": treatment_val,
+                            "reference_group": control_val,
+                            "comparison_units": np.nan,
+                            "reference_units": np.nan,
+                            "reference_value": np.nan,
+                            "comparison_value": np.nan,
+                            "absolute_effect": np.nan,
+                            "relative_effect": np.nan,
+                            "stat_significance": np.nan,
+                            "standard_error": np.nan,
+                            "pvalue": np.nan,
+                            "balance": output.get("balance", np.nan),
+                            "experiment": experiment_tuple,
+                            "sample_ratio": sample_ratio,
+                            "srm_detected": srm_detected,
+                            "srm_pvalue": srm_pvalue,
+                        }
+                        temp_results.append(error_output)
 
         if not temp_results:
             self._logger.warning("No results were generated. Check input data and experiment configurations.")
@@ -698,13 +730,15 @@ class ExperimentAnalyzer:
         result_columns = [
             "experiment",
             "outcome",
+            "comparison_group",
+            "reference_group",
             "sample_ratio",
             "adjustment",
             "inference_method",
-            "treated_units",
-            "control_units",
-            "control_value",
-            "treatment_value",
+            "comparison_units",
+            "reference_units",
+            "reference_value",
+            "comparison_value",
             "absolute_effect",
             "relative_effect",
             "standard_error",
@@ -774,8 +808,13 @@ class ExperimentAnalyzer:
                     )
 
         self._results = results_df
-
-        # Restore original bootstrap setting if it was overridden
+        
+        # Apply p-value adjustment if specified
+        if self._pvalue_adjustment:
+            self._logger.info(f"Applying {self._pvalue_adjustment} p-value adjustment")
+            self.adjust_pvalues(method=self._pvalue_adjustment)
+        
+        # Restore bootstrap setting if it was temporarily overridden
         if original_bootstrap is not None:
             self._bootstrap = original_bootstrap
 
@@ -908,8 +947,8 @@ class ExperimentAnalyzer:
 
         meta_results = {
             "experiments": int(data.shape[0]),
-            "control_units": int(data["control_units"].sum()),
-            "treated_units": int(data["treated_units"].sum()),
+            "reference_units": int(data["reference_units"].sum()),
+            "comparison_units": int(data["comparison_units"].sum()),
             "absolute_effect": absolute_estimate,
             "relative_effect": relative_estimate,
             "standard_error": pooled_standard_error,
@@ -963,7 +1002,7 @@ class ExperimentAnalyzer:
         return aggregate_results[final_columns]
 
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
-        group["gweight"] = group["treated_units"].astype(int)
+        group["gweight"] = group["comparison_units"].astype(int)
         absolute_effect = np.sum(group["absolute_effect"] * group["gweight"]) / np.sum(group["gweight"])
         relative_effect = np.sum(group["relative_effect"] * group["gweight"]) / np.sum(group["gweight"])
         variance = (group["standard_error"] ** 2) * group["gweight"]
@@ -976,7 +1015,7 @@ class ExperimentAnalyzer:
         output = pd.Series(
             {
                 "experiments": int(group.shape[0]),
-                "treated_units": int(np.sum(group["gweight"])),
+                "comparison_units": int(np.sum(group["gweight"])),
                 "absolute_effect": absolute_effect,
                 "relative_effect": relative_effect,
                 "stat_significance": 1 if combined_p_value < self._alpha else 0,
@@ -1338,6 +1377,48 @@ class ExperimentAnalyzer:
         else:
             log_and_raise_error(self._logger, f"Attribute {attribute} not found!")
 
+    def __get_comparison_pairs(self, treatvalues: set, data: pd.DataFrame) -> list[tuple]:
+        """
+        Generate comparison pairs for categorical treatment analysis.
+        
+        Parameters
+        ----------
+        treatvalues : set
+            Set of unique treatment values in the data
+        data : pd.DataFrame
+            DataFrame containing the treatment column
+            
+        Returns
+        -------
+        list[tuple]
+            List of (treatment_val, control_val) tuples to compare
+        """
+        import itertools
+        
+        # If user provided specific comparisons, use those
+        if self._treatment_comparisons is not None:
+            valid_pairs = []
+            for treatment_val, control_val in self._treatment_comparisons:
+                if treatment_val in treatvalues and control_val in treatvalues:
+                    valid_pairs.append((treatment_val, control_val))
+                else:
+                    self._logger.warning(
+                        f"Skipping comparison ({treatment_val}, {control_val}) - "
+                        f"one or both groups not found in data"
+                    )
+            return valid_pairs
+        
+        # For binary 0/1 treatment, return single comparison
+        if treatvalues == {0, 1}:
+            return [(1, 0)]
+        
+        # For categorical treatments, generate all pairwise comparisons
+        # Sort to ensure consistent ordering
+        sorted_values = sorted(list(treatvalues))
+        pairs = list(itertools.combinations(sorted_values, 2))
+        # Return as (higher, lower) for each pair
+        return [(b, a) for a, b in pairs]
+
     def __check_sample_ratio_mismatch(self, df: pd.DataFrame):
         """
         Performs a Sample Ratio Mismatch (SRM) test to check if the observed
@@ -1504,3 +1585,219 @@ class ExperimentAnalyzer:
         df_adj = df_adj.join(adjustments)
         df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
         self._results = df_final
+
+    def calculate_retrodesign(
+        self,
+        true_effect: float | dict | None = None,
+        alpha: float | None = None,
+        outcomes: list[str] | None = None,
+        experiments: list | None = None,
+    ) -> pd.DataFrame:
+        """
+        Calculate retrodesign metrics (Gelman & Carlin) for existing results.
+        
+        Retrodesign analysis calculates:
+        - Power: probability of achieving statistical significance given true effect
+        - Type S error: probability of getting the wrong sign (sign error rate)
+        - Type M error: expected exaggeration ratio (magnitude error)
+        
+        The exaggeration ratio tells you how much the effect size is expected to be
+        overestimated when you get a statistically significant result from an
+        underpowered study.
+        
+        Parameters
+        ----------
+        true_effect : float, dict, or None
+            The hypothesized true effect size. Can be:
+            - A single float to apply to all results
+            - A dict mapping outcome names to their true effects:
+              {'outcome1': 0.02, 'outcome2': 0.03}
+            - A dict mapping (comparison_group, reference_group) tuples to true effects:
+              {('treatment_a', 'control'): 0.02, ('treatment_b', 'control'): 0.05}
+            - A dict mapping (outcome, comparison_group, reference_group) tuples:
+              {('outcome1', 'treatment_a', 'control'): 0.02, 
+               ('outcome1', 'treatment_b', 'control'): 0.03}
+            - None to use the observed effect as the assumed true effect (conservative)
+        alpha : float, optional
+            Significance level. If None, uses self._alpha
+        outcomes : list of str, optional
+            Filter to specific outcomes. If None, uses all outcomes
+        experiments : list, optional
+            Filter to specific experiments. If None, uses all experiments
+            
+        Returns
+        -------
+        pd.DataFrame
+            Original results with added columns:
+            - true_effect: The assumed true effect size
+            - power: Probability of significance given true effect
+            - type_s_error: Probability of wrong sign
+            - type_m_error: Expected exaggeration ratio (only for significant results)
+            
+        Examples
+        --------
+        >>> analyzer.get_effects()
+        >>> # Use observed effects as true effects (conservative)
+        >>> retro = analyzer.calculate_retrodesign()
+        >>> # Single true effect for all
+        >>> retro = analyzer.calculate_retrodesign(true_effect=0.05)
+        >>> # Different true effects per outcome
+        >>> retro = analyzer.calculate_retrodesign(
+        ...     true_effect={'outcome1': 0.05, 'outcome2': 0.03}
+        ... )
+        >>> # Different true effects per comparison
+        >>> retro = analyzer.calculate_retrodesign(
+        ...     true_effect={
+        ...         ('treatment_a', 'control'): 0.02,
+        ...         ('treatment_b', 'control'): 0.05,
+        ...         ('treatment_b', 'treatment_a'): 0.03
+        ...     }
+        ... )
+        >>> # Different true effects per outcome AND comparison
+        >>> retro = analyzer.calculate_retrodesign(
+        ...     true_effect={
+        ...         ('outcome1', 'treatment_a', 'control'): 0.02,
+        ...         ('outcome1', 'treatment_b', 'control'): 0.05,
+        ...         ('outcome2', 'treatment_a', 'control'): 0.01,
+        ...     }
+        ... )
+        """
+        if self._results is None:
+            log_and_raise_error(self._logger, "Run get_effects() first.")
+        
+        df = self._results.copy()
+        alpha_val = alpha if alpha is not None else self._alpha
+        
+        # Filter by outcomes and experiments if specified
+        mask = pd.Series([True] * len(df))
+        if outcomes is not None:
+            mask &= df["outcome"].isin(outcomes)
+        if experiments is not None:
+            group_cols = self._experiment_identifier or ["experiment"]
+            for col, vals in zip(group_cols, zip(*experiments, strict=False), strict=False):
+                mask &= df[col].isin(vals)
+        
+        df_filtered = df[mask].copy()
+        
+        # Determine true effect for each row
+        if true_effect is None:
+            # Use observed effect as assumed true effect (conservative)
+            df_filtered["true_effect"] = df_filtered["absolute_effect"]
+        elif isinstance(true_effect, dict):
+            # Check if dict keys are tuples to determine mapping type
+            sample_key = next(iter(true_effect.keys()))
+            
+            if isinstance(sample_key, tuple):
+                # Tuple-based mapping
+                if len(sample_key) == 2:
+                    # (comparison_group, reference_group) mapping
+                    df_filtered["true_effect"] = df_filtered.apply(
+                        lambda row: true_effect.get(
+                            (row["comparison_group"], row["reference_group"]),
+                            row["absolute_effect"]  # fallback to observed
+                        ),
+                        axis=1
+                    )
+                elif len(sample_key) == 3:
+                    # (outcome, comparison_group, reference_group) mapping
+                    df_filtered["true_effect"] = df_filtered.apply(
+                        lambda row: true_effect.get(
+                            (row["outcome"], row["comparison_group"], row["reference_group"]),
+                            row["absolute_effect"]  # fallback to observed
+                        ),
+                        axis=1
+                    )
+                else:
+                    log_and_raise_error(
+                        self._logger,
+                        f"Dict keys must be tuples of length 2 (comparison_group, reference_group) "
+                        f"or 3 (outcome, comparison_group, reference_group), got length {len(sample_key)}"
+                    )
+            else:
+                # String-based mapping (outcome names)
+                df_filtered["true_effect"] = df_filtered["outcome"].map(true_effect)
+                # Fill any unmapped with observed effect
+                df_filtered.loc[:, "true_effect"] = df_filtered["true_effect"].fillna(df_filtered["absolute_effect"])
+        else:
+            # Single value for all
+            df_filtered["true_effect"] = true_effect
+        
+        # Calculate retrodesign metrics
+        z_crit = stats.norm.ppf(1 - alpha_val / 2)  # Two-tailed critical value
+        
+        # Calculate for each row
+        results = []
+        for idx, row in df_filtered.iterrows():
+            te = row["true_effect"]  # true effect
+            se = row["standard_error"]
+            
+            if pd.isna(te) or pd.isna(se) or se <= 0:
+                # Can't calculate retrodesign
+                power = np.nan
+                type_s = np.nan
+                type_m = np.nan
+            else:
+                # Power: P(|Z| > z_crit | true effect)
+                # Z ~ N(true_effect/se, 1)
+                noncentrality = te / se
+                power = 1 - (stats.norm.cdf(z_crit - noncentrality) - 
+                            stats.norm.cdf(-z_crit - noncentrality))
+                
+                # Type S error: P(sign error | significant)
+                # This is the probability of getting opposite sign when significant
+                if te == 0:
+                    type_s = 0.5  # Equally likely to be positive or negative
+                else:
+                    # P(Z < -z_crit | true effect) / P(|Z| > z_crit | true effect)
+                    prob_wrong_sign = stats.norm.cdf(-z_crit - noncentrality)
+                    type_s = prob_wrong_sign / power if power > 0 else np.nan
+                
+                # Type M error: E[|estimate| / |true_effect| | significant]
+                # Expected exaggeration ratio
+                if te == 0:
+                    type_m = np.inf
+                else:
+                    # Analytical approximation using truncated normal
+                    # E[|Z| | |Z| > z_crit] where Z ~ N(noncentrality, 1)
+                    
+                    # For positive true effect
+                    # E[Z | Z > z_crit] = mu + sigma * phi(z_crit - mu) / (1 - Phi(z_crit - mu))
+                    # where phi is PDF, Phi is CDF
+                    
+                    upper_tail = 1 - stats.norm.cdf(z_crit - noncentrality)
+                    lower_tail = stats.norm.cdf(-z_crit - noncentrality)
+                    
+                    if power > 0:
+                        # Expected value in upper tail
+                        if upper_tail > 0:
+                            e_upper = noncentrality + stats.norm.pdf(z_crit - noncentrality) / upper_tail
+                        else:
+                            e_upper = 0
+                        
+                        # Expected value in lower tail (absolute value)
+                        if lower_tail > 0:
+                            e_lower = abs(noncentrality - stats.norm.pdf(z_crit + noncentrality) / lower_tail)
+                        else:
+                            e_lower = 0
+                        
+                        # Weighted average
+                        expected_z = (upper_tail * e_upper + lower_tail * e_lower) / power
+                        
+                        # Convert back to effect size and calculate ratio
+                        expected_estimate = expected_z * se
+                        type_m = abs(expected_estimate / te)
+                    else:
+                        type_m = np.nan
+            
+            results.append({
+                "true_effect": te,
+                "power": power,
+                "type_s_error": type_s,
+                "type_m_error": type_m,
+            })
+        
+        # Add new columns to filtered dataframe
+        retro_df = pd.DataFrame(results, index=df_filtered.index)
+        df_filtered = pd.concat([df_filtered, retro_df], axis=1)
+        
+        return df_filtered
