@@ -106,3 +106,23 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = false
 docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+    "papers",
+    "notebooks",
+    "testing"
+]

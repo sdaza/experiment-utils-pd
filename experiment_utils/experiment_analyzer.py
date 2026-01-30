@@ -24,7 +24,13 @@ class ExperimentAnalyzer:
     outcomes : List
         List of outcome variables
     covariates : List
-        List of covariates
+        List of covariates. Can include:
+        - Numeric columns (continuous)
+        - Binary columns (0/1)
+        - Categorical columns (object/category dtype or integers with ≤10 unique values)
+          Categorical columns are automatically converted to dummy variables.
+          Reference category (most frequent) is excluded from regression models
+          but included in balance tables.
     treatment_col : str
         Column name for the treatment variable
     experiment_identifier : List
@@ -152,11 +158,10 @@ class ExperimentAnalyzer:
         if (len(self._covariates) == 0) & (len(self._regression_covariates) > 0):
             self._covariates = self._regression_covariates
 
-        # check if any covariate is a string using pandas dtypes
-        if any(pd.api.types.is_string_dtype(self._data[c]) for c in self._covariates):
-            log_and_raise_error(
-                self._logger, "Covariates should be numeric, for categorical columns use dummy variables!"
-            )
+        # Check for categorical columns that will be automatically converted to dummies
+        string_cols = [c for c in self._covariates if pd.api.types.is_string_dtype(self._data[c])]
+        if string_cols:
+            self._logger.info(f"Detected categorical covariates (will create dummies): {string_cols}")
 
         # regression covariates has to be a subset of covariates
         if len(self._regression_covariates) > 0:
@@ -192,21 +197,126 @@ class ExperimentAnalyzer:
         # Select only required columns using pandas indexing
         self._data = self._data[required_columns]
 
-    def __get_binary_covariates(self, data: pd.DataFrame) -> list[str]:
+    def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
+        """Get binary covariates, optionally excluding categorical columns that were converted to dummies."""
         binary_covariates = []
+        if exclude_categoricals is None:
+            exclude_categoricals = set()
         if self._covariates is not None:
             for c in self._covariates:
+                if c in exclude_categoricals:
+                    continue  # Skip categorical columns that are now dummies
                 if data[c].nunique() == 2 and data[c].max() == 1:
                     binary_covariates.append(c)
         return binary_covariates
 
-    def __get_numeric_covariates(self, data: pd.DataFrame) -> list[str]:
+    def __get_numeric_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
+        """Get numeric covariates, optionally excluding categorical columns that were converted to dummies."""
         numeric_covariates = []
+        if exclude_categoricals is None:
+            exclude_categoricals = set()
         if self._covariates is not None:
             for c in self._covariates:
+                if c in exclude_categoricals:
+                    continue  # Skip categorical columns that are now dummies
                 if data[c].nunique() > 2:
                     numeric_covariates.append(c)
         return numeric_covariates
+
+    def __get_categorical_covariates(self, data: pd.DataFrame) -> dict[str, list]:
+        """
+        Detect categorical covariates and return their unique categories.
+
+        Detection rules:
+        - object/category dtype columns
+        - integer columns with 3-10 unique values (excludes binary 0/1 columns)
+
+        Returns dict: {covariate_name: [list_of_categories]}
+        """
+        categorical_info = {}
+        if self._covariates is not None:
+            for c in self._covariates:
+                # Check dtype
+                is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
+                # Only treat as categorical if more than 2 unique values (excludes binary)
+                is_low_cardinality_int = pd.api.types.is_integer_dtype(data[c]) and 3 <= data[c].nunique() <= 10
+
+                if is_object or is_low_cardinality_int:
+                    categories = sorted(data[c].dropna().unique())
+                    categorical_info[c] = categories
+
+        return categorical_info
+
+    def __create_dummy_variables(
+        self,
+        data: pd.DataFrame,
+        categorical_info: dict[str, list],
+        reference_categories: dict[str, any] | None = None,
+        include_reference: bool = False,
+    ) -> tuple[pd.DataFrame, dict[str, str], dict[str, any]]:
+        """
+        Create dummy variables for categorical covariates.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        categorical_info : dict
+            Dict of {covariate: [categories]}
+        reference_categories : dict, optional
+            Dict of {covariate: reference_category}. If not provided, uses most frequent.
+        include_reference : bool
+            If True, include reference category dummy (for balance tables)
+            If False, drop reference category (for regression models)
+
+        Returns
+        -------
+        data : pd.DataFrame
+            Data with dummy columns added
+        dummy_cols_map : dict
+            Mapping of {dummy_col_name: original_covariate}
+        reference_map : dict
+            Mapping of {covariate: reference_category_used}
+        """
+        import re
+
+        def _clean_category_name(cat):
+            """Convert category to lowercase and replace spaces/special chars with underscores"""
+            cat_str = str(cat).lower()
+            # Replace spaces and special characters with underscores
+            cat_str = re.sub(r"[^\w]+", "_", cat_str)
+            # Remove leading/trailing underscores
+            cat_str = cat_str.strip("_")
+            return cat_str
+
+        dummy_cols_map = {}
+        reference_map = {}
+
+        for covariate, categories in categorical_info.items():
+            # Determine reference category
+            if reference_categories and covariate in reference_categories:
+                ref_cat = reference_categories[covariate]
+                if ref_cat not in categories:
+                    self._logger.warning(f"Reference category {ref_cat} not found in {covariate}, using most frequent")
+                    ref_cat = data[covariate].value_counts().idxmax()
+            else:
+                # Use most frequent as reference
+                ref_cat = data[covariate].value_counts().idxmax()
+
+            reference_map[covariate] = ref_cat
+
+            # Create dummies
+            for cat in categories:
+                if not include_reference and cat == ref_cat:
+                    continue  # Skip reference for models
+
+                # Clean category name: lowercase, replace spaces/special chars with _
+                cat_clean = _clean_category_name(cat)
+                dummy_col = f"{covariate}_{cat_clean}"
+                data[dummy_col] = (data[covariate] == cat).astype(int)
+                dummy_cols_map[dummy_col] = covariate
+
+        return data, dummy_cols_map, reference_map
 
     def impute_missing_values(
         self, data: pd.DataFrame, num_covariates: list[str] | None = None, bin_covariates: list[str] | None = None
@@ -433,34 +543,59 @@ class ExperimentAnalyzer:
             if self._pvalue_adjustment:
                 self._logger.info(f"P-value adjustment: {self._pvalue_adjustment}")
             final_covariates = []
-            numeric_covariates = self.__get_numeric_covariates(data=temp_pd)
-            binary_covariates = self.__get_binary_covariates(data=temp_pd)
+
+            # Detect and create dummy variables for categoricals
+            categorical_info = self.__get_categorical_covariates(data=temp_pd)
+            dummy_map = {}
+            ref_map = {}
+            categorical_col_names = set()
+
+            if categorical_info:
+                categorical_col_names = set(categorical_info.keys())
+                # Create dummies for models (exclude reference)
+                temp_pd, dummy_map, ref_map = self.__create_dummy_variables(
+                    data=temp_pd,
+                    categorical_info=categorical_info,
+                    reference_categories=None,  # Could be parameter later
+                    include_reference=False,
+                )
+                self._logger.info(
+                    f"Created {len(dummy_map)} dummy variables from {len(categorical_info)} categorical covariates"
+                )
+                for cov, ref in ref_map.items():
+                    self._logger.info(f"  {cov}: reference category = {ref}")
+
+            # Classify covariates (now including dummies as binary, excluding original categoricals)
+            numeric_covariates = self.__get_numeric_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
+            binary_covariates = self.__get_binary_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
 
             treatvalues = set(temp_pd[self._treatment_col].unique())
             if len(treatvalues) < 2:
                 self._logger.warning(f"Skipping {experiment_tuple} as there are not enough treatment groups!")
                 continue
-            
+
             # Get comparison pairs (handles both binary and categorical treatments)
             comparison_pairs = self.__get_comparison_pairs(treatvalues, temp_pd)
             if not comparison_pairs:
                 self._logger.warning(f"Skipping {experiment_tuple} as no valid comparison pairs were found!")
                 continue
-            
+
             # Loop over comparison pairs for categorical treatments
             for treatment_val, control_val in comparison_pairs:
                 self._logger.info(f"Processing comparison: {treatment_val} vs {control_val}")
-                
+
                 # Filter data to only include the treatment and control groups for this comparison
                 comparison_data = temp_pd[temp_pd[self._treatment_col].isin([treatment_val, control_val])].copy()
-                
+
                 if comparison_data.empty:
                     self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
                     continue
-                
+
                 # Create binary treatment indicator (1 for treatment_val, 0 for control_val)
-                comparison_data[self._treatment_col] = (comparison_data[self._treatment_col] == treatment_val).astype(int)
-                
+                comparison_data[self._treatment_col] = (comparison_data[self._treatment_col] == treatment_val).astype(
+                    int
+                )
+
                 # Calculate sample ratio for this comparison
                 sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(comparison_data)
 
@@ -479,19 +614,59 @@ class ExperimentAnalyzer:
                 self._final_covariates = final_covariates
                 if len(self._covariates) > len(self._final_covariates):
                     self._logger.warning(
-                        f"Some covariates were removed due to low variance or frequency for comparison {treatment_val} vs {control_val}!"
+                        f"Some covariates were removed due to low variance or frequency for comparison "
+                        f"{treatment_val} vs {control_val}!"
                     )
 
                 if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
-                    self._logger.warning(f"No valid covariates for comparison {treatment_val} vs {control_val}, balance can't be assessed!")
+                    self._logger.warning(
+                        f"No valid covariates for comparison {treatment_val} vs {control_val}, "
+                        f"balance can't be assessed!"
+                    )
 
                 balance = pd.DataFrame()
                 adjusted_balance = pd.DataFrame()
 
                 if len(final_covariates) > 0:
                     comparison_data["weights"] = 1
-                    comparison_data = self.standardize_covariates(comparison_data, final_covariates)
-                    balance = self.calculate_smd(data=comparison_data, covariates=final_covariates)
+
+                    # For balance: add reference category dummies back in
+                    if categorical_info:
+                        comparison_data_balance = comparison_data.copy()
+                        comparison_data_balance, _, _ = self.__create_dummy_variables(
+                            data=comparison_data_balance,
+                            categorical_info=categorical_info,
+                            reference_categories=ref_map,  # Use same references as models
+                            include_reference=True,  # Include all for balance
+                        )
+
+                        # Get all dummy column names for balance (including reference categories)
+                        # Start with final_covariates that passed filtering
+                        balance_covariates = []
+
+                        # Add all dummies that would pass filtering (including reference)
+                        for cov in categorical_info.keys():
+                            for cat in categorical_info[cov]:
+                                dummy_col = f"{cov}_{cat}"
+                                # Check if this dummy passes the same filtering criteria
+                                if dummy_col in comparison_data_balance.columns:
+                                    if comparison_data_balance[dummy_col].sum() >= min_binary_count:
+                                        if comparison_data_balance[dummy_col].std(ddof=0) != 0:
+                                            balance_covariates.append(dummy_col)
+
+                        # Add non-categorical covariates that passed filtering
+                        for cov in final_covariates:
+                            if cov not in balance_covariates:
+                                balance_covariates.append(cov)
+
+                        comparison_data_balance = self.standardize_covariates(
+                            comparison_data_balance, balance_covariates
+                        )
+                        balance = self.calculate_smd(data=comparison_data_balance, covariates=balance_covariates)
+                    else:
+                        comparison_data = self.standardize_covariates(comparison_data, final_covariates)
+                        balance = self.calculate_smd(data=comparison_data, covariates=final_covariates)
+
                     balance["experiment"] = [experiment_tuple] * balance.shape[0]
                     balance = self.__transform_tuple_column(balance, "experiment", self._experiment_identifier)
                     self._balance.append(balance)
@@ -500,7 +675,9 @@ class ExperimentAnalyzer:
 
                 if len(final_covariates) > 0 and adjustment == "balance":
                     balance_func = get_balance_method(self._balance_method)
-                    comparison_data = balance_func(data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates])
+                    comparison_data = balance_func(
+                        data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates]
+                    )
 
                     adjusted_balance = self.calculate_smd(
                         data=comparison_data,
@@ -517,8 +694,12 @@ class ExperimentAnalyzer:
                     self._logger.info("::::: Adjusted balance: %.2f", np.round(adj_balance_mean, 2))
                     if self._assess_overlap:
                         if "propensity_score" in comparison_data.columns:
-                            treatment_scores = comparison_data.loc[comparison_data[self._treatment_col] == 1, "propensity_score"]
-                            control_scores = comparison_data.loc[comparison_data[self._treatment_col] == 0, "propensity_score"]
+                            treatment_scores = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 1, "propensity_score"
+                            ]
+                            control_scores = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 0, "propensity_score"
+                            ]
                             if not treatment_scores.empty and not control_scores.empty:
                                 overlap = self.get_overlap_coefficient(treatment_scores.values, control_scores.values)
                                 self._logger.info("::::: Overlap: %.2f", np.round(overlap, 2))
@@ -547,8 +728,8 @@ class ExperimentAnalyzer:
                         if self._unit_identifier and self._unit_identifier in comparison_data.columns:
                             weight_columns.insert(-1, self._unit_identifier)
                         weights_df = comparison_data[weight_columns].copy()
-                        weights_df['treatment_group'] = treatment_val
-                        weights_df['control_group'] = control_val
+                        weights_df["treatment_group"] = treatment_val
+                        weights_df["control_group"] = control_val
                         weights_list.append(weights_df)
 
                 if len(final_covariates) > 0 and adjustment == "IV":
@@ -578,14 +759,16 @@ class ExperimentAnalyzer:
                     # Ensure outcome column is numeric
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
                         self._logger.warning(
-                            f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. Skipping."
-                        )  # noqa: E501
+                            f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. "
+                            f"Skipping."
+                        )
                         continue
                     # Ensure outcome has variance
                     if comparison_data[outcome].var() == 0:
                         self._logger.warning(
-                            f"Outcome '{outcome}' has zero variance for comparison {treatment_val} vs {control_val}. Skipping."
-                        )  # noqa: E501
+                            f"Outcome '{outcome}' has zero variance for comparison {treatment_val} vs {control_val}. "
+                            f"Skipping."
+                        )
                         continue
 
                     try:
@@ -615,7 +798,8 @@ class ExperimentAnalyzer:
                         # Bootstrap inference if requested
                         if self._bootstrap:
                             self._logger.info(
-                                f"Running bootstrap for outcome '{outcome}' with {self._bootstrap_iterations} iterations..."
+                                f"Running bootstrap for outcome '{outcome}' with "
+                                f"{self._bootstrap_iterations} iterations..."
                             )
                             bootstrap_effects = self.__bootstrap_single_effect(
                                 data=comparison_data,
@@ -810,12 +994,12 @@ class ExperimentAnalyzer:
                     )
 
         self._results = results_df
-        
+
         # Apply p-value adjustment if specified
         if self._pvalue_adjustment:
             self._logger.info(f"Applying {self._pvalue_adjustment} p-value adjustment")
             self.adjust_pvalues(method=self._pvalue_adjustment)
-        
+
         # Restore bootstrap setting if it was temporarily overridden
         if original_bootstrap is not None:
             self._bootstrap = original_bootstrap
@@ -1382,21 +1566,21 @@ class ExperimentAnalyzer:
     def __get_comparison_pairs(self, treatvalues: set, data: pd.DataFrame) -> list[tuple]:
         """
         Generate comparison pairs for categorical treatment analysis.
-        
+
         Parameters
         ----------
         treatvalues : set
             Set of unique treatment values in the data
         data : pd.DataFrame
             DataFrame containing the treatment column
-            
+
         Returns
         -------
         list[tuple]
             List of (treatment_val, control_val) tuples to compare
         """
         import itertools
-        
+
         # If user provided specific comparisons, use those
         if self._treatment_comparisons is not None:
             valid_pairs = []
@@ -1405,15 +1589,14 @@ class ExperimentAnalyzer:
                     valid_pairs.append((treatment_val, control_val))
                 else:
                     self._logger.warning(
-                        f"Skipping comparison ({treatment_val}, {control_val}) - "
-                        f"one or both groups not found in data"
+                        f"Skipping comparison ({treatment_val}, {control_val}) - one or both groups not found in data"
                     )
             return valid_pairs
-        
+
         # For binary 0/1 treatment, return single comparison
         if treatvalues == {0, 1}:
             return [(1, 0)]
-        
+
         # For categorical treatments, generate all pairwise comparisons
         # Sort to ensure consistent ordering
         sorted_values = sorted(list(treatvalues))
@@ -1599,16 +1782,16 @@ class ExperimentAnalyzer:
     ) -> pd.DataFrame:
         """
         Calculate retrodesign metrics (Gelman & Carlin) for existing results.
-        
+
         Retrodesign analysis calculates:
         - Power: probability of achieving statistical significance given true effect
         - Type S error: probability of getting the wrong sign (sign error rate)
         - Type M error: expected exaggeration ratio (magnitude error)
-        
+
         The exaggeration ratio tells you how much the effect size is expected to be
         overestimated when you get a statistically significant result from an
         underpowered study.
-        
+
         Parameters
         ----------
         true_effect : float, dict, or None
@@ -1619,7 +1802,7 @@ class ExperimentAnalyzer:
             - A dict mapping (treatment_group, control_group) tuples to true effects:
               {('treatment_a', 'control'): 0.02, ('treatment_b', 'control'): 0.05}
             - A dict mapping (outcome, treatment_group, control_group) tuples:
-              {('outcome1', 'treatment_a', 'control'): 0.02, 
+              {('outcome1', 'treatment_a', 'control'): 0.02,
                ('outcome1', 'treatment_b', 'control'): 0.03}
             - None to use the observed effect as the assumed true effect (conservative)
         alpha : float, optional
@@ -1628,7 +1811,7 @@ class ExperimentAnalyzer:
             Filter to specific outcomes. If None, uses all outcomes
         experiments : list, optional
             Filter to specific experiments. If None, uses all experiments
-            
+
         Returns
         -------
         pd.DataFrame
@@ -1640,7 +1823,7 @@ class ExperimentAnalyzer:
             - relative_bias: Expected bias ratio preserving signs (Jaksic et al. 2026)
               This is typically lower than type_m_error because negative significant
               results (Type S errors) partially offset positive overestimates
-            
+
         Examples
         --------
         >>> analyzer.get_effects()
@@ -1671,10 +1854,10 @@ class ExperimentAnalyzer:
         """
         if self._results is None:
             log_and_raise_error(self._logger, "Run get_effects() first.")
-        
+
         df = self._results.copy()
         alpha_val = alpha if alpha is not None else self._alpha
-        
+
         # Filter by outcomes and experiments if specified
         mask = pd.Series([True] * len(df))
         if outcomes is not None:
@@ -1683,9 +1866,9 @@ class ExperimentAnalyzer:
             group_cols = self._experiment_identifier or ["experiment"]
             for col, vals in zip(group_cols, zip(*experiments, strict=False), strict=False):
                 mask &= df[col].isin(vals)
-        
+
         df_filtered = df[mask].copy()
-        
+
         # Determine true effect for each row
         if true_effect is None:
             # Use observed effect as assumed true effect (conservative)
@@ -1693,7 +1876,7 @@ class ExperimentAnalyzer:
         elif isinstance(true_effect, dict):
             # Check if dict keys are tuples to determine mapping type
             sample_key = next(iter(true_effect.keys()))
-            
+
             if isinstance(sample_key, tuple):
                 # Tuple-based mapping
                 if len(sample_key) == 2:
@@ -1701,24 +1884,24 @@ class ExperimentAnalyzer:
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
                             (row["treatment_group"], row["control_group"]),
-                            row["absolute_effect"]  # fallback to observed
+                            row["absolute_effect"],  # fallback to observed
                         ),
-                        axis=1
+                        axis=1,
                     )
                 elif len(sample_key) == 3:
                     # (outcome, treatment_group, control_group) mapping
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
                             (row["outcome"], row["treatment_group"], row["control_group"]),
-                            row["absolute_effect"]  # fallback to observed
+                            row["absolute_effect"],  # fallback to observed
                         ),
-                        axis=1
+                        axis=1,
                     )
                 else:
                     log_and_raise_error(
                         self._logger,
                         f"Dict keys must be tuples of length 2 (treatment_group, control_group) "
-                        f"or 3 (outcome, treatment_group, control_group), got length {len(sample_key)}"
+                        f"or 3 (outcome, treatment_group, control_group), got length {len(sample_key)}",
                     )
             else:
                 # String-based mapping (outcome names)
@@ -1728,16 +1911,16 @@ class ExperimentAnalyzer:
         else:
             # Single value for all
             df_filtered["true_effect"] = true_effect
-        
+
         # Calculate retrodesign metrics
         z_crit = stats.norm.ppf(1 - alpha_val / 2)  # Two-tailed critical value
-        
+
         # Calculate for each row
         results = []
-        for idx, row in df_filtered.iterrows():
+        for _idx, row in df_filtered.iterrows():
             te = row["true_effect"]  # true effect
             se = row["standard_error"]
-            
+
             if pd.isna(te) or pd.isna(se) or se <= 0:
                 # Can't calculate retrodesign
                 power = np.nan
@@ -1748,9 +1931,8 @@ class ExperimentAnalyzer:
                 # Power: P(|Z| > z_crit | true effect)
                 # Z ~ N(true_effect/se, 1)
                 noncentrality = te / se
-                power = 1 - (stats.norm.cdf(z_crit - noncentrality) - 
-                            stats.norm.cdf(-z_crit - noncentrality))
-                
+                power = 1 - (stats.norm.cdf(z_crit - noncentrality) - stats.norm.cdf(-z_crit - noncentrality))
+
                 # Type S error: P(sign error | significant)
                 # This is the probability of getting opposite sign when significant
                 if te == 0:
@@ -1759,11 +1941,11 @@ class ExperimentAnalyzer:
                     # P(Z < -z_crit | true effect) / P(|Z| > z_crit | true effect)
                     prob_wrong_sign = stats.norm.cdf(-z_crit - noncentrality)
                     type_s = prob_wrong_sign / power if power > 0 else np.nan
-                
+
                 # Calculate tail probabilities and expected values (used for both Type M and relative bias)
                 upper_tail = 1 - stats.norm.cdf(z_crit - noncentrality)
                 lower_tail = stats.norm.cdf(-z_crit - noncentrality)
-                
+
                 # Type M error: E[|estimate| / |true_effect| | significant]
                 # Expected exaggeration ratio (uses absolute values)
                 if te == 0:
@@ -1777,20 +1959,20 @@ class ExperimentAnalyzer:
                             e_upper = noncentrality + stats.norm.pdf(z_crit - noncentrality) / upper_tail
                         else:
                             e_upper = 0
-                        
+
                         # Expected value in lower tail: E[Z | Z < -z_crit]
                         # = mu - phi(-z_crit - mu) / Phi(-z_crit - mu)
                         if lower_tail > 0:
                             e_lower = noncentrality - stats.norm.pdf(-z_crit - noncentrality) / lower_tail
                         else:
                             e_lower = 0
-                        
+
                         # Type M error: weighted average of ABSOLUTE values
                         # E[|Z| | |Z| > z_crit]
                         expected_abs_z = (upper_tail * abs(e_upper) + lower_tail * abs(e_lower)) / power
                         expected_abs_estimate = expected_abs_z * se
                         type_m = abs(expected_abs_estimate / te)
-                        
+
                         # Relative bias: weighted average PRESERVING signs
                         # E[Z | |Z| > z_crit] - this is the key difference from Type M
                         # Negative significant results (Type S errors) pull down the average
@@ -1801,17 +1983,19 @@ class ExperimentAnalyzer:
                     else:
                         type_m = np.nan
                         relative_bias = np.nan
-            
-            results.append({
-                "true_effect": te,
-                "power": power,
-                "type_s_error": type_s,
-                "type_m_error": type_m,
-                "relative_bias": relative_bias,
-            })
-        
+
+            results.append(
+                {
+                    "true_effect": te,
+                    "power": power,
+                    "type_s_error": type_s,
+                    "type_m_error": type_m,
+                    "relative_bias": relative_bias,
+                }
+            )
+
         # Add new columns to filtered dataframe
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
-        
+
         return df_filtered
