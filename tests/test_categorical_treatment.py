@@ -257,7 +257,7 @@ def test_binary_treatment_default_comparison():
 
 
 def test_summary_creation(sample_data_categorical):
-    """Test the create_summary method"""
+    """Test that get_effects creates proper results structure"""
     
     analyzer = ExperimentAnalyzer(
         data=sample_data_categorical,
@@ -269,27 +269,27 @@ def test_summary_creation(sample_data_categorical):
     )
     
     analyzer.get_effects()
-    summary = analyzer.create_summary()
+    results = analyzer.results
     
-    assert summary is not None
-    assert not summary.empty
+    assert results is not None
+    assert not results.empty
     
     # Check expected columns are present
     expected_cols = [
-        'experiment', 'outcome', 'treatment_group', 'control_group',
-        'total_sample_size', 'treated_units', 'control_units',
+        'experiment_id', 'outcome', 'treatment_group', 'control_group',
+        'treatment_units', 'control_units',
+        'treatment_value', 'control_value',
         'absolute_effect', 'relative_effect', 'pvalue'
     ]
     
     for col in expected_cols:
-        assert col in summary.columns, f"Missing column: {col}"
+        assert col in results.columns, f"Missing column: {col}"
     
-    # Check derived columns
-    assert 'significance_label' in summary.columns
-    assert 'total_sample_size' in summary.columns
-    assert summary['total_sample_size'].iloc[0] == (
-        summary['treated_units'].iloc[0] + summary['control_units'].iloc[0]
-    )
+    # Verify the comparison structure
+    assert results['treatment_group'].iloc[0] == 'treatment_a'
+    assert results['control_group'].iloc[0] == 'control'
+    assert results['treatment_units'].iloc[0] > 0
+    assert results['control_units'].iloc[0] > 0
 
 
 def test_multiple_outcomes_categorical(sample_data_categorical):

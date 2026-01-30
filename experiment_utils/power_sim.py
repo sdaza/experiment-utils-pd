@@ -1370,7 +1370,9 @@ class PowerSim:
             - sample_size: The sample size used
             - power: Probability of achieving statistical significance
             - type_s_error: Type S error - probability of wrong sign when significant
-            - exaggeration_ratio: Type M error - mean(|observed|/|true|) when significant
+            - exaggeration_ratio: Type M error - mean(|observed|/|true|) when significant (absolute values)
+            - relative_bias: mean(observed/true) preserving signs (Jaksic et al. 2026)
+              Typically lower than exaggeration_ratio because Type S errors offset overestimates
             - median_significant_effect: Median observed effect when significant
             - prop_overestimate: Proportion of significant results that overestimate true effect
             - effect_distribution: Dict with distribution stats of significant effects
@@ -1566,9 +1568,18 @@ class PowerSim:
                 type_s = sign_errors / significant_count if significant_count > 0 else np.nan
                 
                 if len(significant_effects) > 0 and comp_true_effect != 0:
-                    # Exaggeration ratio: mean of |observed| / |true| for significant results
+                    # Exaggeration ratio (Type M): mean of |observed| / |true| for significant results
+                    # Uses absolute values
                     exaggeration_ratios = [abs(eff / comp_true_effect) for eff in significant_effects]
                     mean_exaggeration = np.mean(exaggeration_ratios)
+                    
+                    # Relative bias: mean of observed / true, preserving signs
+                    # Reference: Jaksic et al. (2026) Global Epidemiology
+                    # This is typically lower than exaggeration_ratio because negative
+                    # significant results (Type S errors) partially offset positive overestimates
+                    relative_bias_values = [eff / comp_true_effect for eff in significant_effects]
+                    relative_bias = np.mean(relative_bias_values)
+                    
                     median_significant = np.median(significant_effects)
                     
                     # Proportion that overestimate
@@ -1585,6 +1596,7 @@ class PowerSim:
                     }
                 else:
                     mean_exaggeration = np.nan
+                    relative_bias = np.nan
                     median_significant = np.nan
                     prop_overestimate = np.nan
                     effect_dist = {}
@@ -1596,6 +1608,7 @@ class PowerSim:
                     "power": power,
                     "type_s_error": type_s,
                     "exaggeration_ratio": mean_exaggeration,
+                    "relative_bias": relative_bias,
                     "median_significant_effect": median_significant,
                     "prop_overestimate": prop_overestimate,
                     "effect_distribution": effect_dist,

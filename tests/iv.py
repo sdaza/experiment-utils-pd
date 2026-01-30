@@ -41,6 +41,3 @@ print(iv_results.summary)
 # %%
 ols = smf.ols("Y ~ D + U", data=df).fit()
 print(ols.summary())
-
-
-# %%

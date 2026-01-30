@@ -14,6 +14,7 @@ experiment_utils_pd.egg-info/requires.txt
 experiment_utils_pd.egg-info/top_level.txt
 tests/test_balanced_assignment.py
 tests/test_bootstrap.py
+tests/test_categorical_treatment.py
 tests/test_experiment_analyzer.py
 tests/test_power_sim.py
 tests/test_weights.py

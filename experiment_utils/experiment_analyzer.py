@@ -379,14 +379,16 @@ class ExperimentAnalyzer:
         The results are stored in self._results, which contains the following columns:
         - experiment: The experiment identifier.
         - outcome: The outcome variable.
-        - sample_ratio: The sample ratio of the comparison group to the reference group.
+        - treatment_group: The treatment/comparison group.
+        - control_group: The control/reference group.
+        - sample_ratio: The sample ratio of the treatment group to the control group.
         - adjustment: The type of adjustment applied.
         - balance: The balance metric for the covariates.
-        - comparison_units: The number of units in the comparison group.
-        - reference_units: The number of units in the reference group.
-        - reference_value: The mean value of the outcome variable in the reference group.
-        - comparison_value: The mean value of the outcome variable in the comparison group.
-        - absolute_effect: The absolute effect of the comparison vs reference.
+        - treatment_units: The number of units in the treatment group.
+        - control_units: The number of units in the control group.
+        - control_value: The mean value of the outcome variable in the control group.
+        - treatment_value: The mean value of the outcome variable in the treatment group.
+        - absolute_effect: The absolute effect of the treatment vs control.
         - relative_effect: The relative effect of the treatment.
         - stat_significance: The statistical significance of the effect.
         - standard_error: The standard error of the effect estimate.
@@ -545,8 +547,8 @@ class ExperimentAnalyzer:
                         if self._unit_identifier and self._unit_identifier in comparison_data.columns:
                             weight_columns.insert(-1, self._unit_identifier)
                         weights_df = comparison_data[weight_columns].copy()
-                        weights_df['comparison_group'] = treatment_val
-                        weights_df['reference_group'] = control_val
+                        weights_df['treatment_group'] = treatment_val
+                        weights_df['control_group'] = control_val
                         weights_list.append(weights_df)
 
                 if len(final_covariates) > 0 and adjustment == "IV":
@@ -678,8 +680,8 @@ class ExperimentAnalyzer:
                                 output["ess_control_reduction"] = np.nan
 
                         # Add treatment and control group identifiers
-                        output["comparison_group"] = treatment_val
-                        output["reference_group"] = control_val
+                        output["treatment_group"] = treatment_val
+                        output["control_group"] = control_val
                         output["experiment"] = experiment_tuple
                         output["sample_ratio"] = sample_ratio
                         output["srm_detected"] = srm_detected
@@ -694,12 +696,12 @@ class ExperimentAnalyzer:
                         error_output = {
                             "outcome": outcome,
                             "adjustment": adjustment_label,
-                            "comparison_group": treatment_val,
-                            "reference_group": control_val,
-                            "comparison_units": np.nan,
-                            "reference_units": np.nan,
-                            "reference_value": np.nan,
-                            "comparison_value": np.nan,
+                            "treatment_group": treatment_val,
+                            "control_group": control_val,
+                            "treatment_units": np.nan,
+                            "control_units": np.nan,
+                            "control_value": np.nan,
+                            "treatment_value": np.nan,
                             "absolute_effect": np.nan,
                             "relative_effect": np.nan,
                             "stat_significance": np.nan,
@@ -730,15 +732,15 @@ class ExperimentAnalyzer:
         result_columns = [
             "experiment",
             "outcome",
-            "comparison_group",
-            "reference_group",
+            "treatment_group",
+            "control_group",
             "sample_ratio",
             "adjustment",
             "inference_method",
-            "comparison_units",
-            "reference_units",
-            "reference_value",
-            "comparison_value",
+            "treatment_units",
+            "control_units",
+            "control_value",
+            "treatment_value",
             "absolute_effect",
             "relative_effect",
             "standard_error",
@@ -917,7 +919,7 @@ class ExperimentAnalyzer:
         result_columns = grouping_cols + [
             "experiments",
             "control_units",
-            "treated_units",
+            "treatment_units",
             "absolute_effect",
             "relative_effect",
             "stat_significance",
@@ -947,8 +949,8 @@ class ExperimentAnalyzer:
 
         meta_results = {
             "experiments": int(data.shape[0]),
-            "reference_units": int(data["reference_units"].sum()),
-            "comparison_units": int(data["comparison_units"].sum()),
+            "control_units": int(data["control_units"].sum()),
+            "treatment_units": int(data["treatment_units"].sum()),
             "absolute_effect": absolute_estimate,
             "relative_effect": relative_estimate,
             "standard_error": pooled_standard_error,
@@ -1002,7 +1004,7 @@ class ExperimentAnalyzer:
         return aggregate_results[final_columns]
 
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
-        group["gweight"] = group["comparison_units"].astype(int)
+        group["gweight"] = group["treatment_units"].astype(int)
         absolute_effect = np.sum(group["absolute_effect"] * group["gweight"]) / np.sum(group["gweight"])
         relative_effect = np.sum(group["relative_effect"] * group["gweight"]) / np.sum(group["gweight"])
         variance = (group["standard_error"] ** 2) * group["gweight"]
@@ -1015,7 +1017,7 @@ class ExperimentAnalyzer:
         output = pd.Series(
             {
                 "experiments": int(group.shape[0]),
-                "comparison_units": int(np.sum(group["gweight"])),
+                "treatment_units": int(np.sum(group["gweight"])),
                 "absolute_effect": absolute_effect,
                 "relative_effect": relative_effect,
                 "stat_significance": 1 if combined_p_value < self._alpha else 0,
@@ -1546,7 +1548,8 @@ class ExperimentAnalyzer:
         if not all(col in df.columns for col in group_cols):
             log_and_raise_error(self._logger, f"Grouping columns {group_cols} not found in results.")
 
-        mask = pd.Series([True] * len(df))
+        # Use df.index to ensure proper alignment when filtering
+        mask = pd.Series([True] * len(df), index=df.index)
         if outcomes is not None:
             mask &= df["outcome"].isin(outcomes)
         if experiments is not None:
@@ -1583,7 +1586,8 @@ class ExperimentAnalyzer:
 
         df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
         df_adj = df_adj.join(adjustments)
-        df_final = pd.concat([df_adj, df_rest], ignore_index=True).sort_index()
+        # Preserve original row order by keeping original indices
+        df_final = pd.concat([df_adj, df_rest]).sort_index()
         self._results = df_final
 
     def calculate_retrodesign(
@@ -1612,9 +1616,9 @@ class ExperimentAnalyzer:
             - A single float to apply to all results
             - A dict mapping outcome names to their true effects:
               {'outcome1': 0.02, 'outcome2': 0.03}
-            - A dict mapping (comparison_group, reference_group) tuples to true effects:
+            - A dict mapping (treatment_group, control_group) tuples to true effects:
               {('treatment_a', 'control'): 0.02, ('treatment_b', 'control'): 0.05}
-            - A dict mapping (outcome, comparison_group, reference_group) tuples:
+            - A dict mapping (outcome, treatment_group, control_group) tuples:
               {('outcome1', 'treatment_a', 'control'): 0.02, 
                ('outcome1', 'treatment_b', 'control'): 0.03}
             - None to use the observed effect as the assumed true effect (conservative)
@@ -1632,7 +1636,10 @@ class ExperimentAnalyzer:
             - true_effect: The assumed true effect size
             - power: Probability of significance given true effect
             - type_s_error: Probability of wrong sign
-            - type_m_error: Expected exaggeration ratio (only for significant results)
+            - type_m_error: Expected exaggeration ratio using absolute values
+            - relative_bias: Expected bias ratio preserving signs (Jaksic et al. 2026)
+              This is typically lower than type_m_error because negative significant
+              results (Type S errors) partially offset positive overestimates
             
         Examples
         --------
@@ -1690,19 +1697,19 @@ class ExperimentAnalyzer:
             if isinstance(sample_key, tuple):
                 # Tuple-based mapping
                 if len(sample_key) == 2:
-                    # (comparison_group, reference_group) mapping
+                    # (treatment_group, control_group) mapping
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
-                            (row["comparison_group"], row["reference_group"]),
+                            (row["treatment_group"], row["control_group"]),
                             row["absolute_effect"]  # fallback to observed
                         ),
                         axis=1
                     )
                 elif len(sample_key) == 3:
-                    # (outcome, comparison_group, reference_group) mapping
+                    # (outcome, treatment_group, control_group) mapping
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
-                            (row["outcome"], row["comparison_group"], row["reference_group"]),
+                            (row["outcome"], row["treatment_group"], row["control_group"]),
                             row["absolute_effect"]  # fallback to observed
                         ),
                         axis=1
@@ -1710,8 +1717,8 @@ class ExperimentAnalyzer:
                 else:
                     log_and_raise_error(
                         self._logger,
-                        f"Dict keys must be tuples of length 2 (comparison_group, reference_group) "
-                        f"or 3 (outcome, comparison_group, reference_group), got length {len(sample_key)}"
+                        f"Dict keys must be tuples of length 2 (treatment_group, control_group) "
+                        f"or 3 (outcome, treatment_group, control_group), got length {len(sample_key)}"
                     )
             else:
                 # String-based mapping (outcome names)
@@ -1736,6 +1743,7 @@ class ExperimentAnalyzer:
                 power = np.nan
                 type_s = np.nan
                 type_m = np.nan
+                relative_bias = np.nan
             else:
                 # Power: P(|Z| > z_crit | true effect)
                 # Z ~ N(true_effect/se, 1)
@@ -1752,48 +1760,54 @@ class ExperimentAnalyzer:
                     prob_wrong_sign = stats.norm.cdf(-z_crit - noncentrality)
                     type_s = prob_wrong_sign / power if power > 0 else np.nan
                 
+                # Calculate tail probabilities and expected values (used for both Type M and relative bias)
+                upper_tail = 1 - stats.norm.cdf(z_crit - noncentrality)
+                lower_tail = stats.norm.cdf(-z_crit - noncentrality)
+                
                 # Type M error: E[|estimate| / |true_effect| | significant]
-                # Expected exaggeration ratio
+                # Expected exaggeration ratio (uses absolute values)
                 if te == 0:
                     type_m = np.inf
+                    relative_bias = np.inf
                 else:
-                    # Analytical approximation using truncated normal
-                    # E[|Z| | |Z| > z_crit] where Z ~ N(noncentrality, 1)
-                    
-                    # For positive true effect
-                    # E[Z | Z > z_crit] = mu + sigma * phi(z_crit - mu) / (1 - Phi(z_crit - mu))
-                    # where phi is PDF, Phi is CDF
-                    
-                    upper_tail = 1 - stats.norm.cdf(z_crit - noncentrality)
-                    lower_tail = stats.norm.cdf(-z_crit - noncentrality)
-                    
                     if power > 0:
-                        # Expected value in upper tail
+                        # Expected value in upper tail: E[Z | Z > z_crit]
+                        # = mu + phi(z_crit - mu) / (1 - Phi(z_crit - mu))
                         if upper_tail > 0:
                             e_upper = noncentrality + stats.norm.pdf(z_crit - noncentrality) / upper_tail
                         else:
                             e_upper = 0
                         
-                        # Expected value in lower tail (absolute value)
+                        # Expected value in lower tail: E[Z | Z < -z_crit]
+                        # = mu - phi(-z_crit - mu) / Phi(-z_crit - mu)
                         if lower_tail > 0:
-                            e_lower = abs(noncentrality - stats.norm.pdf(z_crit + noncentrality) / lower_tail)
+                            e_lower = noncentrality - stats.norm.pdf(-z_crit - noncentrality) / lower_tail
                         else:
                             e_lower = 0
                         
-                        # Weighted average
-                        expected_z = (upper_tail * e_upper + lower_tail * e_lower) / power
+                        # Type M error: weighted average of ABSOLUTE values
+                        # E[|Z| | |Z| > z_crit]
+                        expected_abs_z = (upper_tail * abs(e_upper) + lower_tail * abs(e_lower)) / power
+                        expected_abs_estimate = expected_abs_z * se
+                        type_m = abs(expected_abs_estimate / te)
                         
-                        # Convert back to effect size and calculate ratio
-                        expected_estimate = expected_z * se
-                        type_m = abs(expected_estimate / te)
+                        # Relative bias: weighted average PRESERVING signs
+                        # E[Z | |Z| > z_crit] - this is the key difference from Type M
+                        # Negative significant results (Type S errors) pull down the average
+                        # Reference: Jaksic et al. (2026) Global Epidemiology
+                        expected_z_signed = (upper_tail * e_upper + lower_tail * e_lower) / power
+                        expected_estimate_signed = expected_z_signed * se
+                        relative_bias = expected_estimate_signed / te
                     else:
                         type_m = np.nan
+                        relative_bias = np.nan
             
             results.append({
                 "true_effect": te,
                 "power": power,
                 "type_s_error": type_s,
                 "type_m_error": type_m,
+                "relative_bias": relative_bias,
             })
         
         # Add new columns to filtered dataframe
