@@ -1057,6 +1057,8 @@ class ExperimentAnalyzer:
             "relative_effect",
             "rel_effect_lower",
             "rel_effect_upper",
+            "se_intercept",
+            "cov_coef_intercept",
         ]
 
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
@@ -1867,6 +1869,83 @@ class ExperimentAnalyzer:
         plt.tight_layout()
         return fig
 
+    def _compute_fieller_ci_adjusted(
+        self,
+        coefficient: float,
+        intercept: float,
+        se_coef: float,
+        se_intercept: float,
+        cov: float,
+        alpha: float = 0.05,
+    ) -> tuple[float, float]:
+        """
+        Compute Fieller confidence interval with custom alpha.
+
+        This is a simplified version used for MCP-adjusted relative CIs.
+        Uses the same Fieller's theorem as in estimators.py but with adjusted alpha.
+
+        Parameters
+        ----------
+        coefficient : float
+            Treatment effect (numerator)
+        intercept : float
+            Control mean (denominator)
+        se_coef : float
+            Standard error of coefficient
+        se_intercept : float
+            Standard error of intercept
+        cov : float
+            Covariance between coefficient and intercept
+        alpha : float
+            Adjusted significance level
+
+        Returns
+        -------
+        tuple[float, float]
+            (lower_bound, upper_bound) or (nan, nan) if cannot compute
+        """
+        from scipy import stats
+
+        # Handle edge cases
+        if intercept == 0 or abs(intercept) < 1e-10:
+            return (np.nan, np.nan)
+
+        # Critical value with adjusted alpha
+        z_crit = stats.norm.ppf(1 - alpha / 2)
+        g_sq = z_crit**2
+
+        # Fieller's quadratic coefficients
+        a = intercept**2 - g_sq * se_intercept**2
+        b = -(2 * intercept * coefficient - 2 * g_sq * cov)
+        c = coefficient**2 - g_sq * se_coef**2
+
+        # Check if valid quadratic
+        if abs(a) < 1e-10:
+            return (np.nan, np.nan)
+
+        # Solve quadratic
+        discriminant = b**2 - 4 * a * c
+
+        if discriminant < 0:
+            return (np.nan, np.nan)
+
+        sqrt_disc = np.sqrt(discriminant)
+        root1 = (-b - sqrt_disc) / (2 * a)
+        root2 = (-b + sqrt_disc) / (2 * a)
+
+        # Determine bounds based on sign of a
+        if a > 0:
+            # Normal case: interval is between roots
+            ci_lower = min(root1, root2)
+            ci_upper = max(root1, root2)
+        else:
+            # Unusual case: interval is outside roots
+            # This can happen with very high uncertainty
+            # Return unbounded or use point estimate bounds
+            return (np.nan, np.nan)
+
+        return (ci_lower, ci_upper)
+
     def adjust_pvalues(
         self,
         method: str = "bonferroni",
@@ -1912,9 +1991,9 @@ class ExperimentAnalyzer:
           so simultaneous CI coverage is not directly comparable
 
         Relative effect CIs:
-        - Relative effect CIs with adjustment are set to NaN because proper computation
-          requires full covariance information from the original regression models
-        - For adjusted relative CIs, re-run analysis with desired alpha instead
+        - Relative effect CIs are computed using Fieller's method with adjusted alpha
+        - Requires stored covariance information (se_intercept, cov_coef_intercept)
+        - If covariance info unavailable (e.g., bootstrap results), CIs set to NaN
 
         Added columns:
         - pvalue_mcp: Adjusted p-values
@@ -1922,8 +2001,8 @@ class ExperimentAnalyzer:
         - mcp_method: Method used for adjustment
         - abs_effect_lower_mcp: Adjusted lower bound for absolute effect
         - abs_effect_upper_mcp: Adjusted upper bound for absolute effect
-        - rel_effect_lower_mcp: Adjusted lower bound for relative effect (currently NaN)
-        - rel_effect_upper_mcp: Adjusted upper bound for relative effect (currently NaN)
+        - rel_effect_lower_mcp: Adjusted lower bound for relative effect (Fieller method)
+        - rel_effect_upper_mcp: Adjusted upper bound for relative effect (Fieller method)
 
         Examples
         --------
@@ -2016,19 +2095,48 @@ class ExperimentAnalyzer:
             result_dict["abs_effect_lower_mcp"] = abs_effect - z_crit_adj * se
             result_dict["abs_effect_upper_mcp"] = abs_effect + z_crit_adj * se
 
-            # Relative effect CIs cannot be properly adjusted without full covariance info
-            # from the original regression models (need se_intercept and cov matrix)
-            result_dict["rel_effect_lower_mcp"] = np.nan
-            result_dict["rel_effect_upper_mcp"] = np.nan
+            # Compute adjusted relative effect CIs using stored covariance information
+            # Check if necessary columns exist
+            if "se_intercept" in group.columns and "cov_coef_intercept" in group.columns:
+                rel_lower_adj = []
+                rel_upper_adj = []
+
+                for idx in range(len(group)):
+                    coef = abs_effect[idx]
+                    intercept = group["control_value"].values[idx]
+                    se_coef = se[idx]
+                    se_int = group["se_intercept"].values[idx]
+                    cov = group["cov_coef_intercept"].values[idx]
+
+                    # Compute Fieller CI with adjusted alpha
+                    rel_ci_lower, rel_ci_upper = self._compute_fieller_ci_adjusted(
+                        coef, intercept, se_coef, se_int, cov, alpha_ci
+                    )
+                    rel_lower_adj.append(rel_ci_lower)
+                    rel_upper_adj.append(rel_ci_upper)
+
+                result_dict["rel_effect_lower_mcp"] = rel_lower_adj
+                result_dict["rel_effect_upper_mcp"] = rel_upper_adj
+            else:
+                # Fallback if covariance info not available
+                result_dict["rel_effect_lower_mcp"] = np.nan
+                result_dict["rel_effect_upper_mcp"] = np.nan
 
             return pd.DataFrame(result_dict, index=group.index)
 
-        # Log warning about relative CIs once (not per group)
-        self._logger.warning(
-            "Relative effect confidence intervals with MCP adjustment are not available. "
-            "Proper computation requires covariance information from original models. "
-            "To obtain adjusted relative CIs, re-run get_effects() with appropriate alpha parameter."
-        )
+        # Log info about relative CIs computation (not per group)
+        if "se_intercept" in df_adj.columns and "cov_coef_intercept" in df_adj.columns:
+            self._logger.info(
+                "Computing adjusted relative effect CIs using Fieller's method with adjusted alpha. "
+                "This properly accounts for uncertainty in both numerator and denominator."
+            )
+        else:
+            self._logger.warning(
+                "Covariance information (se_intercept, cov_coef_intercept) not found in results. "
+                "Relative effect CIs with MCP adjustment will be set to NaN. "
+                "This may occur with bootstrap results. To obtain adjusted relative CIs, "
+                "re-run get_effects() with bootstrap=False or with appropriate alpha parameter."
+            )
 
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
 
