@@ -1875,6 +1875,63 @@ class ExperimentAnalyzer:
         experiments: list | None = None,
         alpha: float | None = 0.05,
     ):
+        """
+        Adjust p-values for multiple comparisons and compute adjusted confidence intervals.
+
+        This method applies multiple comparison corrections to p-values and recalculates
+        confidence intervals using method-appropriate alpha adjustments. Results are added
+        to the existing results dataframe with '_mcp' suffix (multiple comparison procedure).
+
+        Parameters
+        ----------
+        method : str, optional
+            Multiple comparison adjustment method, by default "bonferroni"
+            Options: 'bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by'
+        groupby_cols : list[str], optional
+            Columns to group by when applying adjustment (default: experiment_identifier)
+        outcomes : list[str], optional
+            Filter to specific outcomes for adjustment
+        experiments : list, optional
+            Filter to specific experiments for adjustment
+        alpha : float, optional
+            Family-wise error rate or false discovery rate threshold, by default 0.05
+
+        Notes
+        -----
+        Column naming:
+        - '_mcp' suffix indicates multiple comparison procedure adjustments
+        - This distinguishes from 'adjustment' parameter (balance/IV covariate adjustment)
+
+        Confidence interval adjustments by method:
+        - **Bonferroni**: Uses α_CI = α/k for simultaneous coverage
+        - **Sidak**: Uses α_CI = 1-(1-α)^(1/k) for independent tests
+        - **Sequential methods** (Holm/Hochberg/Hommel): Use conservative Bonferroni
+          approach (α/k) since no single per-comparison alpha exists
+        - **FDR methods** (BH/BY): Use conservative Bonferroni approach. Note that FDR
+          controls expected proportion of false discoveries, not family-wise error rate,
+          so simultaneous CI coverage is not directly comparable
+
+        Relative effect CIs:
+        - Relative effect CIs with adjustment are set to NaN because proper computation
+          requires full covariance information from the original regression models
+        - For adjusted relative CIs, re-run analysis with desired alpha instead
+
+        Added columns:
+        - pvalue_mcp: Adjusted p-values
+        - stat_significance_mcp: Significance indicator using adjusted p-values
+        - mcp_method: Method used for adjustment
+        - abs_effect_lower_mcp: Adjusted lower bound for absolute effect
+        - abs_effect_upper_mcp: Adjusted upper bound for absolute effect
+        - rel_effect_lower_mcp: Adjusted lower bound for relative effect (currently NaN)
+        - rel_effect_upper_mcp: Adjusted upper bound for relative effect (currently NaN)
+
+        Examples
+        --------
+        >>> analyzer.get_effects()
+        >>> analyzer.adjust_pvalues(method='holm')
+        >>> results = analyzer.results
+        >>> print(results[['pvalue', 'pvalue_mcp', 'stat_significance_mcp']])
+        """
         if self._results is None:
             log_and_raise_error(self._logger, "Run get_effects() first.")
 
@@ -1915,58 +1972,74 @@ class ExperimentAnalyzer:
             # Method-specific alpha adjustment for CIs
             if m == "bonferroni":
                 # Bonferroni: Each test uses α/k
-                alpha_adj = thres / n_comparisons
+                alpha_ci = thres / n_comparisons
+                ci_note = f"Using Bonferroni α/k = {alpha_ci:.6f} for {n_comparisons} comparisons"
             elif m == "sidak":
                 # Sidak: More powerful than Bonferroni for independent tests
-                alpha_adj = 1 - (1 - thres) ** (1 / n_comparisons)
+                alpha_ci = 1 - (1 - thres) ** (1 / n_comparisons)
+                ci_note = f"Using Sidak 1-(1-α)^(1/k) = {alpha_ci:.6f} for {n_comparisons} comparisons"
             elif m in {"holm", "hochberg", "hommel"}:
                 # Sequential methods: Use conservative Bonferroni for CIs
                 # (No single per-comparison alpha since they depend on ordering)
-                alpha_adj = thres / n_comparisons
+                alpha_ci = thres / n_comparisons
+                ci_note = (
+                    f"Using conservative Bonferroni α/k = {alpha_ci:.6f} for CIs "
+                    f"(sequential method {m} has no single per-comparison alpha)"
+                )
+                self._logger.warning(ci_note)
             elif m == "fdr_bh" or m == "by":
                 # FDR methods: Control false discovery rate, not FWER
                 # For CIs, use Bonferroni as conservative bound for FWER
                 # Note: FDR doesn't directly correspond to simultaneous coverage
-                alpha_adj = thres / n_comparisons
+                alpha_ci = thres / n_comparisons
+                ci_note = (
+                    f"Using conservative Bonferroni α/k = {alpha_ci:.6f} for CIs "
+                    f"(FDR method {m} controls false discovery rate, not family-wise error)"
+                )
+                self._logger.warning(ci_note)
             else:
                 # Default: Bonferroni
-                alpha_adj = thres / n_comparisons
+                alpha_ci = thres / n_comparisons
+                ci_note = f"Using default Bonferroni α/k = {alpha_ci:.6f}"
 
-            z_crit_adj = stats.norm.ppf(1 - alpha_adj / 2)
+            z_crit_adj = stats.norm.ppf(1 - alpha_ci / 2)
 
             result_dict = {
-                "pvalue_adj": pvals_adj,
-                "stat_significance_adj": (pvals_adj < thres).astype(int),
-                "adj_method": method,
-                "alpha_adj": alpha_adj,  # Store for transparency
+                "pvalue_mcp": pvals_adj,
+                "stat_significance_mcp": (pvals_adj < thres).astype(int),
+                "mcp_method": method,
             }
 
-            # Add adjusted CIs
+            # Add adjusted absolute effect CIs
             abs_effect = group["absolute_effect"].values
             se = group["standard_error"].values
-            result_dict["abs_effect_lower_adj"] = abs_effect - z_crit_adj * se
-            result_dict["abs_effect_upper_adj"] = abs_effect + z_crit_adj * se
+            result_dict["abs_effect_lower_mcp"] = abs_effect - z_crit_adj * se
+            result_dict["abs_effect_upper_mcp"] = abs_effect + z_crit_adj * se
 
-            # Adjusted relative effect CIs using Fieller's method with adjusted alpha
-            # Note: For relative effects, proper adjustment requires re-computing
-            # Fieller CIs with adjusted alpha. This is a placeholder for consistency.
-            # Ideally, call _compute_fieller_ci with alpha_adj
-            result_dict["rel_effect_lower_adj"] = np.nan
-            result_dict["rel_effect_upper_adj"] = np.nan
+            # Relative effect CIs cannot be properly adjusted without full covariance info
+            # from the original regression models (need se_intercept and cov matrix)
+            result_dict["rel_effect_lower_mcp"] = np.nan
+            result_dict["rel_effect_upper_mcp"] = np.nan
 
             return pd.DataFrame(result_dict, index=group.index)
+
+        # Log warning about relative CIs once (not per group)
+        self._logger.warning(
+            "Relative effect confidence intervals with MCP adjustment are not available. "
+            "Proper computation requires covariance information from original models. "
+            "To obtain adjusted relative CIs, re-run get_effects() with appropriate alpha parameter."
+        )
 
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
 
         cols_to_add = [
-            "pvalue_adj",
-            "stat_significance_adj",
-            "adj_method",
-            "alpha_adj",
-            "abs_effect_lower_adj",
-            "abs_effect_upper_adj",
-            "rel_effect_lower_adj",
-            "rel_effect_upper_adj",
+            "pvalue_mcp",
+            "stat_significance_mcp",
+            "mcp_method",
+            "abs_effect_lower_mcp",
+            "abs_effect_upper_mcp",
+            "rel_effect_lower_mcp",
+            "rel_effect_upper_mcp",
         ]
 
         df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
