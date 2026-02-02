@@ -85,6 +85,7 @@ exclude = [
     "node_modules",
     "site-packages",
     "venv",
+    "interactive_testing.py"
 ]
 line-length = 120
 indent-width = 4

@@ -339,16 +339,16 @@ class ExperimentAnalyzer:
     def __handle_missing_data(self, data: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         """
         Handle missing data in treatment and categorical covariates.
-        
+
         Missing data handling strategy:
         - Treatment column: Drop rows with missing values (REQUIRED)
         - Categorical covariates: Create explicit 'Missing' category
-        
+
         Parameters
         ----------
         data : pd.DataFrame
             Input data
-            
+
         Returns
         -------
         data : pd.DataFrame
@@ -359,7 +359,7 @@ class ExperimentAnalyzer:
         original_n = len(data)
         rows_dropped = 0
         missing_info = []
-        
+
         # 1. Handle missing treatment values (CRITICAL - must drop)
         treatment_missing = data[self._treatment_col].isna().sum()
         if treatment_missing > 0:
@@ -371,20 +371,20 @@ class ExperimentAnalyzer:
             data = data[data[self._treatment_col].notna()].copy()
             rows_dropped += treatment_missing
             missing_info.append(f"treatment: {treatment_missing} rows")
-        
+
         # 2. Handle missing values in categorical covariates
         if self._covariates:
             for cov in self._covariates:
                 if cov not in data.columns:
                     continue
-                    
+
                 # Check if it's likely categorical (object dtype or low cardinality int)
                 is_likely_categorical = (
-                    pd.api.types.is_object_dtype(data[cov]) or 
-                    isinstance(data[cov].dtype, pd.CategoricalDtype) or
-                    (pd.api.types.is_integer_dtype(data[cov]) and 3 <= data[cov].nunique() <= 10)
+                    pd.api.types.is_object_dtype(data[cov])
+                    or isinstance(data[cov].dtype, pd.CategoricalDtype)
+                    or (pd.api.types.is_integer_dtype(data[cov]) and 3 <= data[cov].nunique() <= 10)
                 )
-                
+
                 cov_missing = data[cov].isna().sum()
                 if cov_missing > 0 and is_likely_categorical:
                     pct_missing = (cov_missing / len(data)) * 100
@@ -393,15 +393,15 @@ class ExperimentAnalyzer:
                         f"({pct_missing:.1f}%). Creating explicit 'Missing' category."
                     )
                     # Create explicit 'Missing' category
-                    data[cov] = data[cov].fillna('Missing')
+                    data[cov] = data[cov].fillna("Missing")
                     missing_info.append(f"{cov}: {cov_missing} values")
-        
+
         summary = {
-            'rows_dropped': rows_dropped,
-            'pct_dropped': (rows_dropped / original_n * 100) if original_n > 0 else 0,
-            'missing_details': missing_info
+            "rows_dropped": rows_dropped,
+            "pct_dropped": (rows_dropped / original_n * 100) if original_n > 0 else 0,
+            "missing_details": missing_info,
         }
-        
+
         return data, summary
 
     def standardize_covariates(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
@@ -611,10 +611,10 @@ class ExperimentAnalyzer:
             if self._pvalue_adjustment:
                 self._logger.info(f"P-value adjustment: {self._pvalue_adjustment}")
             final_covariates = []
-            
+
             # Handle missing data in treatment and categorical covariates
             temp_pd, missing_summary = self.__handle_missing_data(temp_pd)
-            if missing_summary['rows_dropped'] > 0:
+            if missing_summary["rows_dropped"] > 0:
                 self._logger.warning(
                     f"Dropped {missing_summary['rows_dropped']} rows due to missing values "
                     f"({missing_summary['pct_dropped']:.1f}% of data)"
@@ -644,7 +644,7 @@ class ExperimentAnalyzer:
             # Classify covariates (now including dummies as binary, excluding original categoricals)
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
             binary_covariates = self.__get_binary_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
-            
+
             # Add dummy variables to binary covariates list (dummies are binary by definition)
             if dummy_map:
                 binary_covariates.extend(list(dummy_map.keys()))
@@ -693,11 +693,13 @@ class ExperimentAnalyzer:
                 # Track which covariates were removed and why
                 removed_numeric_var = set(numeric_covariates) - set(comp_numeric_covariates)
                 removed_binary_freq = [c for c in binary_covariates if comparison_data[c].sum() < min_binary_count]
-                removed_binary_var = [c for c in binary_covariates if c not in removed_binary_freq and comparison_data[c].std(ddof=0) == 0]
+                removed_binary_var = [
+                    c for c in binary_covariates if c not in removed_binary_freq and comparison_data[c].std(ddof=0) == 0
+                ]
 
                 final_covariates = comp_numeric_covariates + comp_binary_covariates
                 self._final_covariates = final_covariates
-                
+
                 # Log detailed information about removed covariates
                 if removed_numeric_var or removed_binary_freq or removed_binary_var:
                     self._logger.warning(f"Removed covariates for comparison {treatment_val} vs {control_val}:")
@@ -756,7 +758,7 @@ class ExperimentAnalyzer:
                                 comparison_data_balance, balance_covariates
                             )
                             balance = self.calculate_smd(data=comparison_data_balance, covariates=balance_covariates)
-                        
+
                         # Standardize comparison_data for balance adjustment (only in categorical path)
                         if len(final_covariates) > 0:
                             comparison_data = self.standardize_covariates(comparison_data, final_covariates)
@@ -910,10 +912,10 @@ class ExperimentAnalyzer:
                                 min_binary_count=min_binary_count,
                             )
                             bootstrap_results = self.__calculate_bootstrap_inference(
-                                bootstrap_abs_effects, 
+                                bootstrap_abs_effects,
                                 bootstrap_rel_effects,
                                 output["absolute_effect"],
-                                output["relative_effect"]
+                                output["relative_effect"],
                             )
                             # Replace asymptotic inference with bootstrap inference
                             output["standard_error"] = bootstrap_results["standard_error"]
@@ -1544,11 +1546,11 @@ class ExperimentAnalyzer:
         return np.array(bootstrap_abs_effects), np.array(bootstrap_rel_effects)
 
     def __calculate_bootstrap_inference(
-        self, 
-        bootstrap_abs_effects: np.ndarray, 
+        self,
+        bootstrap_abs_effects: np.ndarray,
         bootstrap_rel_effects: np.ndarray,
         observed_abs_effect: float,
-        observed_rel_effect: float
+        observed_rel_effect: float,
     ) -> dict[str, float]:
         """
         Calculate confidence intervals and p-value from bootstrap distribution.
@@ -1620,7 +1622,9 @@ class ExperimentAnalyzer:
 
         # P-value (two-sided) - based on absolute effect
         # Count how many bootstrap effects are as extreme as observed
-        pvalue = np.mean(np.abs(bootstrap_abs_effects - np.mean(bootstrap_abs_effects)) >= np.abs(observed_abs_effect)) * 2
+        pvalue = (
+            np.mean(np.abs(bootstrap_abs_effects - np.mean(bootstrap_abs_effects)) >= np.abs(observed_abs_effect)) * 2
+        )
         pvalue = min(pvalue, 1.0)  # Ensure p-value doesn't exceed 1
 
         return {
@@ -2000,9 +2004,9 @@ class ExperimentAnalyzer:
                 mask &= df[col].isin(vals)
 
         df_filtered = df[mask].copy()
-        
+
         # Drop existing retrodesign columns if they exist (from previous calls)
-        retro_cols = ['true_effect', 'power', 'type_s_error', 'type_m_error', 'relative_bias']
+        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias"]
         existing_retro_cols = [col for col in retro_cols if col in df_filtered.columns]
         if existing_retro_cols:
             df_filtered = df_filtered.drop(columns=existing_retro_cols)
@@ -2010,7 +2014,9 @@ class ExperimentAnalyzer:
         # Determine true effect for each row
         if true_effect is None:
             # Use observed effect as assumed true effect (conservative)
-            self._logger.info("No true_effect specified. Using observed effects as assumed true effects (conservative approach).")
+            self._logger.info(
+                "No true_effect specified. Using observed effects as assumed true effects (conservative approach)."
+            )
             df_filtered["true_effect"] = df_filtered["absolute_effect"]
         elif isinstance(true_effect, dict):
             # Check if dict keys are tuples to determine mapping type
@@ -2020,7 +2026,9 @@ class ExperimentAnalyzer:
                 # Tuple-based mapping
                 if len(sample_key) == 2:
                     # (treatment_group, control_group) mapping
-                    self._logger.info(f"Using true_effect mapping by (treatment_group, control_group): {len(true_effect)} comparison(s)")
+                    self._logger.info(
+                        f"Using true_effect mapping by (treatment_group, control_group): {len(true_effect)} comparison(s)"  # noqa: E501
+                    )
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
                             (row["treatment_group"], row["control_group"]),
@@ -2030,7 +2038,9 @@ class ExperimentAnalyzer:
                     )
                 elif len(sample_key) == 3:
                     # (outcome, treatment_group, control_group) mapping
-                    self._logger.info(f"Using true_effect mapping by (outcome, treatment_group, control_group): {len(true_effect)} combination(s)")
+                    self._logger.info(
+                        f"Using true_effect mapping by (outcome, treatment_group, control_group): {len(true_effect)} combination(s)"  # noqa: E501
+                    )
                     df_filtered["true_effect"] = df_filtered.apply(
                         lambda row: true_effect.get(
                             (row["outcome"], row["treatment_group"], row["control_group"]),

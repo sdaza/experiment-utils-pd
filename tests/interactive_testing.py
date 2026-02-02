@@ -512,4 +512,3 @@ exp.results
 retro = exp.calculate_retrodesign()
 # %%
 retro
-# %%
