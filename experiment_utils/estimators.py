@@ -91,15 +91,15 @@ class Estimators:
     ) -> tuple[float, float]:
         """
         Compute Fieller confidence interval for ratio coefficient/intercept using Fieller's theorem.
-        
+
         Fieller's theorem provides exact confidence intervals for ratios of normally distributed
         random variables. This is the correct method for computing CIs on relative effects (lift)
         in A/B tests, as it properly accounts for uncertainty in both numerator and denominator.
-        
+
         The naive approach of dividing absolute effect CI bounds by the control value is
         mathematically incorrect and can severely underestimate uncertainty, especially with
         small samples.
-        
+
         Parameters
         ----------
         coefficient : float
@@ -114,36 +114,38 @@ class Estimators:
             Covariance matrix from regression results
         alpha : float
             Significance level (default 0.05 for 95% CI)
-            
+
         Returns
         -------
         tuple[float, float]
             (lower_bound, upper_bound) or (nan, nan) if interval cannot be computed
-            
+
         References
         ----------
         Fieller, E. C. (1954). "Some Problems in Interval Estimation".
         Journal of the Royal Statistical Society, Series B. 16 (2): 175-185.
-        
+
         Franz, V. H. (2007). "Ratios: A short guide to confidence limits and proper use".
         https://arxiv.org/abs/0710.2024
         """
         from scipy import stats
-        
+
         # Handle edge cases
         if intercept == 0:
             self._logger.warning("Control value is zero. Cannot compute relative effect CI.")
             return (np.nan, np.nan)
-        
+
         # Use small value threshold to avoid numerical issues
         if abs(intercept) < 1e-10:
-            self._logger.warning(f"Control value very close to zero ({intercept:.2e}). Relative effect CI may be unreliable.")
+            self._logger.warning(
+                f"Control value very close to zero ({intercept:.2e}). Relative effect CI may be unreliable."
+            )
             return (np.nan, np.nan)
-        
+
         # Critical value (z for large samples, can use t for small samples)
         z_crit = stats.norm.ppf(1 - alpha / 2)
-        g_sq = z_crit ** 2
-        
+        g_sq = z_crit**2
+
         # Extract covariance between treatment coefficient and intercept
         # The covariance matrix has treatment_col and "Intercept" as indices
         try:
@@ -157,17 +159,17 @@ class Estimators:
             else:
                 self._logger.warning("Could not extract covariance from matrix. Using 0.")
                 cov = 0
-        
+
         # Point estimate of ratio
         theta_hat = coefficient / intercept
-        
+
         # Fieller's method: Solve quadratic inequality
         # (intercept² - g²×se_intercept²)θ² - 2(intercept×coef - g²×cov)θ + (coef² - g²×se_coef²) ≤ 0
-        
+
         a = intercept**2 - g_sq * se_intercept**2
         b = -(2 * intercept * coefficient - 2 * g_sq * cov)
         c = coefficient**2 - g_sq * se_coef**2
-        
+
         # Check if we have a valid quadratic (a ≈ 0 means denominator uncertainty dominates)
         if abs(a) < 1e-10:
             # Degenerate case: very large uncertainty in denominator
@@ -178,29 +180,29 @@ class Estimators:
                 "Consider increasing sample size or using absolute effects."
             )
             return (np.nan, np.nan)
-        
+
         # Solve quadratic equation: aθ² + bθ + c = 0
-        discriminant = b**2 - 4*a*c
-        
+        discriminant = b**2 - 4 * a * c
+
         if discriminant < 0:
             # No real solutions - this shouldn't happen for valid CIs
             # but can occur with numerical issues
             self._logger.warning("Fieller CI has no real solution (negative discriminant).")
             return (np.nan, np.nan)
-        
+
         sqrt_disc = np.sqrt(discriminant)
-        
+
         if a > 0:
             # Standard case: parabola opens upward, solutions give CI bounds
-            theta_lower = (-b - sqrt_disc) / (2*a)
-            theta_upper = (-b + sqrt_disc) / (2*a)
+            theta_lower = (-b - sqrt_disc) / (2 * a)
+            theta_upper = (-b + sqrt_disc) / (2 * a)
         else:
             # a < 0: parabola opens downward
             # The inequality is satisfied outside the roots
             # This means the CI is (−∞, theta1] ∪ [theta2, ∞)
             # This happens when denominator is very uncertain
-            theta1 = (-b + sqrt_disc) / (2*a)
-            theta2 = (-b - sqrt_disc) / (2*a)
+            theta1 = (-b + sqrt_disc) / (2 * a)
+            theta2 = (-b - sqrt_disc) / (2 * a)
             self._logger.warning(
                 f"Fieller CI is unbounded (two disjoint intervals). "
                 f"Point estimate {theta_hat:.4f} but CI cannot be properly bounded. "
@@ -211,7 +213,7 @@ class Estimators:
                 return (np.nan, theta1)
             else:
                 return (theta2, np.nan)
-        
+
         return (theta_lower, theta_upper)
 
     def linear_regression(
@@ -248,7 +250,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
-        
+
         # Compute Fieller CI for relative effect
         se_intercept = results.bse["Intercept"]
         cov_matrix = results.cov_params()
@@ -309,7 +311,7 @@ class Estimators:
         relative_effect = coefficient / abs(intercept) if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
-        
+
         # Compute Fieller CI for relative effect
         se_intercept = results.bse["Intercept"]
         cov_matrix = results.cov_params()
@@ -368,7 +370,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.std_errors[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
-        
+
         # Compute Fieller CI for relative effect
         se_intercept = results.std_errors["Intercept"]
         cov_matrix = results.cov
