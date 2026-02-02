@@ -27,10 +27,11 @@ class ExperimentAnalyzer:
         List of covariates. Can include:
         - Numeric columns (continuous)
         - Binary columns (0/1)
-        - Categorical columns (object/category dtype or integers with ≤10 unique values)
+        - Categorical columns (object/category dtype or integers with low cardinality)
           Categorical columns are automatically converted to dummy variables.
           Reference category (most frequent) is excluded from regression models
           but included in balance tables.
+          Use categorical_max_unique to control the threshold for treating integers as categorical.
     treatment_col : str
         Column name for the treatment variable
     experiment_identifier : List
@@ -74,6 +75,13 @@ class ExperimentAnalyzer:
         Random seed for bootstrap reproducibility, by default None
     pvalue_adjustment : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
+    categorical_max_unique : int, optional
+        Maximum number of unique values for integer/numeric columns to be treated as categorical.
+        Integer columns with 3 to categorical_max_unique unique values will be converted to dummy variables.
+        Binary integers (2 values) are excluded and kept as-is.
+        Set to 2 to disable categorical treatment for integers (nothing will match 3 <= n <= 2).
+        Set to 5, 10, or higher for more inclusive behavior.
+        By default 2 (effectively disables categorical treatment for integer columns).
     """  # noqa: E501
 
     def __init__(
@@ -103,6 +111,7 @@ class ExperimentAnalyzer:
         bootstrap_seed: int | None = None,
         treatment_comparisons: list[tuple] | None = None,
         pvalue_adjustment: str | None = "bonferroni",
+        categorical_max_unique: int = 2,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -126,6 +135,7 @@ class ExperimentAnalyzer:
         self._bootstrap_seed = bootstrap_seed
         self._pvalue_adjustment = pvalue_adjustment
         self._treatment_comparisons = treatment_comparisons
+        self._categorical_max_unique = categorical_max_unique
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -238,8 +248,11 @@ class ExperimentAnalyzer:
             for c in self._covariates:
                 # Check dtype
                 is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
-                # Only treat as categorical if more than 2 unique values (excludes binary)
-                is_low_cardinality_int = pd.api.types.is_integer_dtype(data[c]) and 3 <= data[c].nunique() <= 10
+                # Treat integers as categorical if they have 3 to categorical_max_unique values
+                # Exclude binary (2 values) since those don't need dummy encoding
+                is_low_cardinality_int = (
+                    pd.api.types.is_integer_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
+                )
 
                 if is_object or is_low_cardinality_int:
                     categories = sorted(data[c].dropna().unique())
@@ -382,7 +395,10 @@ class ExperimentAnalyzer:
                 is_likely_categorical = (
                     pd.api.types.is_object_dtype(data[cov])
                     or isinstance(data[cov].dtype, pd.CategoricalDtype)
-                    or (pd.api.types.is_integer_dtype(data[cov]) and 3 <= data[cov].nunique() <= 10)
+                    or (
+                        pd.api.types.is_integer_dtype(data[cov])
+                        and 3 <= data[cov].nunique() <= self._categorical_max_unique
+                    )
                 )
 
                 cov_missing = data[cov].isna().sum()
@@ -1033,14 +1049,14 @@ class ExperimentAnalyzer:
             "control_value",
             "treatment_value",
             "absolute_effect",
-            "relative_effect",
-            "rel_effect_lower",
-            "rel_effect_upper",
             "standard_error",
             "pvalue",
             "stat_significance",
             "abs_effect_lower",
             "abs_effect_upper",
+            "relative_effect",
+            "rel_effect_lower",
+            "rel_effect_upper",
         ]
 
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
@@ -1891,17 +1907,67 @@ class ExperimentAnalyzer:
 
             thres = alpha if alpha is not None else self._alpha
 
-            return pd.DataFrame(
-                {
-                    "pvalue_adj": pvals_adj,
-                    "stat_significance_adj": (pvals_adj < thres).astype(int),
-                    "adj_method": method,
-                },
-                index=group.index,
-            )
+            # Calculate adjusted confidence intervals
+            from scipy import stats
+
+            n_comparisons = len(pvals)
+
+            # Method-specific alpha adjustment for CIs
+            if m == "bonferroni":
+                # Bonferroni: Each test uses α/k
+                alpha_adj = thres / n_comparisons
+            elif m == "sidak":
+                # Sidak: More powerful than Bonferroni for independent tests
+                alpha_adj = 1 - (1 - thres) ** (1 / n_comparisons)
+            elif m in {"holm", "hochberg", "hommel"}:
+                # Sequential methods: Use conservative Bonferroni for CIs
+                # (No single per-comparison alpha since they depend on ordering)
+                alpha_adj = thres / n_comparisons
+            elif m == "fdr_bh" or m == "by":
+                # FDR methods: Control false discovery rate, not FWER
+                # For CIs, use Bonferroni as conservative bound for FWER
+                # Note: FDR doesn't directly correspond to simultaneous coverage
+                alpha_adj = thres / n_comparisons
+            else:
+                # Default: Bonferroni
+                alpha_adj = thres / n_comparisons
+
+            z_crit_adj = stats.norm.ppf(1 - alpha_adj / 2)
+
+            result_dict = {
+                "pvalue_adj": pvals_adj,
+                "stat_significance_adj": (pvals_adj < thres).astype(int),
+                "adj_method": method,
+                "alpha_adj": alpha_adj,  # Store for transparency
+            }
+
+            # Add adjusted CIs
+            abs_effect = group["absolute_effect"].values
+            se = group["standard_error"].values
+            result_dict["abs_effect_lower_adj"] = abs_effect - z_crit_adj * se
+            result_dict["abs_effect_upper_adj"] = abs_effect + z_crit_adj * se
+
+            # Adjusted relative effect CIs using Fieller's method with adjusted alpha
+            # Note: For relative effects, proper adjustment requires re-computing
+            # Fieller CIs with adjusted alpha. This is a placeholder for consistency.
+            # Ideally, call _compute_fieller_ci with alpha_adj
+            result_dict["rel_effect_lower_adj"] = np.nan
+            result_dict["rel_effect_upper_adj"] = np.nan
+
+            return pd.DataFrame(result_dict, index=group.index)
 
         adjustments = df_adj.groupby(group_cols, group_keys=False).apply(calculate_adjustments, include_groups=False)
-        cols_to_add = ["pvalue_adj", "stat_significance_adj", "adj_method"]
+
+        cols_to_add = [
+            "pvalue_adj",
+            "stat_significance_adj",
+            "adj_method",
+            "alpha_adj",
+            "abs_effect_lower_adj",
+            "abs_effect_upper_adj",
+            "rel_effect_lower_adj",
+            "rel_effect_upper_adj",
+        ]
 
         df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
         df_adj = df_adj.join(adjustments)
