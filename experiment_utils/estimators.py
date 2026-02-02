@@ -254,6 +254,13 @@ class Estimators:
         # Compute Fieller CI for relative effect
         se_intercept = results.bse["Intercept"]
         cov_matrix = results.cov_params()
+
+        # Extract covariance between treatment coefficient and intercept for future use
+        try:
+            cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+        except (KeyError, AttributeError):
+            cov_coef_intercept = 0.0
+
         rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
             coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
         )
@@ -271,6 +278,8 @@ class Estimators:
             "relative_effect": relative_effect,
             "rel_effect_lower": rel_effect_lower,
             "rel_effect_upper": rel_effect_upper,
+            "se_intercept": se_intercept,
+            "cov_coef_intercept": cov_coef_intercept,
         }
 
     def weighted_least_squares(
@@ -315,6 +324,13 @@ class Estimators:
         # Compute Fieller CI for relative effect
         se_intercept = results.bse["Intercept"]
         cov_matrix = results.cov_params()
+
+        # Extract covariance between treatment coefficient and intercept for future use
+        try:
+            cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+        except (KeyError, AttributeError):
+            cov_coef_intercept = 0.0
+
         rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
             coefficient, abs(intercept), standard_error, se_intercept, cov_matrix, self._alpha
         )
@@ -332,6 +348,8 @@ class Estimators:
             "relative_effect": relative_effect,
             "rel_effect_lower": rel_effect_lower,
             "rel_effect_upper": rel_effect_upper,
+            "se_intercept": se_intercept,
+            "cov_coef_intercept": cov_coef_intercept,
         }
 
     def iv_regression(
@@ -374,6 +392,17 @@ class Estimators:
         # Compute Fieller CI for relative effect
         se_intercept = results.std_errors["Intercept"]
         cov_matrix = results.cov
+
+        # Extract covariance between treatment coefficient and intercept for future use
+        try:
+            if isinstance(cov_matrix, np.ndarray):
+                # For IV regression, cov is numpy array - assume [Intercept, treatment_col, ...] order
+                cov_coef_intercept = cov_matrix[0, 1] if cov_matrix.shape[0] > 1 else 0.0
+            else:
+                cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+        except (KeyError, AttributeError, IndexError):
+            cov_coef_intercept = 0.0
+
         rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
             coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
         )
@@ -391,6 +420,8 @@ class Estimators:
             "relative_effect": relative_effect,
             "rel_effect_lower": rel_effect_lower,
             "rel_effect_upper": rel_effect_upper,
+            "se_intercept": se_intercept,
+            "cov_coef_intercept": cov_coef_intercept,
         }
 
     def ipw_logistic(
