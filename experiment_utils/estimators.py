@@ -265,12 +265,12 @@ class Estimators:
             "control_value": intercept,
             "treatment_value": intercept + coefficient,
             "absolute_effect": coefficient,
-            "relative_effect": relative_effect,
-            "rel_effect_lower": rel_effect_lower,
-            "rel_effect_upper": rel_effect_upper,
             "standard_error": standard_error,
             "pvalue": pvalue,
             "stat_significance": 1 if pvalue < self._alpha else 0,
+            "relative_effect": relative_effect,
+            "rel_effect_lower": rel_effect_lower,
+            "rel_effect_upper": rel_effect_upper,
         }
 
     def weighted_least_squares(
@@ -326,12 +326,12 @@ class Estimators:
             "control_value": intercept,
             "treatment_value": intercept + coefficient,
             "absolute_effect": coefficient,
-            "relative_effect": relative_effect,
-            "rel_effect_lower": rel_effect_lower,
-            "rel_effect_upper": rel_effect_upper,
             "standard_error": standard_error,
             "pvalue": pvalue,
             "stat_significance": 1 if pvalue < self._alpha else 0,
+            "relative_effect": relative_effect,
+            "rel_effect_lower": rel_effect_lower,
+            "rel_effect_upper": rel_effect_upper,
         }
 
     def iv_regression(
@@ -385,12 +385,12 @@ class Estimators:
             "control_value": intercept,
             "treatment_value": intercept + coefficient,
             "absolute_effect": coefficient,
-            "relative_effect": relative_effect,
-            "rel_effect_lower": rel_effect_lower,
-            "rel_effect_upper": rel_effect_upper,
             "standard_error": standard_error,
             "pvalue": pvalue,
             "stat_significance": 1 if pvalue < self._alpha else 0,
+            "relative_effect": relative_effect,
+            "rel_effect_lower": rel_effect_lower,
+            "rel_effect_upper": rel_effect_upper,
         }
 
     def ipw_logistic(

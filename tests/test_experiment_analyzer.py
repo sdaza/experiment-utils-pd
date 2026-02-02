@@ -253,6 +253,7 @@ def test_categorical_covariates_comprehensive():
         outcomes=["outcome"],
         treatment_col="treatment",
         covariates=["region", "segment", "status", "income", "has_feature"],
+        categorical_max_unique=10,  # Treat integers with ≤10 unique values as categorical
     )
 
     exp.get_effects()
