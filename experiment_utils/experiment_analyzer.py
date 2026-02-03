@@ -168,7 +168,7 @@ class ExperimentAnalyzer:
         if (len(self._covariates) == 0) & (len(self._regression_covariates) > 0):
             self._covariates = self._regression_covariates
 
-        # Check for categorical columns that will be automatically converted to dummies
+        # check for categorical columns that will be automatically converted to dummies
         string_cols = [c for c in self._covariates if pd.api.types.is_string_dtype(self._data[c])]
         if string_cols:
             self._logger.info(f"Detected categorical covariates (will create dummies): {string_cols}")
@@ -184,7 +184,6 @@ class ExperimentAnalyzer:
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
-        # check if all required columns are present
         required_columns = (
             self._experiment_identifier
             + [self._treatment_col]
@@ -204,7 +203,6 @@ class ExperimentAnalyzer:
         if len(self._covariates) == 0:
             self._logger.warning("No covariates specified, balance can't be assessed!")
 
-        # Select only required columns using pandas indexing
         self._data = self._data[required_columns]
 
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
@@ -246,10 +244,10 @@ class ExperimentAnalyzer:
         categorical_info = {}
         if self._covariates is not None:
             for c in self._covariates:
-                # Check dtype
                 is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
-                # Treat integers as categorical if they have 3 to categorical_max_unique values
-                # Exclude binary (2 values) since those don't need dummy encoding
+
+                # treat integers as categorical if they have 3 to categorical_max_unique values
+                # exclude binary (2 values) since those don't need dummy encoding
                 is_low_cardinality_int = (
                     pd.api.types.is_integer_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
                 )
@@ -296,9 +294,7 @@ class ExperimentAnalyzer:
         def _clean_category_name(cat):
             """Convert category to lowercase and replace spaces/special chars with underscores"""
             cat_str = str(cat).lower()
-            # Replace spaces and special characters with underscores
             cat_str = re.sub(r"[^\w]+", "_", cat_str)
-            # Remove leading/trailing underscores
             cat_str = cat_str.strip("_")
             return cat_str
 
@@ -306,24 +302,20 @@ class ExperimentAnalyzer:
         reference_map = {}
 
         for covariate, categories in categorical_info.items():
-            # Determine reference category
             if reference_categories and covariate in reference_categories:
                 ref_cat = reference_categories[covariate]
                 if ref_cat not in categories:
                     self._logger.warning(f"Reference category {ref_cat} not found in {covariate}, using most frequent")
                     ref_cat = data[covariate].value_counts().idxmax()
             else:
-                # Use most frequent as reference
                 ref_cat = data[covariate].value_counts().idxmax()
 
             reference_map[covariate] = ref_cat
 
-            # Create dummies
             for cat in categories:
                 if not include_reference and cat == ref_cat:
-                    continue  # Skip reference for models
+                    continue
 
-                # Clean category name: lowercase, replace spaces/special chars with _
                 cat_clean = _clean_category_name(cat)
                 dummy_col = f"{covariate}_{cat_clean}"
                 data[dummy_col] = (data[covariate] == cat).astype(int)
@@ -373,7 +365,6 @@ class ExperimentAnalyzer:
         rows_dropped = 0
         missing_info = []
 
-        # 1. Handle missing treatment values (CRITICAL - must drop)
         treatment_missing = data[self._treatment_col].isna().sum()
         if treatment_missing > 0:
             pct_missing = (treatment_missing / original_n) * 100
@@ -385,13 +376,11 @@ class ExperimentAnalyzer:
             rows_dropped += treatment_missing
             missing_info.append(f"treatment: {treatment_missing} rows")
 
-        # 2. Handle missing values in categorical covariates
         if self._covariates:
             for cov in self._covariates:
                 if cov not in data.columns:
                     continue
 
-                # Check if it's likely categorical (object dtype or low cardinality int)
                 is_likely_categorical = (
                     pd.api.types.is_object_dtype(data[cov])
                     or isinstance(data[cov].dtype, pd.CategoricalDtype)
@@ -597,17 +586,15 @@ class ExperimentAnalyzer:
             "IV": self._estimator.iv_regression,
         }
 
-        # Use Estimators.get_balance_method for modularity
         get_balance_method = self._estimator.get_balance_method
 
         temp_results = []
-        output = {}  # Ensure output is always defined for error handling
+        output = {}
         weights_list = []
 
         if adjustment is None:
             adjustment = self._adjustment
 
-        # Allow overriding bootstrap setting for this call
         if bootstrap is not None:
             original_bootstrap = self._bootstrap
             self._bootstrap = bootstrap
@@ -628,7 +615,6 @@ class ExperimentAnalyzer:
                 self._logger.info(f"P-value adjustment: {self._pvalue_adjustment}")
             final_covariates = []
 
-            # Handle missing data in treatment and categorical covariates
             temp_pd, missing_summary = self.__handle_missing_data(temp_pd)
             if missing_summary["rows_dropped"] > 0:
                 self._logger.warning(
@@ -636,7 +622,6 @@ class ExperimentAnalyzer:
                     f"({missing_summary['pct_dropped']:.1f}% of data)"
                 )
 
-            # Detect and create dummy variables for categoricals
             categorical_info = self.__get_categorical_covariates(data=temp_pd)
             dummy_map = {}
             ref_map = {}
@@ -644,11 +629,10 @@ class ExperimentAnalyzer:
 
             if categorical_info:
                 categorical_col_names = set(categorical_info.keys())
-                # Create dummies for models (exclude reference)
                 temp_pd, dummy_map, ref_map = self.__create_dummy_variables(
                     data=temp_pd,
                     categorical_info=categorical_info,
-                    reference_categories=None,  # Could be parameter later
+                    reference_categories=None,
                     include_reference=False,
                 )
                 self._logger.info(
@@ -657,11 +641,9 @@ class ExperimentAnalyzer:
                 for cov, ref in ref_map.items():
                     self._logger.info(f"  {cov}: reference category = {ref}")
 
-            # Classify covariates (now including dummies as binary, excluding original categoricals)
             numeric_covariates = self.__get_numeric_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
             binary_covariates = self.__get_binary_covariates(data=temp_pd, exclude_categoricals=categorical_col_names)
 
-            # Add dummy variables to binary covariates list (dummies are binary by definition)
             if dummy_map:
                 binary_covariates.extend(list(dummy_map.keys()))
 
@@ -670,29 +652,24 @@ class ExperimentAnalyzer:
                 self._logger.warning(f"Skipping {experiment_tuple} as there are not enough treatment groups!")
                 continue
 
-            # Get comparison pairs (handles both binary and categorical treatments)
             comparison_pairs = self.__get_comparison_pairs(treatvalues, temp_pd)
             if not comparison_pairs:
                 self._logger.warning(f"Skipping {experiment_tuple} as no valid comparison pairs were found!")
                 continue
 
-            # Loop over comparison pairs for categorical treatments
             for treatment_val, control_val in comparison_pairs:
                 self._logger.info(f"Processing comparison: {treatment_val} vs {control_val}")
 
-                # Filter data to only include the treatment and control groups for this comparison
                 comparison_data = temp_pd[temp_pd[self._treatment_col].isin([treatment_val, control_val])].copy()
 
                 if comparison_data.empty:
                     self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
                     continue
 
-                # Create binary treatment indicator (1 for treatment_val, 0 for control_val)
                 comparison_data[self._treatment_col] = (comparison_data[self._treatment_col] == treatment_val).astype(
                     int
                 )
 
-                # Calculate sample ratio for this comparison
                 sample_ratio, srm_detected, srm_pvalue = self.__check_sample_ratio_mismatch(comparison_data)
 
                 comparison_data = self.impute_missing_values(
@@ -701,12 +678,10 @@ class ExperimentAnalyzer:
                     bin_covariates=binary_covariates,
                 )
 
-                # remove constant or low frequency covariates for this comparison
                 comp_numeric_covariates = [c for c in numeric_covariates if comparison_data[c].std(ddof=0) != 0]
                 comp_binary_covariates = [c for c in binary_covariates if comparison_data[c].sum() >= min_binary_count]
                 comp_binary_covariates = [c for c in comp_binary_covariates if comparison_data[c].std(ddof=0) != 0]
 
-                # Track which covariates were removed and why
                 removed_numeric_var = set(numeric_covariates) - set(comp_numeric_covariates)
                 removed_binary_freq = [c for c in binary_covariates if comparison_data[c].sum() < min_binary_count]
                 removed_binary_var = [
@@ -716,7 +691,6 @@ class ExperimentAnalyzer:
                 final_covariates = comp_numeric_covariates + comp_binary_covariates
                 self._final_covariates = final_covariates
 
-                # Log detailed information about removed covariates
                 if removed_numeric_var or removed_binary_freq or removed_binary_var:
                     self._logger.warning(f"Removed covariates for comparison {treatment_val} vs {control_val}:")
                     if removed_numeric_var:
@@ -735,11 +709,9 @@ class ExperimentAnalyzer:
                 balance = pd.DataFrame()
                 adjusted_balance = pd.DataFrame()
 
-                # Calculate balance if we have valid covariates OR categorical variables (which have dummies)
                 if len(final_covariates) > 0 or categorical_info:
                     comparison_data["weights"] = 1
 
-                    # For balance: add reference category dummies back in
                     if categorical_info:
                         comparison_data_balance = comparison_data.copy()
                         comparison_data_balance, _, _ = self.__create_dummy_variables(
@@ -749,11 +721,8 @@ class ExperimentAnalyzer:
                             include_reference=True,  # Include all for balance
                         )
 
-                        # Get all dummy column names for balance (including reference categories)
-                        # Start with final_covariates that passed filtering
                         balance_covariates = []
 
-                        # Add all dummies that would pass filtering (including reference)
                         for cov in categorical_info.keys():
                             for cat in categorical_info[cov]:
                                 dummy_col = f"{cov}_{cat}"
@@ -763,19 +732,16 @@ class ExperimentAnalyzer:
                                         if comparison_data_balance[dummy_col].std(ddof=0) != 0:
                                             balance_covariates.append(dummy_col)
 
-                        # Add non-categorical covariates that passed filtering
                         for cov in final_covariates:
                             if cov not in balance_covariates:
                                 balance_covariates.append(cov)
 
-                        # Only calculate balance if we have valid covariates after filtering
                         if balance_covariates:
                             comparison_data_balance = self.standardize_covariates(
                                 comparison_data_balance, balance_covariates
                             )
                             balance = self.calculate_smd(data=comparison_data_balance, covariates=balance_covariates)
 
-                        # Standardize comparison_data for balance adjustment (only in categorical path)
                         if len(final_covariates) > 0:
                             comparison_data = self.standardize_covariates(comparison_data, final_covariates)
                     else:
@@ -836,7 +802,7 @@ class ExperimentAnalyzer:
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
 
-                # Save weights for this experiment when balance adjustment is used
+                # save weights for this experiment when balance adjustment is used
                 if len(final_covariates) > 0 and adjustment == "balance":
                     weight_col = self._target_weights[self._target_effect]
                     if weight_col in comparison_data.columns:
@@ -872,14 +838,12 @@ class ExperimentAnalyzer:
                     adjustment_label = "no adjustment"
 
                 for outcome in self._outcomes:
-                    # Ensure outcome column is numeric
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
                         self._logger.warning(
                             f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. "
                             f"Skipping."
                         )
                         continue
-                    # Ensure outcome has variance
                     if comparison_data[outcome].var() == 0:
                         self._logger.warning(
                             f"Outcome '{outcome}' has zero variance for comparison {treatment_val} vs {control_val}. "
@@ -889,7 +853,6 @@ class ExperimentAnalyzer:
 
                     try:
                         if adjustment == "balance":
-                            # Use correct target_effect for weight column
                             weight_col = self._target_weights[self._target_effect]
                             if weight_col not in comparison_data.columns:
                                 log_and_raise_error(
@@ -911,7 +874,6 @@ class ExperimentAnalyzer:
                                 data=comparison_data, outcome_variable=outcome, covariates=list(relevant_covariates)
                             )
 
-                        # Bootstrap inference if requested
                         if self._bootstrap:
                             self._logger.info(
                                 f"Running bootstrap for outcome '{outcome}' with "
@@ -999,7 +961,6 @@ class ExperimentAnalyzer:
                         self._logger.error(
                             f"Error processing outcome '{outcome}' for comparison {treatment_val} vs {control_val} with adjustment '{adjustment_label}': {e}"  # noqa: E501
                         )  # noqa: E501
-                        # Optionally append a row with NaNs or skip
                         error_output = {
                             "outcome": outcome,
                             "adjustment": adjustment_label,
@@ -1599,12 +1560,12 @@ class ExperimentAnalyzer:
                 "rel_effect_upper": np.nan,
             }
 
-        # Remove NaN values
-        valid_idx = ~(np.isnan(bootstrap_abs_effects) | np.isnan(bootstrap_rel_effects))
-        bootstrap_abs_effects = bootstrap_abs_effects[valid_idx]
-        bootstrap_rel_effects = bootstrap_rel_effects[valid_idx]
+        valid_abs_idx = ~np.isnan(bootstrap_abs_effects)
+        valid_rel_idx = ~np.isnan(bootstrap_rel_effects)
+        bootstrap_abs_effects_clean = bootstrap_abs_effects[valid_abs_idx]
+        bootstrap_rel_effects_clean = bootstrap_rel_effects[valid_rel_idx]
 
-        if len(bootstrap_abs_effects) == 0:
+        if len(bootstrap_abs_effects_clean) == 0:
             return {
                 "standard_error": np.nan,
                 "pvalue": np.nan,
@@ -1614,34 +1575,41 @@ class ExperimentAnalyzer:
                 "rel_effect_upper": np.nan,
             }
 
-        # Calculate bootstrap standard error (for absolute effect)
-        bootstrap_se = np.std(bootstrap_abs_effects, ddof=1)
+        bootstrap_se = np.std(bootstrap_abs_effects_clean, ddof=1)
 
-        # Confidence intervals for absolute effect
         alpha = self._alpha
         if self._bootstrap_ci_method == "percentile":
-            abs_ci_lower = np.percentile(bootstrap_abs_effects, alpha / 2 * 100)
-            abs_ci_upper = np.percentile(bootstrap_abs_effects, (1 - alpha / 2) * 100)
+            abs_ci_lower = np.percentile(bootstrap_abs_effects_clean, alpha / 2 * 100)
+            abs_ci_upper = np.percentile(bootstrap_abs_effects_clean, (1 - alpha / 2) * 100)
             # Relative effect CI from bootstrap distribution
-            rel_ci_lower = np.percentile(bootstrap_rel_effects, alpha / 2 * 100)
-            rel_ci_upper = np.percentile(bootstrap_rel_effects, (1 - alpha / 2) * 100)
+            if len(bootstrap_rel_effects_clean) > 0:
+                rel_ci_lower = np.percentile(bootstrap_rel_effects_clean, alpha / 2 * 100)
+                rel_ci_upper = np.percentile(bootstrap_rel_effects_clean, (1 - alpha / 2) * 100)
+            else:
+                rel_ci_lower = np.nan
+                rel_ci_upper = np.nan
         elif self._bootstrap_ci_method == "basic":
             # Basic bootstrap CI
-            abs_ci_lower = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects, (1 - alpha / 2) * 100)
-            abs_ci_upper = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects, alpha / 2 * 100)
-            rel_ci_lower = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects, (1 - alpha / 2) * 100)
-            rel_ci_upper = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects, alpha / 2 * 100)
+            abs_ci_lower = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects_clean, (1 - alpha / 2) * 100)
+            abs_ci_upper = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects_clean, alpha / 2 * 100)
+            if len(bootstrap_rel_effects_clean) > 0:
+                rel_ci_lower = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects_clean, (1 - alpha / 2) * 100)
+                rel_ci_upper = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects_clean, alpha / 2 * 100)
+            else:
+                rel_ci_lower = np.nan
+                rel_ci_upper = np.nan
         else:
-            # Default to percentile
-            abs_ci_lower = np.percentile(bootstrap_abs_effects, alpha / 2 * 100)
-            abs_ci_upper = np.percentile(bootstrap_abs_effects, (1 - alpha / 2) * 100)
-            rel_ci_lower = np.percentile(bootstrap_rel_effects, alpha / 2 * 100)
-            rel_ci_upper = np.percentile(bootstrap_rel_effects, (1 - alpha / 2) * 100)
+            abs_ci_lower = np.percentile(bootstrap_abs_effects_clean, alpha / 2 * 100)
+            abs_ci_upper = np.percentile(bootstrap_abs_effects_clean, (1 - alpha / 2) * 100)
+            if len(bootstrap_rel_effects_clean) > 0:
+                rel_ci_lower = np.percentile(bootstrap_rel_effects_clean, alpha / 2 * 100)
+                rel_ci_upper = np.percentile(bootstrap_rel_effects_clean, (1 - alpha / 2) * 100)
+            else:
+                rel_ci_lower = np.nan
+                rel_ci_upper = np.nan
 
-        # P-value (two-sided) - based on absolute effect
-        # Count how many bootstrap effects are as extreme as observed
         pvalue = (
-            np.mean(np.abs(bootstrap_abs_effects - np.mean(bootstrap_abs_effects)) >= np.abs(observed_abs_effect)) * 2
+            np.mean(np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean)) >= np.abs(observed_abs_effect)) * 2
         )
         pvalue = min(pvalue, 1.0)  # Ensure p-value doesn't exceed 1
 
@@ -1735,7 +1703,6 @@ class ExperimentAnalyzer:
         """
         import itertools
 
-        # If user provided specific comparisons, use those
         if self._treatment_comparisons is not None:
             valid_pairs = []
             for treatment_val, control_val in self._treatment_comparisons:
@@ -1747,12 +1714,9 @@ class ExperimentAnalyzer:
                     )
             return valid_pairs
 
-        # For binary 0/1 treatment, return single comparison
         if treatvalues == {0, 1}:
             return [(1, 0)]
 
-        # For categorical treatments, generate all pairwise comparisons
-        # Sort to ensure consistent ordering
         sorted_values = sorted(list(treatvalues))
         pairs = list(itertools.combinations(sorted_values, 2))
         # Return as (higher, lower) for each pair
@@ -1906,24 +1870,19 @@ class ExperimentAnalyzer:
         """
         from scipy import stats
 
-        # Handle edge cases
         if intercept == 0 or abs(intercept) < 1e-10:
             return (np.nan, np.nan)
 
-        # Critical value with adjusted alpha
         z_crit = stats.norm.ppf(1 - alpha / 2)
         g_sq = z_crit**2
 
-        # Fieller's quadratic coefficients
         a = intercept**2 - g_sq * se_intercept**2
         b = -(2 * intercept * coefficient - 2 * g_sq * cov)
         c = coefficient**2 - g_sq * se_coef**2
 
-        # Check if valid quadratic
         if abs(a) < 1e-10:
             return (np.nan, np.nan)
 
-        # Solve quadratic
         discriminant = b**2 - 4 * a * c
 
         if discriminant < 0:
@@ -1933,15 +1892,10 @@ class ExperimentAnalyzer:
         root1 = (-b - sqrt_disc) / (2 * a)
         root2 = (-b + sqrt_disc) / (2 * a)
 
-        # Determine bounds based on sign of a
         if a > 0:
-            # Normal case: interval is between roots
             ci_lower = min(root1, root2)
             ci_upper = max(root1, root2)
         else:
-            # Unusual case: interval is outside roots
-            # This can happen with very high uncertainty
-            # Return unbounded or use point estimate bounds
             return (np.nan, np.nan)
 
         return (ci_lower, ci_upper)
@@ -2019,7 +1973,6 @@ class ExperimentAnalyzer:
         if not all(col in df.columns for col in group_cols):
             log_and_raise_error(self._logger, f"Grouping columns {group_cols} not found in results.")
 
-        # Use df.index to ensure proper alignment when filtering
         mask = pd.Series([True] * len(df), index=df.index)
         if outcomes is not None:
             mask &= df["outcome"].isin(outcomes)
@@ -2043,23 +1996,17 @@ class ExperimentAnalyzer:
 
             thres = alpha if alpha is not None else self._alpha
 
-            # Calculate adjusted confidence intervals
             from scipy import stats
 
             n_comparisons = len(pvals)
 
-            # Method-specific alpha adjustment for CIs
             if m == "bonferroni":
-                # Bonferroni: Each test uses α/k
                 alpha_ci = thres / n_comparisons
                 ci_note = f"Using Bonferroni α/k = {alpha_ci:.6f} for {n_comparisons} comparisons"
             elif m == "sidak":
-                # Sidak: More powerful than Bonferroni for independent tests
                 alpha_ci = 1 - (1 - thres) ** (1 / n_comparisons)
                 ci_note = f"Using Sidak 1-(1-α)^(1/k) = {alpha_ci:.6f} for {n_comparisons} comparisons"
             elif m in {"holm", "hochberg", "hommel"}:
-                # Sequential methods: Use conservative Bonferroni for CIs
-                # (No single per-comparison alpha since they depend on ordering)
                 alpha_ci = thres / n_comparisons
                 ci_note = (
                     f"Using conservative Bonferroni α/k = {alpha_ci:.6f} for CIs "
@@ -2067,9 +2014,6 @@ class ExperimentAnalyzer:
                 )
                 self._logger.warning(ci_note)
             elif m == "fdr_bh" or m == "by":
-                # FDR methods: Control false discovery rate, not FWER
-                # For CIs, use Bonferroni as conservative bound for FWER
-                # Note: FDR doesn't directly correspond to simultaneous coverage
                 alpha_ci = thres / n_comparisons
                 ci_note = (
                     f"Using conservative Bonferroni α/k = {alpha_ci:.6f} for CIs "
@@ -2077,7 +2021,6 @@ class ExperimentAnalyzer:
                 )
                 self._logger.warning(ci_note)
             else:
-                # Default: Bonferroni
                 alpha_ci = thres / n_comparisons
                 ci_note = f"Using default Bonferroni α/k = {alpha_ci:.6f}"
 
@@ -2089,14 +2032,11 @@ class ExperimentAnalyzer:
                 "mcp_method": method,
             }
 
-            # Add adjusted absolute effect CIs
             abs_effect = group["absolute_effect"].values
             se = group["standard_error"].values
             result_dict["abs_effect_lower_mcp"] = abs_effect - z_crit_adj * se
             result_dict["abs_effect_upper_mcp"] = abs_effect + z_crit_adj * se
 
-            # Compute adjusted relative effect CIs using stored covariance information
-            # Check if necessary columns exist
             if "se_intercept" in group.columns and "cov_coef_intercept" in group.columns:
                 rel_lower_adj = []
                 rel_upper_adj = []
@@ -2108,7 +2048,6 @@ class ExperimentAnalyzer:
                     se_int = group["se_intercept"].values[idx]
                     cov = group["cov_coef_intercept"].values[idx]
 
-                    # Compute Fieller CI with adjusted alpha
                     rel_ci_lower, rel_ci_upper = self._compute_fieller_ci_adjusted(
                         coef, intercept, se_coef, se_int, cov, alpha_ci
                     )
@@ -2118,13 +2057,11 @@ class ExperimentAnalyzer:
                 result_dict["rel_effect_lower_mcp"] = rel_lower_adj
                 result_dict["rel_effect_upper_mcp"] = rel_upper_adj
             else:
-                # Fallback if covariance info not available
                 result_dict["rel_effect_lower_mcp"] = np.nan
                 result_dict["rel_effect_upper_mcp"] = np.nan
 
             return pd.DataFrame(result_dict, index=group.index)
 
-        # Log info about relative CIs computation (not per group)
         if "se_intercept" in df_adj.columns and "cov_coef_intercept" in df_adj.columns:
             self._logger.info(
                 "Computing adjusted relative effect CIs using Fieller's method with adjusted alpha. "
@@ -2152,7 +2089,6 @@ class ExperimentAnalyzer:
 
         df_adj = df_adj.drop(columns=cols_to_add, errors="ignore")
         df_adj = df_adj.join(adjustments)
-        # Preserve original row order by keeping original indices
         df_final = pd.concat([df_adj, df_rest]).sort_index()
         self._results = df_final
 
@@ -2170,6 +2106,7 @@ class ExperimentAnalyzer:
         - Power: probability of achieving statistical significance given true effect
         - Type S error: probability of getting the wrong sign (sign error rate)
         - Type M error: expected exaggeration ratio (magnitude error)
+        - Relative bias: expected bias ratio preserving signs (Jaksic et al. 2026)
 
         The exaggeration ratio tells you how much the effect size is expected to be
         overestimated when you get a statistically significant result from an
@@ -2328,55 +2265,37 @@ class ExperimentAnalyzer:
                 type_m = np.nan
                 relative_bias = np.nan
             else:
-                # Power: P(|Z| > z_crit | true effect)
-                # Z ~ N(true_effect/se, 1)
                 noncentrality = te / se
                 power = 1 - (stats.norm.cdf(z_crit - noncentrality) - stats.norm.cdf(-z_crit - noncentrality))
 
-                # Type S error: P(sign error | significant)
-                # This is the probability of getting opposite sign when significant
                 if te == 0:
                     type_s = 0.5  # Equally likely to be positive or negative
                 else:
-                    # P(Z < -z_crit | true effect) / P(|Z| > z_crit | true effect)
                     prob_wrong_sign = stats.norm.cdf(-z_crit - noncentrality)
                     type_s = prob_wrong_sign / power if power > 0 else np.nan
 
-                # Calculate tail probabilities and expected values (used for both Type M and relative bias)
                 upper_tail = 1 - stats.norm.cdf(z_crit - noncentrality)
                 lower_tail = stats.norm.cdf(-z_crit - noncentrality)
 
-                # Type M error: E[|estimate| / |true_effect| | significant]
-                # Expected exaggeration ratio (uses absolute values)
                 if te == 0:
                     type_m = np.inf
                     relative_bias = np.inf
                 else:
                     if power > 0:
-                        # Expected value in upper tail: E[Z | Z > z_crit]
-                        # = mu + phi(z_crit - mu) / (1 - Phi(z_crit - mu))
                         if upper_tail > 0:
                             e_upper = noncentrality + stats.norm.pdf(z_crit - noncentrality) / upper_tail
                         else:
                             e_upper = 0
 
-                        # Expected value in lower tail: E[Z | Z < -z_crit]
-                        # = mu - phi(-z_crit - mu) / Phi(-z_crit - mu)
                         if lower_tail > 0:
                             e_lower = noncentrality - stats.norm.pdf(-z_crit - noncentrality) / lower_tail
                         else:
                             e_lower = 0
 
-                        # Type M error: weighted average of ABSOLUTE values
-                        # E[|Z| | |Z| > z_crit]
                         expected_abs_z = (upper_tail * abs(e_upper) + lower_tail * abs(e_lower)) / power
                         expected_abs_estimate = expected_abs_z * se
                         type_m = abs(expected_abs_estimate / te)
 
-                        # Relative bias: weighted average PRESERVING signs
-                        # E[Z | |Z| > z_crit] - this is the key difference from Type M
-                        # Negative significant results (Type S errors) pull down the average
-                        # Reference: Jaksic et al. (2026) Global Epidemiology
                         expected_z_signed = (upper_tail * e_upper + lower_tail * e_lower) / power
                         expected_estimate_signed = expected_z_signed * se
                         relative_bias = expected_estimate_signed / te
@@ -2393,7 +2312,6 @@ class ExperimentAnalyzer:
                 }
             )
 
-        # Add new columns to filtered dataframe (true_effect already exists in df_filtered)
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
 

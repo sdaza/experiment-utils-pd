@@ -84,7 +84,6 @@ class EntropyBalance:
         else:
             raise ValueError("Invalid Estimand. Choose from 'ATE', 'ATT', 'ATC'.")
 
-        # Use boolean masks for fast indexing
         control_mask = TA_np == 0
         treated_mask = TA_np == 1
         initial_params = np.zeros(XD.shape[1])
@@ -99,7 +98,6 @@ class EntropyBalance:
 
         self.W = base_weights.copy() if not np.shares_memory(base_weights, X_np) else np.array(base_weights)
 
-        # Parallelize if both minimizations are needed (ATE)
         if estimand_upper == "ATE":
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 fut0 = executor.submit(
