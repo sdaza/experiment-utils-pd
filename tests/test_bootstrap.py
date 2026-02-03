@@ -277,12 +277,12 @@ class TestBootstrapInference:
 
         # Check that relative CI bounds make sense
         assert results["rel_effect_lower"].values[0] < results["rel_effect_upper"].values[0]
-        
+
         # Relative effect should be within the CI bounds (approximately)
         rel_effect = results["relative_effect"].values[0]
         rel_lower = results["rel_effect_lower"].values[0]
         rel_upper = results["rel_effect_upper"].values[0]
-        
+
         # Allow for some numerical tolerance
         assert rel_lower <= rel_effect * 1.01 or rel_effect <= rel_lower * 1.01
         assert rel_effect <= rel_upper * 1.01 or rel_upper <= rel_effect * 1.01

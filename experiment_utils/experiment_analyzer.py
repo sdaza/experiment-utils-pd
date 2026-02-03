@@ -1593,7 +1593,9 @@ class ExperimentAnalyzer:
             abs_ci_lower = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects_clean, (1 - alpha / 2) * 100)
             abs_ci_upper = 2 * observed_abs_effect - np.percentile(bootstrap_abs_effects_clean, alpha / 2 * 100)
             if len(bootstrap_rel_effects_clean) > 0:
-                rel_ci_lower = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects_clean, (1 - alpha / 2) * 100)
+                rel_ci_lower = 2 * observed_rel_effect - np.percentile(
+                    bootstrap_rel_effects_clean, (1 - alpha / 2) * 100
+                )
                 rel_ci_upper = 2 * observed_rel_effect - np.percentile(bootstrap_rel_effects_clean, alpha / 2 * 100)
             else:
                 rel_ci_lower = np.nan
@@ -1609,7 +1611,11 @@ class ExperimentAnalyzer:
                 rel_ci_upper = np.nan
 
         pvalue = (
-            np.mean(np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean)) >= np.abs(observed_abs_effect)) * 2
+            np.mean(
+                np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean))
+                >= np.abs(observed_abs_effect)
+            )
+            * 2
         )
         pvalue = min(pvalue, 1.0)  # Ensure p-value doesn't exceed 1
 
