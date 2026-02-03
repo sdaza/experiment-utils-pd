@@ -1328,5 +1328,3 @@ Balance checking is crucial for assessing randomization quality:
    - analyzer.adjusted_balance: Shows SMDs after weighting
    - Compare before/after to assess adjustment effectiveness
 """)
-
-# %%

@@ -1134,23 +1134,19 @@ class PowerSim:
         ...     correction='none'  # Override instance correction
         ... )
         """
-        # Handle correction override
         original_correction = None
         if correction is not None:
             original_correction = self.correction
             self.correction = correction
 
-        # Set default values and handle scalar inputs
         if baseline is None:
             baseline = [1.0]
         elif isinstance(baseline, int | float):
-            # Single value - apply to all groups (control + variants)
             baseline = [float(baseline)] * (self.variants + 1)
 
         if effect is None:
             effect = [0.10]
         elif isinstance(effect, int | float):
-            # Single value - apply to all variants
             effect = [float(effect)] * self.variants
 
         if compliance is None:
@@ -1158,22 +1154,17 @@ class PowerSim:
         if standard_deviation is None:
             standard_deviation = [1]
 
-        # Default to equal allocation across all groups
         num_groups = self.variants + 1
         if allocation_ratio is None or optimize_allocation:
-            # Check if control (group 0) is needed for any target comparison
             target_comps = target_comparisons if target_comparisons is not None else self.comparisons
             control_needed = any(0 in comp for comp in target_comps)
 
             if not control_needed:
-                # Control not needed - allocate equally among variants only
                 variant_allocation = 1.0 / self.variants
                 allocation_ratio = [0.0] + [variant_allocation] * self.variants
             else:
-                # Equal allocation across all groups
                 allocation_ratio = [1.0 / num_groups] * num_groups
 
-        # Validate allocation_ratio (unless optimizing)
         if not optimize_allocation:
             if len(allocation_ratio) != num_groups:
                 log_and_raise_error(
@@ -1184,11 +1175,9 @@ class PowerSim:
             if not np.isclose(sum(allocation_ratio), 1.0):
                 log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
 
-            # Allow zero allocation for groups not used in any target comparison
             if any(r < 0 for r in allocation_ratio):
                 log_and_raise_error(self.logger, "All allocation_ratio values must be non-negative")
 
-            # Check that groups used in comparisons have positive allocation
             target_comps = target_comparisons if target_comparisons is not None else self.comparisons
             groups_used = set()
             for g1, g2 in target_comps:
@@ -1201,11 +1190,9 @@ class PowerSim:
                         self.logger, f"Group {group} is used in target_comparisons but has zero allocation"
                     )
 
-        # Handle target_comparisons
         if target_comparisons is None:
             target_comparisons = self.comparisons
         else:
-            # Normalize comparison order (always smaller group first)
             normalized_comps = []
             for g1, g2 in target_comparisons:
                 if g1 > g2:
@@ -1216,7 +1203,6 @@ class PowerSim:
                     normalized_comps.append((g1, g2))
             target_comparisons = normalized_comps
 
-            # Validate that target_comparisons are in self.comparisons
             invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
             if invalid_comps:
                 log_and_raise_error(
@@ -1224,27 +1210,21 @@ class PowerSim:
                     f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
                 )
 
-        # Validate power_criteria
         if power_criteria not in ["all", "any"]:
             log_and_raise_error(self.logger, "power_criteria must be 'all' or 'any'")
 
-        # Handle target_power - can be single value or dict
         if isinstance(target_power, dict):
-            # Validate dict keys are tuples in target_comparisons
             invalid_keys = [k for k in target_power.keys() if k not in target_comparisons]
             if invalid_keys:
                 log_and_raise_error(self.logger, f"target_power dict contains invalid comparisons: {invalid_keys}")
-            # Validate all values are valid probabilities
             if any(not (0 < p < 1) for p in target_power.values()):
                 log_and_raise_error(self.logger, "All target_power values must be between 0 and 1")
             power_dict = target_power
         else:
-            # Single value - validate and apply to all target comparisons
             if not 0 < target_power < 1:
                 log_and_raise_error(self.logger, "target_power must be between 0 and 1")
             power_dict = {comp: target_power for comp in target_comparisons}
 
-        # If optimize_allocation is True, find optimal allocation
         if optimize_allocation:
             allocation_ratio = self._optimize_allocation(
                 power_dict=power_dict,
@@ -1262,7 +1242,6 @@ class PowerSim:
 
         results = []
 
-        # Helper function to get analytical approximation for sample size
         def _get_analytical_sample_size(metric, baseline_val, effect_val, sd_val, target_power, alpha, allocation):
             """Get analytical sample size estimate for initial guess."""
             from scipy.stats import norm
@@ -1525,16 +1504,13 @@ class PowerSim:
                 }
             )
 
-        # Determine final sample size based on power_criteria
         df_results = pd.DataFrame(results)
 
         if power_criteria == "all":
-            # Find the maximum sample size needed (most conservative)
             max_sample_idx = df_results["total_sample_size"].idxmax()
             max_sample_size_needed = df_results.loc[max_sample_idx, "total_sample_size"]
             limiting_comparison = df_results.loc[max_sample_idx, "comparison"]
 
-            # Log if using larger sample size than some comparisons need
             min_sample_needed = df_results["total_sample_size"].min()
             if max_sample_size_needed > min_sample_needed * 1.1:  # >10% difference
                 self.logger.info(
@@ -1542,14 +1518,11 @@ class PowerSim:
                     f"to ensure ALL comparisons meet target power. "
                     f"Some comparisons will exceed their target power."
                 )
-        else:  # power_criteria == "any"
-            # Find the minimum sample size needed (least conservative)
+        else:
             max_sample_idx = df_results["total_sample_size"].idxmin()
             max_sample_size_needed = df_results.loc[max_sample_idx, "total_sample_size"]
             limiting_comparison = df_results.loc[max_sample_idx, "comparison"]
 
-        # Recalculate power for all comparisons using this final sample size
-        # Disable early stopping for final calculation to ensure accuracy
         final_sample_sizes = [int(max_sample_size_needed * ratio) for ratio in allocation_ratio]
 
         power_result = self.get_power(
@@ -1561,16 +1534,13 @@ class PowerSim:
             use_early_stopping=False,  # Disable for final accurate calculation
         )
 
-        # Create result with dictionaries for comparison-level details
         sample_sizes_dict = {"control": final_sample_sizes[0]}
         for i in range(1, len(final_sample_sizes)):
             sample_sizes_dict[f"variant_{i}"] = final_sample_sizes[i]
 
-        # Log optimized sample sizes (only if optimization was used)
         if optimize_allocation:
             self.logger.info(f"Optimized sample sizes: {sample_sizes_dict}")
 
-        # Build dictionaries for target power and achieved power by comparison
         target_power_by_comparison = {}
         achieved_power_by_comparison = {}
 
@@ -1580,10 +1550,8 @@ class PowerSim:
                 target_power_by_comparison[str(comp)] = round(power_dict[comp], 3)
                 achieved_power_by_comparison[str(comp)] = round(row["power"], 3)
 
-        # Log achieved power
         self.logger.info(f"Achieved power: {achieved_power_by_comparison}")
 
-        # Create single result row
         result = {
             "total_sample_size": max_sample_size_needed,
             "sample_sizes_by_group": sample_sizes_dict,
@@ -1594,7 +1562,6 @@ class PowerSim:
             "achieved_power_by_comparison": achieved_power_by_comparison,
         }
 
-        # Restore original correction if it was overridden
         if original_correction is not None:
             self.correction = original_correction
 
@@ -1707,24 +1674,20 @@ class PowerSim:
         """
         nsim_val = nsim if nsim is not None else self.nsim
 
-        # Convert inputs to lists
         true_effect = self.__ensure_list(true_effect)
         sample_size = self.__ensure_list(sample_size)
         baseline = self.__ensure_list(baseline) if baseline is not None else [None]
 
-        # Set default compliance to 1.0 if not provided
         if compliance is None:
             compliance = [1.0]
         else:
             compliance = self.__ensure_list(compliance)
 
-        # Set default standard deviation if needed
         if standard_deviation is None:
             standard_deviation = [1.0]
         else:
             standard_deviation = self.__ensure_list(standard_deviation)
 
-        # Handle allocation_ratio
         num_groups = self.variants + 1
         if allocation_ratio is not None:
             if len(allocation_ratio) != num_groups:
@@ -1737,21 +1700,16 @@ class PowerSim:
             if any(r <= 0 for r in allocation_ratio):
                 log_and_raise_error(self.logger, "All allocation_ratio values must be positive")
 
-            # Adjust sample_size based on allocation_ratio
             if len(sample_size) == 1:
-                # Single total sample size - distribute according to allocation
                 total_n = sample_size[0]
                 sample_size = [int(total_n * r) for r in allocation_ratio]
         else:
-            # Default equal allocation if only one sample_size provided
             if len(sample_size) == 1:
                 sample_size = sample_size * num_groups
 
-        # Handle target_comparisons
         if target_comparisons is None:
             target_comparisons = self.comparisons
         else:
-            # Normalize comparison order (always smaller group first)
             normalized_comps = []
             for g1, g2 in target_comparisons:
                 if g1 > g2:
@@ -1762,7 +1720,6 @@ class PowerSim:
                     normalized_comps.append((g1, g2))
             target_comparisons = normalized_comps
 
-            # Validate that target_comparisons are in self.comparisons
             invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
             if invalid_comps:
                 log_and_raise_error(
@@ -1770,7 +1727,6 @@ class PowerSim:
                     f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
                 )
 
-        # Validate lengths match variants
         if len(true_effect) != self.variants:
             if len(true_effect) == 1:
                 true_effect = true_effect * self.variants
@@ -1780,30 +1736,24 @@ class PowerSim:
                     f"true_effect length ({len(true_effect)}) must match variants ({self.variants}) or be 1",
                 )
 
-        # Store original nsim and temporarily use higher resolution
         original_nsim = self.nsim
         self.nsim = nsim_val
 
         results = []
 
         try:
-            # Run simulation for each target comparison
             for h, j in target_comparisons:
-                # Track significant results
                 significant_effects = []
                 all_effects = []
                 sign_errors = 0
                 significant_count = 0
 
-                # Get true effect for this comparison
-                if h == 0:  # Control vs variant
+                if h == 0:
                     comp_true_effect = true_effect[j - 1]
-                else:  # Variant vs variant
+                else:
                     comp_true_effect = true_effect[j - 1] - true_effect[h - 1]
 
-                # Run simulations
                 for _ in range(nsim_val):
-                    # Run one experiment
                     y, x = self.__run_experiment(
                         baseline=baseline,
                         sample_size=sample_size,
@@ -1812,7 +1762,6 @@ class PowerSim:
                         standard_deviation=standard_deviation,
                     )
 
-                    # Test this comparison
                     if self.metric == "count":
                         ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
                         tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
@@ -1832,7 +1781,6 @@ class PowerSim:
 
                         z, pvalue = sm.stats.proportions_ztest([count_h, count_j], [nobs_h, nobs_j])
 
-                        # Calculate observed effect (difference in proportions)
                         p_h = count_h / nobs_h if nobs_h > 0 else 0
                         p_j = count_j / nobs_j if nobs_j > 0 else 0
                         observed_effect = p_j - p_h
@@ -1846,7 +1794,6 @@ class PowerSim:
 
                     all_effects.append(observed_effect)
 
-                    # Check if significant
                     pvalue_threshold = {"two-tailed": self.alpha, "greater": self.alpha, "smaller": self.alpha}
 
                     is_significant = pvalue < pvalue_threshold.get(self.alternative, self.alpha)
@@ -1855,36 +1802,26 @@ class PowerSim:
                         significant_count += 1
                         significant_effects.append(observed_effect)
 
-                        # Check for sign error
                         if comp_true_effect != 0:
                             if np.sign(observed_effect) != np.sign(comp_true_effect):
                                 sign_errors += 1
 
-                # Calculate metrics
                 power = significant_count / nsim_val
                 type_s = sign_errors / significant_count if significant_count > 0 else np.nan
 
                 if len(significant_effects) > 0 and comp_true_effect != 0:
-                    # Exaggeration ratio (Type M): mean of |observed| / |true| for significant results
-                    # Uses absolute values
                     exaggeration_ratios = [abs(eff / comp_true_effect) for eff in significant_effects]
                     mean_exaggeration = np.mean(exaggeration_ratios)
 
-                    # Relative bias: mean of observed / true, preserving signs
-                    # Reference: Jaksic et al. (2026) Global Epidemiology
-                    # This is typically lower than exaggeration_ratio because negative
-                    # significant results (Type S errors) partially offset positive overestimates
                     relative_bias_values = [eff / comp_true_effect for eff in significant_effects]
                     relative_bias = np.mean(relative_bias_values)
 
                     median_significant = np.median(significant_effects)
 
-                    # Proportion that overestimate
                     prop_overestimate = sum(abs(eff) > abs(comp_true_effect) for eff in significant_effects) / len(
                         significant_effects
                     )
 
-                    # Distribution statistics
                     effect_dist = {
                         "mean": np.mean(significant_effects),
                         "median": median_significant,
@@ -1915,12 +1852,10 @@ class PowerSim:
                 )
 
         finally:
-            # Restore original nsim
             self.nsim = original_nsim
 
         df = pd.DataFrame(results)
 
-        # Round numeric columns for readability
         if round_decimals is not None:
             numeric_cols = [
                 "true_effect",
