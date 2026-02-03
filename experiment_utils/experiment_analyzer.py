@@ -1634,7 +1634,8 @@ class ExperimentAnalyzer:
         Returns the results DataFrame
         """
         if self._results is not None:
-            return self._results
+            internal_columns = ["se_intercept", "cov_coef_intercept"]
+            return self._results.drop(columns=[col for col in internal_columns if col in self._results.columns])
         else:
             self._logger.warning("Run the `get_effects` function first!")
             return None
