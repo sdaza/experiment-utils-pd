@@ -17,33 +17,35 @@ from experiment_utils.utils import check_covariate_balance
 np.random.seed(42)
 n = 1000
 
-df = pd.DataFrame({
-    'experiment': np.random.choice(['exp1', 'exp2'], n),
-    'treatment': np.random.choice([0, 1], n),
-    'outcome': np.random.randn(n),
-    'age': np.random.normal(35, 10, n),
-    'income': np.random.normal(50000, 15000, n),
-    'is_member': np.random.choice([0, 1], n),
-    'region': np.random.choice(['North', 'South', 'East', 'West'], n),
-})
+df = pd.DataFrame(
+    {
+        "experiment": np.random.choice(["exp1", "exp2"], n),
+        "treatment": np.random.choice([0, 1], n),
+        "outcome": np.random.randn(n),
+        "age": np.random.normal(35, 10, n),
+        "income": np.random.normal(50000, 15000, n),
+        "is_member": np.random.choice([0, 1], n),
+        "region": np.random.choice(["North", "South", "East", "West"], n),
+    }
+)
 
 # %% Example 1: Standalone function
 print("1. Using standalone check_covariate_balance() function")
 
 balance_standalone = check_covariate_balance(
     data=df,
-    treatment_col='treatment',
-    covariates=['age', 'income', 'is_member', 'region'],
+    treatment_col="treatment",
+    covariates=["age", "income", "is_member", "region"],
     threshold=0.1,
 )
 
 print("\nBalance Results (standalone):")
 print(balance_standalone.to_string(index=False))
 
-balanced_pct = balance_standalone['balance_flag'].mean() * 100
+balanced_pct = balance_standalone["balance_flag"].mean() * 100
 print(f"\nBalance Summary: {balanced_pct:.1f}% of covariates are balanced")
 
-imbalanced = balance_standalone[balance_standalone['balance_flag'] == 0]
+imbalanced = balance_standalone[balance_standalone["balance_flag"] == 0]
 if not imbalanced.empty:
     print(f"Imbalanced covariates: {imbalanced['covariate'].tolist()}")
 
@@ -51,13 +53,13 @@ if not imbalanced.empty:
 print("2. Using ExperimentAnalyzer.check_balance() method (single experiment)")
 
 # Filter to one experiment for simplicity
-df_single = df[df['experiment'] == 'exp1'].copy()
+df_single = df[df["experiment"] == "exp1"].copy()
 
 analyzer = ExperimentAnalyzer(
     data=df_single,
-    outcomes=['outcome'],
-    treatment_col='treatment',
-    covariates=['age', 'income', 'is_member', 'region'],
+    outcomes=["outcome"],
+    treatment_col="treatment",
+    covariates=["age", "income", "is_member", "region"],
 )
 
 balance_method = analyzer.check_balance(threshold=0.1)
@@ -70,10 +72,10 @@ print("3. Checking balance across multiple experiments")
 
 analyzer_multi = ExperimentAnalyzer(
     data=df,
-    outcomes=['outcome'],
-    treatment_col='treatment',
-    experiment_identifier='experiment',
-    covariates=['age', 'income', 'is_member'],
+    outcomes=["outcome"],
+    treatment_col="treatment",
+    experiment_identifier="experiment",
+    covariates=["age", "income", "is_member"],
 )
 
 balance_multi = analyzer_multi.check_balance(threshold=0.1)
@@ -82,9 +84,9 @@ print("\nBalance Results (multiple experiments):")
 print(balance_multi.to_string(index=False))
 
 # Summary by experiment
-for exp in balance_multi['experiment'].unique():
-    exp_balance = balance_multi[balance_multi['experiment'] == exp]
-    balanced_pct = exp_balance['balance_flag'].mean() * 100
+for exp in balance_multi["experiment"].unique():
+    exp_balance = balance_multi[balance_multi["experiment"] == exp]
+    balanced_pct = exp_balance["balance_flag"].mean() * 100
     print(f"\n{exp}: {balanced_pct:.1f}% balanced")
 
 # %% Example 4: Check balance before and after running get_effects
@@ -92,9 +94,9 @@ print("4. Checking balance independently of get_effects()")
 
 analyzer_independent = ExperimentAnalyzer(
     data=df_single,
-    outcomes=['outcome'],
-    treatment_col='treatment',
-    covariates=['age', 'income'],
+    outcomes=["outcome"],
+    treatment_col="treatment",
+    covariates=["age", "income"],
 )
 
 # Check balance BEFORE calling get_effects
@@ -124,17 +126,17 @@ print("5. Using different balance thresholds")
 
 analyzer_threshold = ExperimentAnalyzer(
     data=df_single,
-    outcomes=['outcome'],
-    treatment_col='treatment',
-    covariates=['age', 'income'],
+    outcomes=["outcome"],
+    treatment_col="treatment",
+    covariates=["age", "income"],
 )
 
 # Strict threshold
 balance_strict = analyzer_threshold.check_balance(threshold=0.05)
-print(f"\nStrict threshold (0.05):")
+print("\nStrict threshold (0.05):")
 print(f"Balanced: {balance_strict['balance_flag'].sum()}/{len(balance_strict)}")
 
 # Lenient threshold
 balance_lenient = analyzer_threshold.check_balance(threshold=0.2)
-print(f"\nLenient threshold (0.2):")
+print("\nLenient threshold (0.2):")
 print(f"Balanced: {balance_lenient['balance_flag'].sum()}/{len(balance_lenient)}")

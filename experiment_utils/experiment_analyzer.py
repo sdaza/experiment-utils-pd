@@ -666,6 +666,24 @@ class ExperimentAnalyzer:
                     self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
                     continue
 
+                # Check if we have both treatment and control groups before proceeding
+                n_treatment_before = (comparison_data[self._treatment_col] == treatment_val).sum()
+                n_control_before = (comparison_data[self._treatment_col] == control_val).sum()
+
+                if n_treatment_before == 0:
+                    self._logger.warning(
+                        f"No treatment units ({treatment_val}) found for comparison {treatment_val} vs {control_val}. "
+                        f"Cannot estimate treatment effect. Skipping."
+                    )
+                    continue
+
+                if n_control_before == 0:
+                    self._logger.warning(
+                        f"No control units ({control_val}) found for comparison {treatment_val} vs {control_val}. "
+                        f"Cannot estimate treatment effect. Skipping."
+                    )
+                    continue
+
                 comparison_data[self._treatment_col] = (comparison_data[self._treatment_col] == treatment_val).astype(
                     int
                 )
@@ -730,7 +748,15 @@ class ExperimentAnalyzer:
                                 if dummy_col in comparison_data_balance.columns:
                                     if comparison_data_balance[dummy_col].sum() >= min_binary_count:
                                         if comparison_data_balance[dummy_col].std(ddof=0) != 0:
-                                            balance_covariates.append(dummy_col)
+                                            # Also check that dummy appears in both treatment and control groups
+                                            treated_sum = comparison_data_balance[
+                                                comparison_data_balance[self._treatment_col] == 1
+                                            ][dummy_col].sum()
+                                            control_sum = comparison_data_balance[
+                                                comparison_data_balance[self._treatment_col] == 0
+                                            ][dummy_col].sum()
+                                            if treated_sum > 0 and control_sum > 0:
+                                                balance_covariates.append(dummy_col)
 
                         for cov in final_covariates:
                             if cov not in balance_covariates:
@@ -773,7 +799,7 @@ class ExperimentAnalyzer:
                     self._adjusted_balance.append(adjusted_balance)
 
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
-                    self._logger.info("::::: Adjusted balance: %.2f", np.round(adj_balance_mean, 2))
+                    self._logger.info(f"::::: Adjusted balance: {adj_balance_mean:.2%}")
                     if self._assess_overlap:
                         if "propensity_score" in comparison_data.columns:
                             treatment_scores = comparison_data.loc[
@@ -792,7 +818,13 @@ class ExperimentAnalyzer:
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap assessment.")
                     if self._overlap_plot:
-                        if "propensity_score" in comparison_data.columns:
+                        # Check if overlap plot can be generated (requires propensity scores from balance adjustment)
+                        if adjustment != "balance" or len(final_covariates) == 0:
+                            self._logger.warning(
+                                "Overlap plot requested but no balance adjustment method or covariates specified. "
+                                "Overlap plots require propensity scores from balance adjustment. Skipping plot."
+                            )
+                        elif "propensity_score" in comparison_data.columns:
                             self._plot_common_support(
                                 comparison_data,
                                 treatment_col=self._treatment_col,
@@ -1692,20 +1724,20 @@ class ExperimentAnalyzer:
     ) -> pd.DataFrame | None:
         """
         Check covariate balance between treatment and control groups.
-        
+
         This method can be called independently of get_effects() to assess balance
         on the loaded experiment data. It performs the same preprocessing as get_effects()
         including categorical variable handling, covariate filtering, and standardization.
-        
+
         Parameters
         ----------
         threshold : float, optional
-            SMD threshold for balance flag (default 0.1). Covariates with 
+            SMD threshold for balance flag (default 0.1). Covariates with
             |SMD| < threshold are considered balanced.
         min_binary_count : int, optional
             Minimum count required for binary covariates (default 5).
             Binary covariates with fewer observations are excluded.
-            
+
         Returns
         -------
         pd.DataFrame or None
@@ -1716,9 +1748,9 @@ class ExperimentAnalyzer:
             - mean_control: float - weighted mean for control group
             - smd: float - standardized mean difference
             - balance_flag: int - 1 if balanced (|SMD| < threshold), 0 if imbalanced
-            
+
             Returns None if no covariates are specified.
-            
+
         Examples
         --------
         >>> analyzer = ExperimentAnalyzer(
@@ -1731,7 +1763,7 @@ class ExperimentAnalyzer:
         >>> print(f"Balanced: {balance_df['balance_flag'].mean():.2%}")
         >>> imbalanced = balance_df[balance_df['balance_flag'] == 0]
         >>> print(f"Imbalanced covariates: {imbalanced['covariate'].tolist()}")
-        
+
         Notes
         -----
         - Categorical covariates are automatically detected and dummy-encoded
@@ -1740,52 +1772,61 @@ class ExperimentAnalyzer:
         - Can be called before or after get_effects()
         """
         from .utils import check_covariate_balance
-        
+
         if self._covariates is None or len(self._covariates) == 0:
             self._logger.warning("No covariates specified, balance cannot be assessed!")
             return None
-        
+
         # Identify categorical covariates
         categorical_info = self.__get_categorical_covariates(data=self._data)
-        
+
         # Get experiment groups
         if self._experiment_identifier:
             experiment_groups = self._data.groupby(self._experiment_identifier)
         else:
             experiment_groups = [(None, self._data)]
-        
+
         balance_results = []
-        
+
         for experiment_tuple, temp_data in experiment_groups:
             if experiment_tuple is None:
                 experiment_tuple = (1,)
-                
+
             self._logger.info(f"Checking balance for experiment: {experiment_tuple}")
-            
+
             # Get treatment values
             treatvalues = set(temp_data[self._treatment_col].unique())
             if len(treatvalues) < 2:
                 self._logger.warning(f"Skipping {experiment_tuple}: not enough treatment groups!")
                 continue
-            
+
             # Get comparison pairs
             comparison_pairs = self.__get_comparison_pairs(treatvalues, temp_data)
             if not comparison_pairs:
                 self._logger.warning(f"Skipping {experiment_tuple}: no valid comparison pairs found!")
                 continue
-            
+
             for treatment_val, control_val in comparison_pairs:
                 self._logger.info(f"Checking balance: {treatment_val} vs {control_val}")
-                
+
                 # Get comparison data
-                comparison_data = temp_data[
-                    temp_data[self._treatment_col].isin([treatment_val, control_val])
-                ].copy()
-                
+                comparison_data = temp_data[temp_data[self._treatment_col].isin([treatment_val, control_val])].copy()
+
                 if comparison_data.empty:
                     self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
                     continue
-                
+
+                # Check if we have both treatment and control groups
+                n_treatment = (comparison_data[self._treatment_col] == treatment_val).sum()
+                n_control = (comparison_data[self._treatment_col] == control_val).sum()
+
+                if n_treatment == 0 or n_control == 0:
+                    self._logger.warning(
+                        f"Missing treatment ({n_treatment}) or control ({n_control}) units for comparison "
+                        f"{treatment_val} vs {control_val}. Cannot check balance. Skipping."
+                    )
+                    continue
+
                 # Check balance using standalone function
                 balance_df = check_covariate_balance(
                     data=comparison_data,
@@ -1799,20 +1840,18 @@ class ExperimentAnalyzer:
                     categorical_max_unique=self._categorical_max_unique,
                     logger=self._logger,
                 )
-                
+
                 if not balance_df.empty:
                     # Add experiment identifier columns
                     balance_df["experiment"] = [experiment_tuple] * len(balance_df)
-                    balance_df = self.__transform_tuple_column(
-                        balance_df, "experiment", self._experiment_identifier
-                    )
-                    
+                    balance_df = self.__transform_tuple_column(balance_df, "experiment", self._experiment_identifier)
+
                     # Log balance summary
                     balance_mean = balance_df["balance_flag"].mean()
                     self._logger.info(f"Balance: {balance_mean:.2%}")
-                    
+
                     balance_results.append(balance_df)
-        
+
         if balance_results:
             final_balance = pd.concat(balance_results, ignore_index=True)
             return final_balance

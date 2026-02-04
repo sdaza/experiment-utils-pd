@@ -12,6 +12,7 @@ experiment_utils_pd.egg-info/SOURCES.txt
 experiment_utils_pd.egg-info/dependency_links.txt
 experiment_utils_pd.egg-info/requires.txt
 experiment_utils_pd.egg-info/top_level.txt
+tests/test_balance_check.py
 tests/test_balanced_assignment.py
 tests/test_bootstrap.py
 tests/test_categorical_treatment.py

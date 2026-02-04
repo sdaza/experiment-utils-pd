@@ -156,13 +156,13 @@ def check_covariate_balance(
 ) -> pd.DataFrame:
     """
     Check covariate balance between treatment and control groups with full preprocessing.
-    
+
     This function performs comprehensive balance checking including:
     - Categorical variable identification and dummy creation
     - Covariate filtering (zero variance, minimum counts)
     - Standardization
     - SMD calculation with balance flags
-    
+
     Parameters
     ----------
     data : pd.DataFrame
@@ -187,7 +187,7 @@ def check_covariate_balance(
         Name of weights column (default "weights")
     logger : logging.Logger, optional
         Logger for warnings. If None, creates one.
-        
+
     Returns
     -------
     pd.DataFrame
@@ -197,7 +197,7 @@ def check_covariate_balance(
         - mean_control: float - weighted mean for control
         - smd: float - standardized mean difference
         - balance_flag: int - 1 if balanced, 0 if imbalanced
-        
+
     Examples
     --------
     >>> balance = check_covariate_balance(
@@ -208,83 +208,92 @@ def check_covariate_balance(
     ... )
     """
     import re
-    
+
     if logger is None:
         logger = get_logger("BalanceChecker")
-    
+
     # Make a copy to avoid modifying original data
     data = data.copy()
-    
+
     # Filter to treatment and control groups
     data = data[data[treatment_col].isin([treatment_value, control_value])].copy()
-    
+
     if data.empty:
         logger.warning("No data found for specified treatment and control values")
         return pd.DataFrame()
-    
+
+    # Check if we have both treatment and control groups
+    n_treatment = (data[treatment_col] == treatment_value).sum()
+    n_control = (data[treatment_col] == control_value).sum()
+
+    if n_treatment == 0:
+        logger.warning(f"No treatment units ({treatment_value}) found. Cannot check balance.")
+        return pd.DataFrame()
+
+    if n_control == 0:
+        logger.warning(f"No control units ({control_value}) found. Cannot check balance.")
+        return pd.DataFrame()
+
     # Recode treatment to binary
     data[treatment_col] = (data[treatment_col] == treatment_value).astype(int)
-    
+
     # Add weights column if not present
     if weights_col not in data.columns:
         data[weights_col] = 1
-    
+
     # Identify categorical covariates if not provided
     if categorical_covariates is None:
         categorical_covariates = {}
         for cov in covariates:
             if cov not in data.columns:
                 continue
-            
-            is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(
-                data[cov].dtype, pd.CategoricalDtype
-            )
+
+            is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(data[cov].dtype, pd.CategoricalDtype)
             is_low_cardinality_int = (
-                pd.api.types.is_integer_dtype(data[cov])
-                and 3 <= data[cov].nunique() <= categorical_max_unique
+                pd.api.types.is_integer_dtype(data[cov]) and 3 <= data[cov].nunique() <= categorical_max_unique
             )
-            
+
             if is_object or is_low_cardinality_int:
                 categories = sorted(data[cov].dropna().unique())
                 categorical_covariates[cov] = categories
-    
+
     # Separate numeric/binary from categorical
     categorical_cov_names = set(categorical_covariates.keys())
     numeric_binary_covariates = [c for c in covariates if c not in categorical_cov_names and c in data.columns]
-    
+
     # Identify numeric vs binary among non-categorical
     numeric_covariates = []
     binary_covariates = []
-    
+
     for cov in numeric_binary_covariates:
         unique_vals = data[cov].dropna().unique()
         if len(unique_vals) == 2 and set(unique_vals).issubset({0, 1}):
             binary_covariates.append(cov)
         else:
             numeric_covariates.append(cov)
-    
+
     # Impute missing values
     for cov in numeric_covariates:
         if data[cov].isna().any():
             data[cov] = data[cov].fillna(data[cov].mean())
-    
+
     for cov in binary_covariates:
         if data[cov].isna().any():
             if not data[cov].mode().empty:
                 data[cov] = data[cov].fillna(data[cov].mode()[0])
-    
+
     # Filter covariates based on variance and frequency
     filtered_numeric = [c for c in numeric_covariates if data[c].std(ddof=0) != 0]
     filtered_binary = [c for c in binary_covariates if data[c].sum() >= min_binary_count]
     filtered_binary = [c for c in filtered_binary if data[c].std(ddof=0) != 0]
-    
+
     final_numeric_binary = filtered_numeric + filtered_binary
-    
+
     # Log removed covariates
     removed_numeric = set(numeric_covariates) - set(filtered_numeric)
     removed_binary_freq = [c for c in binary_covariates if data[c].sum() < min_binary_count]
     removed_binary_var = [c for c in binary_covariates if c not in removed_binary_freq and data[c].std(ddof=0) == 0]
-    
+
     if removed_numeric or removed_binary_freq or removed_binary_var:
         logger.warning("Removed covariates:")
         if removed_numeric:
@@ -293,39 +302,44 @@ def check_covariate_balance(
             logger.warning(f"  - Low frequency (< {min_binary_count}): {sorted(removed_binary_freq)}")
         if removed_binary_var:
             logger.warning(f"  - Zero variance (binary): {sorted(removed_binary_var)}")
-    
+
     # Handle categorical covariates - create dummies
     balance_covariates = []
-    
+
     if categorical_covariates:
+
         def _clean_category_name(cat):
             """Convert category to lowercase and replace spaces/special chars with underscores"""
             cat_str = str(cat).lower()
             cat_str = re.sub(r"[^\w]+", "_", cat_str)
             cat_str = cat_str.strip("_")
             return cat_str
-        
+
         # Create dummy variables for categorical covariates (include all categories)
         for covariate, categories in categorical_covariates.items():
             if covariate not in data.columns:
                 continue
-                
+
             for cat in categories:
                 cat_clean = _clean_category_name(cat)
                 dummy_col = f"{covariate}_{cat_clean}"
                 data[dummy_col] = (data[covariate] == cat).astype(int)
-                
+
                 # Apply same filtering as binary covariates
+                # Also check that dummy appears in both treatment and control groups
                 if data[dummy_col].sum() >= min_binary_count and data[dummy_col].std(ddof=0) != 0:
-                    balance_covariates.append(dummy_col)
-    
+                    treated_sum = data[data[treatment_col] == 1][dummy_col].sum()
+                    control_sum = data[data[treatment_col] == 0][dummy_col].sum()
+                    if treated_sum > 0 and control_sum > 0:
+                        balance_covariates.append(dummy_col)
+
     # Add filtered numeric/binary covariates
     balance_covariates.extend(final_numeric_binary)
-    
+
     if not balance_covariates:
         logger.warning("No valid covariates remaining after filtering")
         return pd.DataFrame()
-    
+
     # Standardize covariates
     for cov in balance_covariates:
         mean_val = data[cov].mean()
@@ -334,32 +348,32 @@ def check_covariate_balance(
             data[f"z_{cov}"] = (data[cov] - mean_val) / std_val
         else:
             data[f"z_{cov}"] = 0
-    
+
     # Calculate SMD for balance covariates (using original scale for means, standardized for SMD)
     treated = data[data[treatment_col] == 1]
     control = data[data[treatment_col] == 0]
-    
+
     smd_results = []
     for cov in balance_covariates:
         z_cov = f"z_{cov}"
-        
+
         # Calculate weighted means on original scale
         mean_treated = np.average(treated[cov], weights=treated[weights_col])
         mean_control = np.average(control[cov], weights=control[weights_col])
-        
+
         # Calculate weighted variance on standardized scale
         var_treated = np.average((treated[z_cov] - treated[z_cov].mean()) ** 2, weights=treated[weights_col])
         var_control = np.average((control[z_cov] - control[z_cov].mean()) ** 2, weights=control[weights_col])
-        
+
         pooled_std = np.sqrt((var_treated + var_control) / 2)
-        
+
         # SMD using standardized means
         z_mean_treated = np.average(treated[z_cov], weights=treated[weights_col])
         z_mean_control = np.average(control[z_cov], weights=control[weights_col])
         smd = (z_mean_treated - z_mean_control) / pooled_std if pooled_std != 0 else 0
-        
+
         balance_flag = 1 if abs(smd) <= threshold else 0
-        
+
         smd_results.append(
             {
                 "covariate": cov,
@@ -369,7 +383,7 @@ def check_covariate_balance(
                 "balance_flag": balance_flag,
             }
         )
-    
+
     return pd.DataFrame(smd_results)
 
 

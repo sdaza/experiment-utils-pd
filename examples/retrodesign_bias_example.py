@@ -5,8 +5,9 @@ This example shows why relative_bias is typically lower than type_m_error in und
 """
 
 # %% Imports
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 from experiment_utils.power_sim import PowerSim
 
@@ -15,10 +16,12 @@ print("1. ExperimentAnalyzer Retrodesign")
 
 # Create underpowered experiment
 np.random.seed(42)
-df = pd.DataFrame({
-    "treatment": np.random.choice([0, 1], 200),
-    "outcome": np.random.randn(200) + 0.1,  # Small effect
-})
+df = pd.DataFrame(
+    {
+        "treatment": np.random.choice([0, 1], 200),
+        "outcome": np.random.randn(200) + 0.1,  # Small effect
+    }
+)
 
 analyzer = ExperimentAnalyzer(
     data=df,
@@ -42,11 +45,11 @@ rel_bias = retro["relative_bias"].iloc[0]
 print(f"  Power: {power:.1%} - Low power means high uncertainty")
 print(f"  Type M Error: {type_m:.2f}x - Significant results overestimate by {type_m:.2f}x on average")
 print(f"  Relative Bias: {rel_bias:.2f}x - Accounting for sign, bias is {rel_bias:.2f}x")
-print(f"  \nWhy relative_bias < type_m_error:")
-print(f"    - Type M uses absolute values: mean(|observed|/|true|)")
-print(f"    - Relative bias preserves signs: mean(observed/true)")
-print(f"    - When underpowered, some significant results have wrong sign (Type S errors)")
-print(f"    - These negative values partially offset positive overestimates")
+print("  \nWhy relative_bias < type_m_error:")
+print("    - Type M uses absolute values: mean(|observed|/|true|)")
+print("    - Relative bias preserves signs: mean(observed/true)")
+print("    - When underpowered, some significant results have wrong sign (Type S errors)")
+print("    - These negative values partially offset positive overestimates")
 
 # %% Example 2: PowerSim retrodesign simulation
 print("\n2. PowerSim Retrodesign Simulation")
@@ -54,25 +57,18 @@ print("\n2. PowerSim Retrodesign Simulation")
 power_sim = PowerSim(metric="proportion", variants=1, nsim=10000)
 
 # Very underpowered study
-retro_underpowered = power_sim.simulate_retrodesign(
-    true_effect=0.02,
-    sample_size=300,
-    baseline=0.10
-)
+retro_underpowered = power_sim.simulate_retrodesign(true_effect=0.02, sample_size=300, baseline=0.10)
 
 # Well-powered study
-retro_powered = power_sim.simulate_retrodesign(
-    true_effect=0.02,
-    sample_size=3000,
-    baseline=0.10
-)
+retro_powered = power_sim.simulate_retrodesign(true_effect=0.02, sample_size=3000, baseline=0.10)
 
 print("\nUnderpowered Study (n=300):")
 print(f"  Power: {retro_underpowered['power'].iloc[0]:.1%}")
 print(f"  Type S Error: {retro_underpowered['type_s_error'].iloc[0]:.2%}")
 print(f"  Exaggeration Ratio: {retro_underpowered['exaggeration_ratio'].iloc[0]:.2f}x")
 print(f"  Relative Bias: {retro_underpowered['relative_bias'].iloc[0]:.2f}x")
-print(f"  Difference: {retro_underpowered['exaggeration_ratio'].iloc[0] - retro_underpowered['relative_bias'].iloc[0]:.2f}x")
+diff = retro_underpowered['exaggeration_ratio'].iloc[0] - retro_underpowered['relative_bias'].iloc[0]
+print(f"  Difference: {diff:.2f}x")
 
 print("\nWell-Powered Study (n=3000):")
 print(f"  Power: {retro_powered['power'].iloc[0]:.1%}")
@@ -90,19 +86,17 @@ sample_sizes = [200, 400, 800, 1600, 3200]
 power_sim = PowerSim(metric="proportion", variants=1, nsim=5000)
 
 for n in sample_sizes:
-    retro = power_sim.simulate_retrodesign(
-        true_effect=0.02,
-        sample_size=n,
-        baseline=0.10
+    retro = power_sim.simulate_retrodesign(true_effect=0.02, sample_size=n, baseline=0.10)
+    power_levels.append(
+        {
+            "sample_size": n,
+            "power": retro["power"].iloc[0],
+            "type_s_error": retro["type_s_error"].iloc[0],
+            "exaggeration_ratio": retro["exaggeration_ratio"].iloc[0],
+            "relative_bias": retro["relative_bias"].iloc[0],
+            "difference": retro["exaggeration_ratio"].iloc[0] - retro["relative_bias"].iloc[0],
+        }
     )
-    power_levels.append({
-        "sample_size": n,
-        "power": retro["power"].iloc[0],
-        "type_s_error": retro["type_s_error"].iloc[0],
-        "exaggeration_ratio": retro["exaggeration_ratio"].iloc[0],
-        "relative_bias": retro["relative_bias"].iloc[0],
-        "difference": retro["exaggeration_ratio"].iloc[0] - retro["relative_bias"].iloc[0]
-    })
 
 df_power = pd.DataFrame(power_levels)
 
