@@ -67,7 +67,7 @@ print(f"  Power: {retro_underpowered['power'].iloc[0]:.1%}")
 print(f"  Type S Error: {retro_underpowered['type_s_error'].iloc[0]:.2%}")
 print(f"  Exaggeration Ratio: {retro_underpowered['exaggeration_ratio'].iloc[0]:.2f}x")
 print(f"  Relative Bias: {retro_underpowered['relative_bias'].iloc[0]:.2f}x")
-diff = retro_underpowered['exaggeration_ratio'].iloc[0] - retro_underpowered['relative_bias'].iloc[0]
+diff = retro_underpowered["exaggeration_ratio"].iloc[0] - retro_underpowered["relative_bias"].iloc[0]
 print(f"  Difference: {diff:.2f}x")
 
 print("\nWell-Powered Study (n=3000):")
