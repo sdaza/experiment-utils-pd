@@ -96,6 +96,7 @@ analyzer = ExperimentAnalyzer(
 analyzer.get_effects()
 analyzer.results
 
+# %% 
 # %% Check balance diagnostics
 print("\n" + "="*80)
 print("BALANCE DIAGNOSTICS FOR FIRST TEST CASE")
@@ -122,7 +123,7 @@ if analyzer.adjusted_balance is not None:
     print(f"  - Balanced covariates: {analyzer.adjusted_balance['balance_flag'].sum()}/{len(analyzer.adjusted_balance)}")
     print(f"  - Mean |SMD|: {analyzer.adjusted_balance['smd'].abs().mean():.4f}")
     print(f"  - Max |SMD|: {analyzer.adjusted_balance['smd'].abs().max():.4f}")
-    
+
     # Compare improvement
     if analyzer.balance is not None:
         print(f"\nImprovement:")

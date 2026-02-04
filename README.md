@@ -1,224 +1,876 @@
 [![ci](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
 [![PyPI version](https://img.shields.io/pypi/v/experiment-utils-pd.svg)](https://pypi.org/project/experiment-utils-pd/)
 
+# Experiment Utils
 
-# Experiment utils
+A comprehensive Python package for designing, analyzing, and validating experiments with advanced causal inference capabilities.
 
-Generic functions for experiment analysis and design:
+## Features
 
-- [Experiment utils](#experiment-utils)
-- [Installation](#installation)
-  - [PyPI](#pypi)
-  - [From GitHub](#from-github)
-- [How to use it](#how-to-use-it)
-  - [Experiment Analyzer](#experiment-analyzer)
-    - [Retrieve IPW Weights](#retrieve-ipw-weights)
-    - [Non-inferiority test](#non-inferiority-test)
-    - [Multiple comparison adjustment](#multiple-comparison-adjustment)
+- **Experiment Analysis**: Estimate treatment effects with multiple adjustment methods (covariate balancing, regression, IV)
+- **Covariate Balance**: Check and visualize balance between treatment groups
+- **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
+- **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
+- **Power Analysis**: Calculate statistical power and find optimal sample sizes
+- **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
+- **Random Assignment**: Generate balanced treatment assignments with stratification
+
+## Table of Contents
+
+- [Experiment Utils](#experiment-utils)
+  - [Features](#features)
+  - [Table of Contents](#table-of-contents)
+  - [Installation](#installation)
+    - [From PyPI (Recommended)](#from-pypi-recommended)
+    - [From GitHub (Latest Development Version)](#from-github-latest-development-version)
+  - [Quick Start](#quick-start)
+  - [User Guide](#user-guide)
+    - [Basic Experiment Analysis](#basic-experiment-analysis)
+    - [Checking Covariate Balance](#checking-covariate-balance)
+    - [Covariate Adjustment Methods](#covariate-adjustment-methods)
+    - [Bootstrap Inference](#bootstrap-inference)
+    - [Multiple Experiments](#multiple-experiments)
+    - [Categorical Treatment Variables](#categorical-treatment-variables)
+    - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
+    - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
+    - [Calculate Power](#calculate-power)
     - [Find Sample Size](#find-sample-size)
     - [Simulate Retrodesign](#simulate-retrodesign)
   - [Utilities](#utilities)
     - [Balanced Random Assignment](#balanced-random-assignment)
+    - [Standalone Balance Checker](#standalone-balance-checker)
+  - [Advanced Topics](#advanced-topics)
+    - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)
+    - [Handling Missing Data](#handling-missing-data)
+    - [Best Practices](#best-practices)
+    - [Common Workflows](#common-workflows)
+  - [Contributing](#contributing)
+  - [License](#license)
+  - [Citation](#citation)
 
-# Installation
+## Installation
 
-## PyPI
+### From PyPI (Recommended)
 
-```
+```bash
 pip install experiment-utils-pd
 ```
 
+### From GitHub (Latest Development Version)
 
-## From GitHub
-
-```
+```bash
 pip install git+https://github.com/sdaza/experiment-utils-pd.git
 ```
 
-# How to use it
+## Quick Start
 
-## Experiment Analyzer
-
-Suppose you have a DataFrame `df` with columns for experiment group, treatment assignment, outcomes, and covariates.
+Here's a complete example analyzing an A/B test with covariate adjustment:
 
 ```python
 import pandas as pd
-from experiment_utils import ExperimentAnalyzer
+import numpy as np
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
-# Example data
+# Create sample experiment data
+np.random.seed(42)
 df = pd.DataFrame({
-    "experiment_id": [1, 1, 1, 2, 2, 2],
-    "user_id": [101, 102, 103, 201, 202, 203],
-    "treatment": [0, 1, 0, 1, 0, 1],
-    "age": [25, 34, 29, 40, 22, 31],
-    "gender": [1, 0, 1, 0, 1, 0],
-    "outcome1": [0, 1, 0, 1, 0, 1],
-    "outcome2": [5.2, 6.1, 5.8, 7.0, 5.5, 6.8],
+    "user_id": range(1000),
+    "treatment": np.random.choice([0, 1], 1000),
+    "conversion": np.random.binomial(1, 0.15, 1000),
+    "revenue": np.random.normal(50, 20, 1000),
+    "age": np.random.normal(35, 10, 1000),
+    "is_member": np.random.choice([0, 1], 1000),
 })
 
-covariates = ["age", "gender"]
-
-# Initialize analyzer with balance adjustment
+# Initialize analyzer
 analyzer = ExperimentAnalyzer(
-    df,
+    data=df,
     treatment_col="treatment",
-    outcomes=["outcome1", "outcome2"],
-    covariates=covariates,
-    experiment_identifier=["experiment_id"],
-    unit_identifier=["user_id"], # Optional: To retrieve balance weights
-    adjustment="balance",  # Options: 'balance', 'IV', or None
-    balance_method="ps-logistic",  # Options: 'ps-logistic', 'ps-xgboost', 'entropy'
-    target_effect="ATE",  # Options: 'ATT', 'ATE', 'ATC'
-    bootstrap=True,  # Enable bootstrap inference (default: False)
-    bootstrap_iterations=1000,  # Number of bootstrap iterations (default: 1000)
-    bootstrap_seed=42  # Seed for reproducibility (optional)
+    outcomes=["conversion", "revenue"],
+    covariates=["age", "is_member"],
+    adjustment="balance",  # Adjust for covariates
+    balance_method="ps-logistic",
 )
 
-# Estimate effects
+# Estimate treatment effects
+analyzer.get_effects()
+
+# View results
+results = analyzer.results
+print(results[["outcome", "absolute_effect", "relative_effect", 
+               "pvalue", "stat_significance"]])
+
+# Balance is automatically calculated when covariates are provided
+balance = analyzer.balance
+print(f"\nBalance: {balance['balance_flag'].mean():.1%} of covariates balanced")
+```
+
+Output:
+```
+       outcome  absolute_effect  relative_effect   pvalue stat_significance
+0   conversion           0.0234           0.1623   0.0456                 1
+1      revenue           2.1450           0.0429   0.1234                 0
+
+Balance: 100.0% of covariates balanced
+```
+
+## User Guide
+
+### Basic Experiment Analysis
+
+Analyze a simple A/B test without covariate adjustment:
+
+```python
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+
+# Simple analysis (no covariates)
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+)
+
 analyzer.get_effects()
 print(analyzer.results)
 ```
 
-**Parameters:**
-- `adjustment`: Choose 'balance' for covariate balancing (using balance_method), 'IV' for instrumental variable adjustment, or None for unadjusted analysis.
-- `balance_method`: Selects the method for balancing: 'ps-logistic' (logistic regression), 'ps-xgboost' (XGBoost), or 'entropy' (entropy balancing).
-- `target_effect`: Specifies the estimand 'ATT', 'ATE', or 'ATC'.
-- `bootstrap`: Enable bootstrap inference for p-values and confidence intervals (default: False for asymptotic inference).
-- `bootstrap_iterations`: Number of bootstrap resampling iterations (default: 1000).
-- `bootstrap_ci_method`: Method for computing bootstrap CIs: 'percentile' or 'basic' (default: 'percentile').
-- `bootstrap_stratify`: Whether to use stratified resampling by treatment group (default: True).
-- `bootstrap_seed`: Random seed for reproducible bootstrap results (optional).
+**Key columns in results:**
+- `outcome`: Outcome variable name
+- `absolute_effect`: Treatment effect (treatment - control mean)
+- `relative_effect`: Lift (absolute_effect / control_mean)
+- `standard_error`: Standard error of the effect
+- `pvalue`: P-value for hypothesis test
+- `stat_significance`: 1 if significant at alpha level, 0 otherwise
+- `abs_effect_lower/upper`: Confidence interval bounds (absolute)
+- `rel_effect_lower/upper`: Confidence interval bounds (relative)
 
+### Checking Covariate Balance
 
-### Retrieve IPW Weights
+**Balance is automatically calculated** when you provide covariates and run `get_effects()`:
 
-To inspect the weights and selected sample after balancing:
 ```python
-# Get the DataFrame with weights and experiment identifiers
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    covariates=["age", "income", "region"],  # Can include categorical
+)
+
+analyzer.get_effects()
+
+# Balance is automatically available
+balance = analyzer.balance
+print(balance[["covariate", "smd", "balance_flag"]])
+print(f"\nBalanced: {balance['balance_flag'].mean():.1%}")
+
+# Identify imbalanced covariates
+imbalanced = balance[balance["balance_flag"] == 0]
+if not imbalanced.empty:
+    print(f"Imbalanced: {imbalanced['covariate'].tolist()}")
+```
+
+**Check balance independently** (optional, before running `get_effects()` or with custom parameters):
+
+```python
+# Check balance with different threshold
+balance_strict = analyzer.check_balance(threshold=0.05)
+```
+
+**Balance metrics explained:**
+- `smd`: Standardized Mean Difference (|SMD| < 0.1 indicates good balance)
+- `balance_flag`: 1 if balanced, 0 if imbalanced
+- `mean_treated/control`: Group means for the covariate
+
+### Covariate Adjustment Methods
+
+When treatment and control groups differ on covariates, adjust for bias:
+
+**Option 1: Propensity Score Weighting (Recommended)**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion", "revenue"],
+    covariates=["age", "income", "is_member"],
+    adjustment="balance",
+    balance_method="ps-logistic",  # Logistic regression for propensity scores
+    target_effect="ATT",  # Average Treatment Effect on Treated
+)
+
+analyzer.get_effects()
+
+# Check post-adjustment balance
+print(analyzer.adjusted_balance)
+
+# Retrieve weights for transparency
 weights_df = analyzer.weights
 print(weights_df.head())
 ```
 
-### Non-inferiority test
+**Available methods:**
+- `ps-logistic`: Propensity score via logistic regression (fast, interpretable)
+- `ps-xgboost`: Propensity score via XGBoost (flexible, non-linear)
+- `entropy`: Entropy balancing (exact moment matching)
 
-Test for non-inferiority after estimating effects:
+**Target effects:**
+- `ATT`: Average Treatment Effect on Treated (most common)
+- `ATE`: Average Treatment Effect (entire population)
+- `ATC`: Average Treatment Effect on Control
+
+**Option 2: Regression Adjustment**
+
 ```python
-# Test non-inferiority with a 10% margin
-analyzer.test_non_inferiority(relative_margin=0.10)
-print(analyzer.results[["outcome1", "non_inferiority_margin", "ci_lower_bound", "is_non_inferior"]])
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    regression_covariates=["age", "income"],  # Use regression_covariates
+    adjustment=None,  # No weighting, just regression
+)
+
+analyzer.get_effects()
 ```
 
-### Multiple comparison adjustment
+### Bootstrap Inference
 
-Adjust p-values for multiple outcomes per experiment:
+Get robust confidence intervals and p-values via bootstrapping:
+
 ```python
-# Bonferroni adjustment
-analyzer.adjust_pvalues(method="bonferroni")
-print(analyzer.results[["outcome1", "pvalue", "pvalue_adj", "stat_significance_adj"]])
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    covariates=["age", "income"],
+    adjustment="balance",
+    bootstrap=True,
+    bootstrap_iterations=2000,
+    bootstrap_ci_method="percentile",
+    bootstrap_seed=42,  # For reproducibility
+)
 
-# Or use FDR (Benjamini-Hochberg)
-analyzer.adjust_pvalues(method="fdr_bh")
-print(analyzer.results[["outcome1", "pvalue", "pvalue_adj", "stat_significance_adj"]])
+analyzer.get_effects()
+
+# Bootstrap results include robust CIs
+results = analyzer.results
+print(results[["outcome", "absolute_effect", "abs_effect_lower", 
+               "abs_effect_upper", "inference_method"]])
+```
+
+**When to use bootstrap:**
+- Small sample sizes
+- Non-normal distributions
+- Skepticism about asymptotic assumptions
+- Want robust, distribution-free inference
+
+### Multiple Experiments
+
+Analyze multiple experiments simultaneously:
+
+```python
+# Data with multiple experiments
+df = pd.DataFrame({
+    "experiment": ["exp_A", "exp_A", "exp_B", "exp_B"] * 100,
+    "treatment": [0, 1, 0, 1] * 100,
+    "outcome": np.random.randn(400),
+    "age": np.random.normal(35, 10, 400),
+})
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["outcome"],
+    experiment_identifier="experiment",  # Group by experiment
+    covariates=["age"],
+)
+
+analyzer.get_effects()
+
+# Results include experiment column
+results = analyzer.results
+print(results.groupby("experiment")[["absolute_effect", "pvalue"]].first())
+
+# Balance per experiment (automatically calculated)
+balance = analyzer.balance
+print(balance.groupby("experiment")["balance_flag"].mean())
+```
+
+### Categorical Treatment Variables
+
+Compare multiple treatment variants:
+
+```python
+df = pd.DataFrame({
+    "treatment": np.random.choice(["control", "variant_A", "variant_B"], 1000),
+    "outcome": np.random.randn(1000),
+})
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["outcome"],
+)
+
+analyzer.get_effects()
+
+# Results show all pairwise comparisons
+results = analyzer.results
+print(results[["treatment_group", "control_group", "absolute_effect", "pvalue"]])
+```
+
+### Multiple Comparison Adjustments
+
+Control family-wise error rate when testing multiple hypotheses:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion", "revenue", "retention", "engagement"],
+)
+
+analyzer.get_effects()
+
+# Apply Bonferroni correction
+analyzer.adjust_pvalues(method="bonferroni")
+
+results = analyzer.results
+print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
+```
+
+**Available methods:**
+- `bonferroni`: Most conservative, controls FWER
+- `holm`: Less conservative than Bonferroni, still controls FWER
+- `sidak`: Similar to Bonferroni, assumes independence
+- `fdr_bh`: Benjamini-Hochberg FDR control (less conservative)
+
+### Non-Inferiority Testing
+
+Test if a new treatment is "not worse" than control:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+)
+
+analyzer.get_effects()
+
+# Test if treatment is within 10% of control
+analyzer.test_non_inferiority(relative_margin=0.10)
+
+results = analyzer.results
+print(results[["outcome", "relative_effect", "is_non_inferior", 
+               "non_inferiority_margin"]])
 ```
 
 ### Retrodesign Analysis
 
-Calculate Type S and Type M errors to assess reliability of significant results:
-```python
-# Calculate retrodesign metrics assuming true effect is 0.02
-retro = analyzer.calculate_retrodesign(true_effect=0.02)
-print(retro[["outcome", "power", "type_s_error", "type_m_error"]])
+Assess reliability of significant results (post-hoc power analysis):
 
-# Specify different true effects per comparison
-retro = analyzer.calculate_retrodesign(
-    true_effect={
-        ('treatment_a', 'control'): 0.02,
-        ('treatment_b', 'control'): 0.05
-    }
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
 )
+
+analyzer.get_effects()
+
+# Calculate Type S and Type M errors assuming true effect is 0.02
+retro = analyzer.calculate_retrodesign(true_effect=0.02)
+
+print(retro[["outcome", "power", "type_s_error", "type_m_error", "relative_bias"]])
 ```
+
+**Metrics explained:**
+- `power`: Probability of detecting the assumed true effect
+- `type_s_error`: Probability of wrong sign when significant (if underpowered)
+- `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
+- `relative_bias`: Expected bias ratio preserving signs (mean observed/true)
+  - Typically lower than type_m_error because wrong signs partially offset overestimates
+
+
 
 ## Power Analysis
 
-```python
-from experiment_utils import PowerSim
-p = PowerSim(metric='proportion', relative_effect=False,
-  variants=1, nsim=1000, alpha=0.05, alternative='two-tailed')
+Design well-powered experiments using simulation-based power analysis.
 
-p.get_power(baseline=[0.33], effect=[0.03], sample_size=[3000])
+### Calculate Power
+
+Estimate statistical power for a given sample size:
+
+```python
+from experiment_utils.power_sim import PowerSim
+
+# Initialize power simulator for proportion metric
+power_sim = PowerSim(
+    metric="proportion",      # or "average" for continuous outcomes
+    relative_effect=False,    # False = absolute effect, True = relative
+    variants=1,               # Number of treatment variants
+    nsim=1000,               # Number of simulations
+    alpha=0.05,              # Significance level
+    alternative="two-tailed" # or "one-tailed"
+)
+
+# Calculate power
+power_result = power_sim.get_power(
+    baseline=[0.10],          # Control conversion rate
+    effect=[0.02],           # Absolute effect size (2pp lift)
+    sample_size=[5000]       # Total sample size
+)
+
+print(f"Power: {power_result['power'].iloc[0]:.2%}")
+```
+
+**Example: Multiple variants**
+
+```python
+# Compare 2 treatments vs control
+power_sim = PowerSim(metric="proportion", variants=2, nsim=1000)
+
+power_result = power_sim.get_power(
+    baseline=0.10,
+    effect=[0.02, 0.03],  # Different effects for each variant
+    sample_size=6000
+)
+
+print(power_result[["comparison", "power"]])
 ```
 
 ### Find Sample Size
 
 Find the minimum sample size needed to achieve target power:
+
 ```python
+from experiment_utils.power_sim import PowerSim
+
+power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
+
 # Find sample size for 80% power
-result = p.find_sample_size(
+sample_result = power_sim.find_sample_size(
     target_power=0.80,
-    baseline=[0.10],
-    effect=[0.02]
+    baseline=0.10,
+    effect=0.02
 )
-print(result[["total_sample_size", "achieved_power_by_comparison"]])
+
+print(f"Required sample size: {sample_result['total_sample_size'].iloc[0]:,.0f}")
+print(f"Achieved power: {sample_result['achieved_power_by_comparison'].iloc[0]:.2%}")
+```
+
+**Different power targets per comparison:**
+
+```python
+# Primary outcome needs 90%, secondary needs 80%
+power_sim = PowerSim(metric="proportion", variants=2, nsim=1000)
+
+sample_result = power_sim.find_sample_size(
+    target_power={(0,1): 0.90, (0,2): 0.80},
+    baseline=0.10,
+    effect=[0.05, 0.03]
+)
+
+print(sample_result[["comparison", "sample_size_by_group", "achieved_power"]])
+```
+
+**Optimize allocation ratio:**
+
+```python
+# Find optimal allocation to minimize total sample size
+sample_result = power_sim.find_sample_size(
+    target_power=0.80,
+    baseline=0.10,
+    effect=0.05,
+    optimize_allocation=True
+)
+
+print(f"Optimal allocation: {sample_result['allocation_ratio'].iloc[0]}")
+print(f"Total sample size: {sample_result['total_sample_size'].iloc[0]:,.0f}")
+```
+
+**Custom allocation:**
+
+```python
+# 30% control, 70% treatment
+sample_result = power_sim.find_sample_size(
+    target_power=0.80,
+    baseline=0.10,
+    effect=0.02,
+    allocation_ratio=[0.3, 0.7]
+)
 ```
 
 ### Simulate Retrodesign
 
-Simulate Type S and Type M errors for study planning:
+Prospective analysis of Type S (sign) and Type M (magnitude) errors:
+
 ```python
-# Simulate what happens with underpowered study
-retro = p.simulate_retrodesign(
+from experiment_utils.power_sim import PowerSim
+
+power_sim = PowerSim(metric="proportion", variants=1, nsim=5000)
+
+# Simulate underpowered study
+retro = power_sim.simulate_retrodesign(
     true_effect=0.02,
     sample_size=500,
     baseline=0.10
 )
-print(retro[["power", "type_s_error", "exaggeration_ratio"]])
+
+print(f"Power: {retro['power'].iloc[0]:.2%}")
+print(f"Type S Error: {retro['type_s_error'].iloc[0]:.2%}")
+print(f"Exaggeration Ratio: {retro['exaggeration_ratio'].iloc[0]:.2f}x")
+print(f"Relative Bias: {retro['relative_bias'].iloc[0]:.2f}x")
+```
+
+**Understanding retrodesign metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| `power` | Probability of detecting the true effect |
+| `type_s_error` | Probability of getting wrong sign when significant |
+| `exaggeration_ratio` | Expected overestimation (mean &#124;observed&#124;/&#124;true&#124;) |
+| `relative_bias` | Expected bias preserving signs (mean observed/true) <br> Lower than exaggeration_ratio because Type S errors partially cancel out overestimates |
+| `median_significant_effect` | Median effect among significant results |
+| `prop_overestimate` | % of significant results that overestimate |
+
+**Compare power scenarios:**
+
+```python
+# Low power scenario
+retro_low = power_sim.simulate_retrodesign(
+    true_effect=0.02, sample_size=500, baseline=0.10
+)
+
+# High power scenario
+retro_high = power_sim.simulate_retrodesign(
+    true_effect=0.02, sample_size=5000, baseline=0.10
+)
+
+print(f"Low power - Exaggeration: {retro_low['exaggeration_ratio'].iloc[0]:.2f}x, "
+      f"Relative bias: {retro_low['relative_bias'].iloc[0]:.2f}x")
+print(f"High power - Exaggeration: {retro_high['exaggeration_ratio'].iloc[0]:.2f}x, "
+      f"Relative bias: {retro_high['relative_bias'].iloc[0]:.2f}x")
+```
+
+**Multiple variants:**
+
+```python
+power_sim = PowerSim(metric="proportion", variants=3, nsim=5000)
+
+retro = power_sim.simulate_retrodesign(
+    true_effect=[0.02, 0.03, 0.04],  # Different effects per variant
+    sample_size=1000,
+    baseline=0.10,
+    target_comparisons=[(0, 1), (0, 2)]
+)
+
+print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relative_bias"]])
 ```
 
 ## Utilities
 
 ### Balanced Random Assignment
 
-You can use the `balanced_random_assignment` utility to assign units to experimental groups with forced balance. Optionally stratify by covariates to ensure balance within strata.
+Generate balanced treatment assignments with optional stratification:
 
 ```python
 from experiment_utils.utils import balanced_random_assignment
 import pandas as pd
+import numpy as np
 
-# Example DataFrame
+# Create sample data
+np.random.seed(42)
 users = pd.DataFrame({
-    "user_id": range(100),
-    "age_group": ["young", "old"] * 50,
-    "gender": ["M", "F"] * 50
+    "user_id": range(1000),
+    "age_group": np.random.choice(["18-25", "26-35", "36-45", "46+"], 1000),
+    "region": np.random.choice(["North", "South", "East", "West"], 1000),
 })
 
-# Binary assignment (test/control, 50/50) without stratification
-users["assignment"] = balanced_random_assignment(users, allocation_ratio=0.5)
-print(users)
-
-# Binary assignment with stratification by age_group and gender
-users["assignment_stratified"] = balanced_random_assignment(
+# Simple 50/50 split
+users["treatment"] = balanced_random_assignment(
     users, 
-    allocation_ratio=0.5, 
-    balance_covariates=["age_group", "gender"]
+    allocation_ratio=0.5,
+    seed=42
 )
-print(users)
 
-# Multiple variants with equal allocation
-users["assignment_multi"] = balanced_random_assignment(
-    users, 
-    variants=["control", "A", "B"]
+print(users["treatment"].value_counts())
+# Output: control: 500, test: 500
+```
+
+**Stratified assignment (ensure balance within subgroups):**
+
+```python
+# Balance within age_group and region strata
+users["treatment_stratified"] = balanced_random_assignment(
+    users,
+    allocation_ratio=0.5,
+    balance_covariates=["age_group", "region"],
+    check_balance=True,  # Print balance diagnostics
+    seed=42
 )
-print(users)
+```
 
-# Multiple variants with custom allocation and stratification
+**Multiple variants:**
+
+```python
+# Three variants with equal allocation
+users["assignment"] = balanced_random_assignment(
+    users,
+    variants=["control", "variant_A", "variant_B"]
+)
+
+# Custom allocation ratios
 users["assignment_custom"] = balanced_random_assignment(
     users,
-    variants=["control", "A", "B"],
-    allocation_ratio={"control": 0.5, "A": 0.3, "B": 0.2},
+    variants=["control", "variant_A", "variant_B"],
+    allocation_ratio={"control": 0.5, "variant_A": 0.3, "variant_B": 0.2},
     balance_covariates=["age_group"]
 )
-print(users)
+```
+
+**Parameters:**
+- `allocation_ratio`: Float (for binary) or dict (for multiple variants)
+- `balance_covariates`: List of columns to stratify by
+- `check_balance`: If True, prints balance diagnostics
+- `smd_threshold`: Threshold for balance flag (default 0.1)
+- `seed`: Random seed for reproducibility
+
+### Standalone Balance Checker
+
+Check covariate balance on any dataset without using ExperimentAnalyzer:
+
+```python
+from experiment_utils.utils import check_covariate_balance
+import pandas as pd
+import numpy as np
+
+# Create sample data with imbalance
+np.random.seed(42)
+n_treatment = 300
+n_control = 200
+
+df = pd.concat([
+    pd.DataFrame({
+        "treatment": [1] * n_treatment,
+        "age": np.random.normal(40, 10, n_treatment),      # Older in treatment
+        "income": np.random.normal(60000, 15000, n_treatment),  # Higher income
+    }),
+    pd.DataFrame({
+        "treatment": [0] * n_control,
+        "age": np.random.normal(30, 10, n_control),         # Younger in control
+        "income": np.random.normal(45000, 15000, n_control),    # Lower income
+    })
+])
+
+# Check balance
+balance = check_covariate_balance(
+    data=df,
+    treatment_col="treatment",
+    covariates=["age", "income"],
+    threshold=0.1  # SMD threshold
+)
+
+print(balance)
+```
+
+Output:
+```
+  covariate  mean_treated  mean_control       smd  balance_flag
+0       age         40.23         30.15  1.012345             0
+1    income      59823.45      45234.12  0.923456             0
+```
+
+**With categorical variables:**
+
+```python
+df["region"] = np.random.choice(["North", "South", "East", "West"], len(df))
+
+balance = check_covariate_balance(
+    data=df,
+    treatment_col="treatment",
+    covariates=["age", "income", "region"],  # Automatic categorical detection
+    threshold=0.1
+)
+
+# Region will be expanded to dummy variables
+print(balance[balance["covariate"].str.contains("region")])
+```
+
+**Use cases:**
+- Pre-experiment: Check if randomization worked
+- Post-assignment: Validate treatment assignment quality
+- Observational data: Assess comparability before adjustment
+- Research: Standalone balance analysis for publications
+
+## Advanced Topics
+
+### When to Use Different Adjustment Methods
+
+**No Adjustment:**
+- Randomized experiments with successful randomization
+- Large sample sizes with good balance
+- Simplest, most transparent analysis
+
+**Propensity Score Weighting (balance adjustment):**
+- Observational studies
+- Quasi-experiments
+- Randomized experiments with baseline imbalance
+- When you need to adjust for many covariates
+
+**Regression Adjustment:**
+- Want to include covariates but maintain simplicity
+- Covariates are strongly predictive of outcome
+- Linear relationships expected
+
+**Which balance method?**
+- `ps-logistic`: Default, fast, interpretable
+- `ps-xgboost`: Non-linear relationships, complex interactions
+- `entropy`: Exact moment matching, but can be unstable
+
+### Handling Missing Data
+
+The package handles missing data automatically:
+
+- **Treatment variable**: Rows with missing treatment are dropped (logged as warning)
+- **Categorical covariates**: Missing values become explicit "Missing" category
+- **Numeric covariates**: Mean imputation
+- **Binary covariates**: Mode imputation
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,  # Can contain missing values
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    covariates=["age", "region"],
+)
+# Missing data is handled automatically
+analyzer.get_effects()
+```
+
+### Best Practices
+
+**1. Always check balance:**
+
+```python
+analyzer = ExperimentAnalyzer(data=df, treatment_col="treatment", 
+                              outcomes=["conversion"], covariates=["age", "income"])
+
+analyzer.get_effects()
+
+# Check balance from results
+balance = analyzer.balance
+if balance["balance_flag"].mean() < 0.8:  # <80% balanced
+    print("Consider rerunning with covariate adjustment")
+```
+
+**2. Use bootstrap for small samples:**
+
+```python
+if len(df) < 500:
+    analyzer = ExperimentAnalyzer(..., bootstrap=True, bootstrap_iterations=2000)
+```
+
+**3. Apply multiple comparison correction:**
+
+```python
+# Always correct when testing multiple outcomes/experiments
+analyzer.get_effects()
+analyzer.adjust_pvalues(method="holm")  # Less conservative than Bonferroni
+```
+
+**4. Report both absolute and relative effects:**
+
+```python
+results = analyzer.results
+print(results[["outcome", "absolute_effect", "relative_effect", 
+               "abs_effect_lower", "abs_effect_upper"]])
+```
+
+**5. Check sensitivity with retrodesign:**
+
+```python
+# After finding significant result, check reliability
+retro = analyzer.calculate_retrodesign(true_effect=0.01)
+if retro["type_m_error"].iloc[0] > 2:
+    print("Warning: Results may be exaggerated")
+```
+
+### Common Workflows
+
+**Pre-experiment: Sample size calculation**
+
+```python
+from experiment_utils.power_sim import PowerSim
+
+# Determine required sample size
+power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
+result = power_sim.find_sample_size(
+    target_power=0.80,
+    baseline=0.10,
+    effect=0.02
+)
+print(f"Need {result['total_sample_size'].iloc[0]:,.0f} users")
+```
+
+**During experiment: Balance check**
+
+```python
+from experiment_utils.utils import check_covariate_balance
+
+# Check if randomization worked
+balance = check_covariate_balance(
+    data=experiment_df,
+    treatment_col="treatment",
+    covariates=["age", "region", "tenure"]
+)
+print(f"Balance: {balance['balance_flag'].mean():.1%}")
+```
+
+**Post-experiment: Analysis**
+
+```python
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+
+# Full analysis pipeline
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["primary_metric", "secondary_metric"],
+    covariates=["age", "region"],
+    adjustment="balance",
+    bootstrap=True,
+)
+
+analyzer.get_effects()
+analyzer.adjust_pvalues(method="holm")
+
+# Report
+results = analyzer.results
+print(results[["outcome", "absolute_effect", "relative_effect", 
+               "pvalue_mcp", "stat_significance_mcp"]])
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License.
+
+## Citation
+
+If you use this package in your research, please cite:
+
+```bibtex
+@software{experiment_utils_pd,
+  title = {Experiment Utils PD: A Python Package for Experiment Analysis},
+  author = {Sebastian Daza},
+  year = {2026},
+  url = {https://github.com/sdaza/experiment-utils-pd}
+}
 ```
 

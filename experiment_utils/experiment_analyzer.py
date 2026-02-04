@@ -753,7 +753,7 @@ class ExperimentAnalyzer:
                         balance = self.__transform_tuple_column(balance, "experiment", self._experiment_identifier)
                         self._balance.append(balance)
                         balance_mean = balance["balance_flag"].mean()
-                        self._logger.info("::::: Balance: %.2f", np.round(balance_mean, 2))
+                        self._logger.info(f"Balance: {balance_mean:.2%}")
 
                 if len(final_covariates) > 0 and adjustment == "balance":
                     balance_func = get_balance_method(self._balance_method)
@@ -821,7 +821,7 @@ class ExperimentAnalyzer:
                         data=comparison_data, treatment_col=self._instrument_col, covariates=final_covariates
                     )
                     iv_balance_mean = iv_balance["balance_flag"].mean() if not iv_balance.empty else np.nan
-                    self._logger.info("::::: IV Balance: %.2f", np.round(iv_balance_mean, 2))
+                    self._logger.info(f"IV Balance: {iv_balance_mean:.2%}")
 
                 # create adjustment label
                 relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
@@ -1645,10 +1645,16 @@ class ExperimentAnalyzer:
         """
         Returns the balance DataFrame
         """
-        if not self._balance.empty:
+        if isinstance(self._balance, pd.DataFrame) and not self._balance.empty:
             return self._balance
         else:
-            self._logger.warning("No balance information available!")
+            if self._covariates:
+                self._logger.warning(
+                    "No balance information available! "
+                    "If you have covariates, use check_balance() or run get_effects() first."
+                )
+            else:
+                self._logger.warning("No balance information available!")
             return None
 
     @property
@@ -1656,10 +1662,16 @@ class ExperimentAnalyzer:
         """
         Returns the adjusted balance DataFrame
         """
-        if not self._adjusted_balance.empty:
+        if isinstance(self._adjusted_balance, pd.DataFrame) and not self._adjusted_balance.empty:
             return self._adjusted_balance
         else:
-            self._logger.warning("No adjusted balance information available!")
+            if self._covariates:
+                self._logger.warning(
+                    "No adjusted balance information available! "
+                    "Run get_effects() with covariate adjustment to get adjusted balance."
+                )
+            else:
+                self._logger.warning("No adjusted balance information available!")
             return None
 
     @property
@@ -1672,6 +1684,141 @@ class ExperimentAnalyzer:
         else:
             self._logger.warning("No weights available! Weights are only saved when balance adjustment is used.")
             return None
+
+    def check_balance(
+        self,
+        threshold: float = 0.1,
+        min_binary_count: int = 5,
+    ) -> pd.DataFrame | None:
+        """
+        Check covariate balance between treatment and control groups.
+        
+        This method can be called independently of get_effects() to assess balance
+        on the loaded experiment data. It performs the same preprocessing as get_effects()
+        including categorical variable handling, covariate filtering, and standardization.
+        
+        Parameters
+        ----------
+        threshold : float, optional
+            SMD threshold for balance flag (default 0.1). Covariates with 
+            |SMD| < threshold are considered balanced.
+        min_binary_count : int, optional
+            Minimum count required for binary covariates (default 5).
+            Binary covariates with fewer observations are excluded.
+            
+        Returns
+        -------
+        pd.DataFrame or None
+            Balance metrics DataFrame with columns:
+            - experiment columns (if experiment_identifier was specified)
+            - covariate: str - covariate name
+            - mean_treated: float - weighted mean for treatment group
+            - mean_control: float - weighted mean for control group
+            - smd: float - standardized mean difference
+            - balance_flag: int - 1 if balanced (|SMD| < threshold), 0 if imbalanced
+            
+            Returns None if no covariates are specified.
+            
+        Examples
+        --------
+        >>> analyzer = ExperimentAnalyzer(
+        ...     data=df,
+        ...     outcomes=['conversion'],
+        ...     treatment_col='treatment',
+        ...     covariates=['age', 'income', 'region']
+        ... )
+        >>> balance_df = analyzer.check_balance(threshold=0.1)
+        >>> print(f"Balanced: {balance_df['balance_flag'].mean():.2%}")
+        >>> imbalanced = balance_df[balance_df['balance_flag'] == 0]
+        >>> print(f"Imbalanced covariates: {imbalanced['covariate'].tolist()}")
+        
+        Notes
+        -----
+        - Categorical covariates are automatically detected and dummy-encoded
+        - Covariates with zero variance or low frequency are filtered out
+        - The method handles experiment identifiers (checks balance per experiment)
+        - Can be called before or after get_effects()
+        """
+        from .utils import check_covariate_balance
+        
+        if self._covariates is None or len(self._covariates) == 0:
+            self._logger.warning("No covariates specified, balance cannot be assessed!")
+            return None
+        
+        # Identify categorical covariates
+        categorical_info = self.__get_categorical_covariates(data=self._data)
+        
+        # Get experiment groups
+        if self._experiment_identifier:
+            experiment_groups = self._data.groupby(self._experiment_identifier)
+        else:
+            experiment_groups = [(None, self._data)]
+        
+        balance_results = []
+        
+        for experiment_tuple, temp_data in experiment_groups:
+            if experiment_tuple is None:
+                experiment_tuple = (1,)
+                
+            self._logger.info(f"Checking balance for experiment: {experiment_tuple}")
+            
+            # Get treatment values
+            treatvalues = set(temp_data[self._treatment_col].unique())
+            if len(treatvalues) < 2:
+                self._logger.warning(f"Skipping {experiment_tuple}: not enough treatment groups!")
+                continue
+            
+            # Get comparison pairs
+            comparison_pairs = self.__get_comparison_pairs(treatvalues, temp_data)
+            if not comparison_pairs:
+                self._logger.warning(f"Skipping {experiment_tuple}: no valid comparison pairs found!")
+                continue
+            
+            for treatment_val, control_val in comparison_pairs:
+                self._logger.info(f"Checking balance: {treatment_val} vs {control_val}")
+                
+                # Get comparison data
+                comparison_data = temp_data[
+                    temp_data[self._treatment_col].isin([treatment_val, control_val])
+                ].copy()
+                
+                if comparison_data.empty:
+                    self._logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
+                    continue
+                
+                # Check balance using standalone function
+                balance_df = check_covariate_balance(
+                    data=comparison_data,
+                    treatment_col=self._treatment_col,
+                    covariates=self._covariates,
+                    categorical_covariates=categorical_info,
+                    min_binary_count=min_binary_count,
+                    threshold=threshold,
+                    treatment_value=treatment_val,
+                    control_value=control_val,
+                    categorical_max_unique=self._categorical_max_unique,
+                    logger=self._logger,
+                )
+                
+                if not balance_df.empty:
+                    # Add experiment identifier columns
+                    balance_df["experiment"] = [experiment_tuple] * len(balance_df)
+                    balance_df = self.__transform_tuple_column(
+                        balance_df, "experiment", self._experiment_identifier
+                    )
+                    
+                    # Log balance summary
+                    balance_mean = balance_df["balance_flag"].mean()
+                    self._logger.info(f"Balance: {balance_mean:.2%}")
+                    
+                    balance_results.append(balance_df)
+        
+        if balance_results:
+            final_balance = pd.concat(balance_results, ignore_index=True)
+            return final_balance
+        else:
+            self._logger.warning("No balance results generated")
+            return pd.DataFrame()
 
     def get_attribute(self, attribute: str) -> str | None:
         """
