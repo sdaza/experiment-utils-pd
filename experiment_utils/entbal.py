@@ -33,6 +33,10 @@ def design_matrix_optimized(X_np, n_moments=2):
 
 def eb_loss(pars, XD, bw, tars):
     """Loss function for entropy balancing."""
+    # Handle empty design matrix
+    if XD.size == 0 or XD.shape[1] == 0:
+        return 0.0
+
     XDP = -XD.dot(pars)
     # Numerical stability trick
     max_XDP = np.max(XDP)
@@ -74,6 +78,11 @@ class EntropyBalance:
         if base_weights is None:
             base_weights = np.ones(X_np.shape[0])
 
+        # Handle empty design matrix (no covariates after filtering)
+        if XD.size == 0 or XD.shape[1] == 0:
+            self.W = base_weights.copy()
+            return self.W
+
         estimand_upper = estimand.upper()
         if estimand_upper == "ATE":
             targets = np.mean(XD, axis=0)
@@ -91,6 +100,10 @@ class EntropyBalance:
         optimizer_args = {"method": "L-BFGS-B", "options": {"maxiter": 200, "ftol": 1e-7, "disp": False}}
 
         def _eb_weights(pars, XD, bw):
+            # Handle empty design matrix
+            if XD.size == 0 or XD.shape[1] == 0:
+                return bw / np.sum(bw)  # Return normalized base weights
+
             XDP = -XD.dot(pars)
             max_XDP = np.max(XDP)
             Q = bw * np.exp(XDP - max_XDP)
