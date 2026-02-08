@@ -721,12 +721,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             )
             adjustment = None
 
+        if adjustment == "aipw" and model_type not in ("ols", "logistic"):
+            self._logger.warning(
+                f"AIPW adjustment currently supports 'ols' and 'logistic' models. "
+                f"Falling back to unadjusted estimation for {model_type} model on outcome '{outcome}'."
+            )
+            adjustment = None
+
         estimator_map = {
             ("ols", None): self._estimator.linear_regression,
             ("ols", "balance"): self._estimator.weighted_least_squares,
             ("ols", "IV"): self._estimator.iv_regression,
+            ("ols", "aipw"): self._estimator.aipw_ols,
             ("logistic", None): self._estimator.logistic_regression,
             ("logistic", "balance"): self._estimator.weighted_logistic_regression,
+            ("logistic", "aipw"): self._estimator.aipw_logistic,
             ("poisson", None): self._estimator.poisson_regression,
             ("poisson", "balance"): self._estimator.weighted_poisson_regression,
             ("negative_binomial", None): self._estimator.negative_binomial_regression,
@@ -1071,7 +1080,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         balance_mean = balance["balance_flag"].mean()
                         self._logger.info(f"Balance: {balance_mean:.2%}")
 
-                if len(final_covariates) > 0 and adjustment == "balance":
+                if len(final_covariates) > 0 and adjustment in ("balance", "aipw"):
                     balance_func = get_balance_method(self._balance_method)
                     comparison_data = balance_func(
                         data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates]
@@ -1109,7 +1118,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             self._logger.warning("Propensity score column not found, skipping overlap assessment.")
                     if self._overlap_plot:
                         # Check if overlap plot can be generated (requires propensity scores from balance adjustment)
-                        if adjustment != "balance" or len(final_covariates) == 0:
+                        if adjustment not in ("balance", "aipw") or len(final_covariates) == 0:
                             self._logger.warning(
                                 "Overlap plot requested but no balance adjustment method or covariates specified. "
                                 "Overlap plots require propensity scores from balance adjustment. Skipping plot."
@@ -1144,11 +1153,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     iv_balance_mean = iv_balance["balance_flag"].mean() if not iv_balance.empty else np.nan
                     self._logger.info(f"IV Balance: {iv_balance_mean:.2%}")
 
-                relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
+                if adjustment == "aipw":
+                    # AIPW always uses all covariates in the outcome model
+                    relevant_covariates = set(self._final_covariates)
+                else:
+                    relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
-                adjustment_labels = {"balance": "balance", "IV": "IV"}
+                adjustment_labels = {"balance": "balance", "IV": "IV", "aipw": "aipw"}
 
-                if adjustment in adjustment_labels and len(relevant_covariates) > 0:
+                if adjustment == "aipw":
+                    adjustment_label = "aipw"
+                elif adjustment in adjustment_labels and len(relevant_covariates) > 0:
                     adjustment_label = adjustment_labels[adjustment] + "+regression"
                 elif adjustment in adjustment_labels:
                     adjustment_label = adjustment_labels[adjustment]
@@ -1324,9 +1339,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
                             output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
                             output["adjustment"] = adjustment_label
-                            if adjustment == "balance":
+                            if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
-                            if adjustment == "balance" and not adjusted_balance.empty:
+                            if adjustment in ("balance", "aipw") and not adjusted_balance.empty:
                                 output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                             elif not balance.empty:  # Use initial balance if no adjustment or balance failed
                                 output["balance"] = np.round(balance["balance_flag"].mean(), 2)

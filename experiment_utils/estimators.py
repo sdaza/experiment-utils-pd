@@ -1614,6 +1614,267 @@ class Estimators:
 
         return data
 
+    def aipw_ols(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+        **kwargs,
+    ) -> dict[str, str | int | float]:
+        """
+        Augmented Inverse Probability Weighting (AIPW) estimator for continuous outcomes.
+
+        Doubly robust: consistent if EITHER the propensity score model OR the outcome model
+        is correctly specified.
+
+        Requires propensity_score column in data (computed by balance step).
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data with propensity_score column
+        outcome_variable : str
+            Outcome variable name
+        covariates : list[str], optional
+            Covariates for the outcome model
+        cluster_col : str, optional
+            Column for clustered standard errors (used in outcome models)
+        store_model : bool, optional
+            Whether to store the fitted model objects
+        compute_relative_ci : bool, optional
+            Whether to compute Fieller CI for relative effect
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        from scipy import stats
+
+        if "propensity_score" not in data.columns:
+            log_and_raise_error(
+                self._logger,
+                "AIPW requires propensity_score column. Use adjustment='aipw' which computes PS first.",
+            )
+
+        T = data[self._treatment_col].values
+        Y = data[outcome_variable].values
+        ps = data["propensity_score"].values
+        n = len(data)
+
+        # fit outcome models separately for treatment and control
+        treated_data = data[T == 1].copy()
+        control_data = data[T == 0].copy()
+
+        if covariates and len(covariates) > 0:
+            cov_cols = [f"z_{c}" if f"z_{c}" in data.columns else c for c in covariates]
+            cov_cols = [c for c in cov_cols if c in data.columns]
+        else:
+            cov_cols = []
+
+        if cov_cols:
+            formula_t = f"{outcome_variable} ~ " + " + ".join(cov_cols)
+            formula_c = f"{outcome_variable} ~ " + " + ".join(cov_cols)
+        else:
+            formula_t = f"{outcome_variable} ~ 1"
+            formula_c = f"{outcome_variable} ~ 1"
+
+        model_t = smf.ols(formula_t, data=treated_data).fit(cov_type="HC3")
+        model_c = smf.ols(formula_c, data=control_data).fit(cov_type="HC3")
+
+        # predict potential outcomes for ALL units
+        mu1 = model_t.predict(data)
+        mu0 = model_c.predict(data)
+
+        # AIPW influence function for each unit
+        phi = (mu1 - mu0) + T * (Y - mu1) / ps - (1 - T) * (Y - mu0) / (1 - ps)
+
+        ate = float(np.mean(phi))
+        se = float(np.std(phi, ddof=1) / np.sqrt(n))
+
+        z_stat = ate / se if se > 0 else 0
+        pvalue = float(2 * (1 - stats.norm.cdf(abs(z_stat))))
+
+        # control and treatment values
+        control_value = float(np.mean(mu0))
+        treatment_value = control_value + ate
+        relative_effect = ate / abs(control_value) if control_value != 0 else 0
+
+        # relative effect CI via delta method
+        if compute_relative_ci and control_value != 0:
+            rel_se = se / abs(control_value)
+            z_crit = stats.norm.ppf(1 - self._alpha / 2)
+            rel_lower = relative_effect - z_crit * rel_se
+            rel_upper = relative_effect + z_crit * rel_se
+        else:
+            rel_lower = np.nan
+            rel_upper = np.nan
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(T.sum()),
+            "control_units": int(n - T.sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": ate,
+            "standard_error": se,
+            "pvalue": pvalue,
+            "stat_significance": 1 if pvalue < self._alpha else 0,
+            "relative_effect": relative_effect,
+            "rel_effect_lower": rel_lower,
+            "rel_effect_upper": rel_upper,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+            "model_type": "ols",
+            "effect_type": "mean_difference",
+        }
+
+        if store_model:
+            output["fitted_model"] = {"outcome_treated": model_t, "outcome_control": model_c}
+
+        return output
+
+    def aipw_logistic(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+        **kwargs,
+    ) -> dict[str, str | int | float]:
+        """
+        Augmented Inverse Probability Weighting (AIPW) estimator for binary outcomes.
+
+        Doubly robust: consistent if EITHER the propensity score model OR the outcome model
+        is correctly specified. The effect is reported on the probability scale (ATE as
+        difference in probabilities), consistent with marginal effects from logistic regression.
+
+        Requires propensity_score column in data (computed by balance step).
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data with propensity_score column
+        outcome_variable : str
+            Binary outcome variable (0/1)
+        covariates : list[str], optional
+            Covariates for the outcome model
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Ignored (AIPW always estimates on probability scale). Kept for API compatibility.
+        store_model : bool, optional
+            Whether to store the fitted model objects
+        compute_relative_ci : bool, optional
+            Whether to compute CI for relative effect
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        import warnings
+
+        from scipy import stats
+
+        if "propensity_score" not in data.columns:
+            log_and_raise_error(
+                self._logger,
+                "AIPW requires propensity_score column. Use adjustment='aipw' which computes PS first.",
+            )
+
+        T = data[self._treatment_col].values
+        Y = data[outcome_variable].values
+        ps = data["propensity_score"].values
+        n = len(data)
+
+        treated_data = data[T == 1].copy()
+        control_data = data[T == 0].copy()
+
+        if covariates and len(covariates) > 0:
+            cov_cols = [f"z_{c}" if f"z_{c}" in data.columns else c for c in covariates]
+            cov_cols = [c for c in cov_cols if c in data.columns]
+        else:
+            cov_cols = []
+
+        if cov_cols:
+            formula_t = f"{outcome_variable} ~ " + " + ".join(cov_cols)
+            formula_c = f"{outcome_variable} ~ " + " + ".join(cov_cols)
+        else:
+            formula_t = f"{outcome_variable} ~ 1"
+            formula_c = f"{outcome_variable} ~ 1"
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=Warning)
+            model_t = smf.logit(formula_t, data=treated_data).fit(disp=False, maxiter=100, warn_convergence=False)
+            model_c = smf.logit(formula_c, data=control_data).fit(disp=False, maxiter=100, warn_convergence=False)
+
+        # predicted probabilities for ALL units under treatment and control
+        mu1 = model_t.predict(data)
+        mu0 = model_c.predict(data)
+
+        # AIPW influence function
+        phi = (mu1 - mu0) + T * (Y - mu1) / ps - (1 - T) * (Y - mu0) / (1 - ps)
+
+        ate = float(np.mean(phi))
+        se = float(np.std(phi, ddof=1) / np.sqrt(n))
+
+        z_stat = ate / se if se > 0 else 0
+        pvalue = float(2 * (1 - stats.norm.cdf(abs(z_stat))))
+
+        control_value = float(np.mean(mu0))
+        treatment_value = float(np.mean(mu1))
+        relative_effect = ate / abs(control_value) if control_value != 0 else 0
+
+        # logistic-specific quantities
+        # compute odds ratio from average predicted probabilities
+        odds_control = control_value / (1 - control_value) if control_value < 1 else np.nan
+        odds_treatment = treatment_value / (1 - treatment_value) if treatment_value < 1 else np.nan
+        odds_ratio = odds_treatment / odds_control if odds_control > 0 else np.nan
+        log_odds = float(np.log(odds_ratio)) if odds_ratio > 0 else np.nan
+
+        if compute_relative_ci and control_value != 0:
+            rel_se = se / abs(control_value)
+            z_crit = stats.norm.ppf(1 - self._alpha / 2)
+            rel_lower = relative_effect - z_crit * rel_se
+            rel_upper = relative_effect + z_crit * rel_se
+        else:
+            rel_lower = np.nan
+            rel_upper = np.nan
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(T.sum()),
+            "control_units": int(n - T.sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": ate,
+            "relative_effect": relative_effect,
+            "standard_error": se,
+            "pvalue": pvalue,
+            "stat_significance": 1 if pvalue < self._alpha else 0,
+            "odds_ratio": odds_ratio,
+            "log_odds": log_odds,
+            "marginal_effect": ate,
+            "model_type": "logistic",
+            "effect_type": "probability_change",
+            "rel_effect_lower": rel_lower,
+            "rel_effect_upper": rel_upper,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = {"outcome_treated": model_t, "outcome_control": model_c}
+
+        return output
+
     def __calculate_stabilized_weights(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate the stabilized weights for IPW.
