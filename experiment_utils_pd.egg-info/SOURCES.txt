@@ -2,10 +2,12 @@ LICENSE
 README.md
 pyproject.toml
 experiment_utils/__init__.py
+experiment_utils/bootstrap.py
 experiment_utils/entbal.py
 experiment_utils/estimators.py
 experiment_utils/experiment_analyzer.py
 experiment_utils/power_sim.py
+experiment_utils/retrodesign.py
 experiment_utils/utils.py
 experiment_utils_pd.egg-info/PKG-INFO
 experiment_utils_pd.egg-info/SOURCES.txt
@@ -17,6 +19,5 @@ tests/test_balanced_assignment.py
 tests/test_bootstrap.py
 tests/test_categorical_treatment.py
 tests/test_experiment_analyzer.py
-tests/test_glm_survival.py
 tests/test_power_sim.py
 tests/test_weights.py

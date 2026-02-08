@@ -9,6 +9,8 @@ This example shows:
 """
 
 # %% Imports
+import time
+
 import numpy as np
 import pandas as pd
 

@@ -6,3 +6,4 @@ experiment_utils.egg-info
 .venv
 .*cache
 papers
+.cursor
