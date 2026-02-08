@@ -26,9 +26,8 @@ prob = 1 / (
             + 0.6 * data_binary["treatment"]  # Treatment increases click probability
             + 0.02 * data_binary["age"]
             + 0.00001 * data_binary["income"]
-            + 0.1
-            * data_binary["prior_clicks"]
-            * data_binary["treatment"]  # Interaction term to create heterogeneity in treatment effect
+            + 0.1 * data_binary["prior_clicks"]
+            # * data_binary["treatment"]  # Interaction term to create heterogeneity in treatment effect
         )
     )
 )
@@ -41,18 +40,41 @@ analyzer_binary = ExperimentAnalyzer(
     treatment_col="treatment",
     experiment_identifier=["experiment_id"],
     covariates=["age", "income", "prior_clicks"],
-    # regression_covariates=["age", "income", "prior_clicks"],
-    adjustment="balance",
+    regression_covariates=["age", "income", "prior_clicks"],
+    # adjustment="balance",
+    # target_effect="ATT",
     outcome_models={"clicked": ["ols", "logistic"]},  # Use logistic regression
-    bootstrap=True,
-    bootstrap_iterations=5000,
-    overlap_plot=True,
+    bootstrap=False,
+    bootstrap_iterations=2000,
+    # overlap_plot=True,
 )
 
 analyzer_binary.get_effects()
 
 # %%
 print(analyzer_binary.results.iloc[:, :23])  # Print first few columns of results
+
+# %%
+# %% Analyze with logistic regression
+analyzer_binary = ExperimentAnalyzer(
+    data=data_binary,
+    outcomes=["clicked"],
+    treatment_col="treatment",
+    experiment_identifier=["experiment_id"],
+    covariates=["age", "income", "prior_clicks"],
+    # regression_covariates=["age", "income", "prior_clicks"],
+    adjustment="balance",
+    target_effect="ATT",
+    outcome_models={"clicked": ["ols", "logistic"]},  # Use logistic regression
+    bootstrap=False,
+    bootstrap_iterations=2000,
+    # overlap_plot=True,
+)
+
+analyzer_binary.get_effects()
+
+# %%
+print(analyzer_binary.results.iloc[:, :23])
 
 
 # %%
@@ -90,6 +112,7 @@ analyzer_count = ExperimentAnalyzer(
     outcome_models={"clicks": ["ols", "poisson", "negative_binomial"]},  # Use negative binomial regression
     bootstrap=True,
     bootstrap_iterations=2000,
+    target_effect="ATE",
 )
 
 analyzer_count.get_effects()

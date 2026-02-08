@@ -1,5 +1,7 @@
 """Bootstrap inference mixin for ExperimentAnalyzer."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -198,7 +200,9 @@ class BootstrapMixin:
             if adjustment == "balance" and weight_col:
                 estimator_params["weight_column"] = weight_col
 
-            output = model_func(**estimator_params)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                output = model_func(**estimator_params)
             return output["absolute_effect"], output["relative_effect"], None
 
         except Exception as e:

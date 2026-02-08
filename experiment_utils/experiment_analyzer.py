@@ -1089,7 +1089,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     self._adjusted_balance.append(adjusted_balance)
 
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
-                    self._logger.info(f"::::: Adjusted balance: {adj_balance_mean:.2%}")
+                    self._logger.info(f"Adjusted balance: {adj_balance_mean:.2%}")
                     if self._assess_overlap:
                         if "propensity_score" in comparison_data.columns:
                             treatment_scores = comparison_data.loc[
