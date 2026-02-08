@@ -217,7 +217,14 @@ class Estimators:
         return (theta_lower, theta_upper)
 
     def linear_regression(
-        self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+        **kwargs,
     ) -> dict[str, str | int | float]:  # noqa: E501
         """
         Perform linear regression on the given data.
@@ -226,6 +233,9 @@ class Estimators:
         data (pd.DataFrame): The input data containing the variables for the regression.
         outcome_variable (str): The name of the outcome variable to be predicted.
         covariates (List[str]): The list of covariates to include in the regression model.
+        cluster_col (str, optional): Column for clustered standard errors (not supported for OLS yet).
+        store_model (bool, optional): Whether to store the fitted model object.
+        **kwargs: Additional arguments (ignored for compatibility).
 
         Returns:
         Dict: A dictionary containing the results of the regression, including:
@@ -243,6 +253,14 @@ class Estimators:
 
         formula = self.__create_formula(outcome_variable=outcome_variable, covariates=covariates)
         model = smf.ols(formula, data=data)
+
+        # TODO: Add clustered SE support for OLS
+        if cluster_col:
+            self._logger.warning(
+                "Clustered standard errors not yet implemented for OLS. "
+                "Using heteroskedasticity-robust (HC3) standard errors instead."
+            )
+
         results = model.fit(cov_type="HC3")
 
         coefficient = results.params[self._treatment_col]
@@ -251,21 +269,28 @@ class Estimators:
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
-        # Compute Fieller CI for relative effect
-        se_intercept = results.bse["Intercept"]
-        cov_matrix = results.cov_params()
+        # Compute Fieller CI for relative effect (skip during bootstrap)
+        if compute_relative_ci:
+            se_intercept = results.bse["Intercept"]
+            cov_matrix = results.cov_params()
 
-        # Extract covariance between treatment coefficient and intercept for future use
-        try:
-            cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
-        except (KeyError, AttributeError):
-            cov_coef_intercept = 0.0
+            # Extract covariance between treatment coefficient and intercept for future use
+            try:
+                cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+            except (KeyError, AttributeError):
+                cov_coef_intercept = 0.0
 
-        rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-            coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
-        )
+            rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+            )
+        else:
+            # During bootstrap, skip Fieller CI computation (will use percentiles later)
+            rel_effect_lower = np.nan
+            rel_effect_upper = np.nan
+            se_intercept = np.nan
+            cov_coef_intercept = np.nan
 
-        return {
+        output = {
             "outcome": outcome_variable,
             "treatment_units": data[self._treatment_col].sum(),
             "control_units": data[self._treatment_col].count() - data[self._treatment_col].sum(),
@@ -280,10 +305,25 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "model_type": "ols",
+            "effect_type": "mean_difference",
         }
 
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
     def weighted_least_squares(
-        self, data: pd.DataFrame, outcome_variable: str, weight_column: str, covariates: list[str] | None = None
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        weight_column: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+        **kwargs,
     ) -> dict[str, str | int | float]:
         """
         Perform weighted least squares regression on the given data.
@@ -293,6 +333,9 @@ class Estimators:
         outcome_variable (str): The name of the outcome variable to be predicted.
         weight_column (str): The name of the column containing the weights for the regression.
         covariates (List[str]): The list of covariates to include in the regression model.
+        cluster_col (str, optional): Column for clustered standard errors (not supported for WLS yet).
+        store_model (bool, optional): Whether to store the fitted model object.
+        **kwargs: Additional arguments (ignored for compatibility).
 
         Returns:
         Dict: A dictionary containing the results of the regression, including:
@@ -313,6 +356,14 @@ class Estimators:
             data=data,
             weights=data[weight_column],
         )
+
+        # TODO: Add clustered SE support for WLS
+        if cluster_col:
+            self._logger.warning(
+                "Clustered standard errors not yet implemented for WLS. "
+                "Using heteroskedasticity-robust (HC3) standard errors instead."
+            )
+
         results = model.fit(cov_type="HC3")
 
         coefficient = results.params[self._treatment_col]
@@ -321,21 +372,28 @@ class Estimators:
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
-        # Compute Fieller CI for relative effect
-        se_intercept = results.bse["Intercept"]
-        cov_matrix = results.cov_params()
+        # Compute Fieller CI for relative effect (skip during bootstrap)
+        if compute_relative_ci:
+            se_intercept = results.bse["Intercept"]
+            cov_matrix = results.cov_params()
 
-        # Extract covariance between treatment coefficient and intercept for future use
-        try:
-            cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
-        except (KeyError, AttributeError):
-            cov_coef_intercept = 0.0
+            # Extract covariance between treatment coefficient and intercept for future use
+            try:
+                cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+            except (KeyError, AttributeError):
+                cov_coef_intercept = 0.0
 
-        rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-            coefficient, abs(intercept), standard_error, se_intercept, cov_matrix, self._alpha
-        )
+            rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
+                coefficient, abs(intercept), standard_error, se_intercept, cov_matrix, self._alpha
+            )
+        else:
+            # During bootstrap, skip Fieller CI computation (will use percentiles later)
+            rel_effect_lower = np.nan
+            rel_effect_upper = np.nan
+            se_intercept = np.nan
+            cov_coef_intercept = np.nan
 
-        return {
+        output = {
             "outcome": outcome_variable,
             "treatment_units": data[self._treatment_col].sum().astype(int),
             "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
@@ -350,10 +408,24 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "model_type": "ols",
+            "effect_type": "mean_difference",
         }
 
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
     def iv_regression(
-        self, data: pd.DataFrame, outcome_variable: str, covariates: list[str] | None = None
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+        **kwargs,
     ) -> dict[str, str | int | float]:  # noqa: E501
         """ "
         Perform instrumental variable regression on the given data.
@@ -362,6 +434,9 @@ class Estimators:
         data (pd.DataFrame): The input data containing the variables for the regression.
         outcome_variable (str): The name of the outcome variable to be predicted.
         covariates (List[str]): The list of covariates to include in the regression model.
+        cluster_col (str, optional): Column for clustered standard errors (not supported for IV yet).
+        store_model (bool, optional): Whether to store the fitted model object.
+        **kwargs: Additional arguments (ignored for compatibility).
 
         Returns:
         Dict: A dictionary containing the results of the regression, including:
@@ -381,6 +456,14 @@ class Estimators:
 
         formula = self.__create_formula(outcome_variable=outcome_variable, model_type="iv", covariates=covariates)
         model = IV2SLS.from_formula(formula, data)
+
+        # TODO: Add clustered SE support for IV
+        if cluster_col:
+            self._logger.warning(
+                "Clustered standard errors not yet implemented for IV regression. "
+                "Using heteroskedasticity-robust standard errors instead."
+            )
+
         results = model.fit(cov_type="robust")
 
         coefficient = results.params[self._treatment_col]
@@ -389,25 +472,32 @@ class Estimators:
         standard_error = results.std_errors[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
-        # Compute Fieller CI for relative effect
-        se_intercept = results.std_errors["Intercept"]
-        cov_matrix = results.cov
+        # Compute Fieller CI for relative effect (skip during bootstrap)
+        if compute_relative_ci:
+            se_intercept = results.std_errors["Intercept"]
+            cov_matrix = results.cov
 
-        # Extract covariance between treatment coefficient and intercept for future use
-        try:
-            if isinstance(cov_matrix, np.ndarray):
-                # For IV regression, cov is numpy array - assume [Intercept, treatment_col, ...] order
-                cov_coef_intercept = cov_matrix[0, 1] if cov_matrix.shape[0] > 1 else 0.0
-            else:
-                cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
-        except (KeyError, AttributeError, IndexError):
-            cov_coef_intercept = 0.0
+            # Extract covariance between treatment coefficient and intercept for future use
+            try:
+                if isinstance(cov_matrix, np.ndarray):
+                    # For IV regression, cov is numpy array - assume [Intercept, treatment_col, ...] order
+                    cov_coef_intercept = cov_matrix[0, 1] if cov_matrix.shape[0] > 1 else 0.0
+                else:
+                    cov_coef_intercept = cov_matrix.loc[self._treatment_col, "Intercept"]
+            except (KeyError, AttributeError, IndexError):
+                cov_coef_intercept = 0.0
 
-        rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-            coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
-        )
+            rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+            )
+        else:
+            # During bootstrap, skip Fieller CI computation (will use percentiles later)
+            rel_effect_lower = np.nan
+            rel_effect_upper = np.nan
+            se_intercept = np.nan
+            cov_coef_intercept = np.nan
 
-        return {
+        output = {
             "outcome": outcome_variable,
             "treatment_units": data[self._treatment_col].sum().astype(int),
             "control_units": (data[self._treatment_col].count() - data[self._treatment_col].sum()).astype(int),
@@ -422,7 +512,995 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "model_type": "ols",
+            "effect_type": "mean_difference",
         }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def logistic_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform logistic regression with optional marginal effects and clustered standard errors.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Binary outcome variable (0/1)
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Control marginal effects computation (default: "overall")
+            - "overall": Average Marginal Effect (AME)
+            - "mean": Marginal Effect at the Mean (MEM)
+            - "median": Marginal effect at median
+            - True: Same as "overall"
+            - False: Return odds ratios instead
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        formula = self.__create_formula(outcome_variable, covariates)
+        model = smf.logit(formula, data=data)
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]}, disp=False)
+        else:
+            results = model.fit(cov_type="HC3", disp=False)
+
+        # Extract treatment effect on logit scale
+        coefficient = results.params[self._treatment_col]
+        odds_ratio = np.exp(coefficient)
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects (change in probability)
+        if compute_marginal_effects:
+            try:
+                # Determine at value based on method
+                if compute_marginal_effects == "overall":
+                    at_value = "overall"  # AME - average marginal effect
+                elif compute_marginal_effects == "mean":
+                    at_value = "mean"  # MEM - marginal effect at mean
+                elif compute_marginal_effects == "median":
+                    at_value = "median"  # Marginal effect at median
+                else:
+                    at_value = "overall"  # Default
+
+                marginal_effects = results.get_margeff(at=at_value, method="dydx")
+
+                # Get all info from summary_frame (has dy/dx, std err, z, P>|z|, etc.)
+                me_summary = marginal_effects.summary_frame()
+
+                if self._treatment_col in me_summary.index:
+                    me_treatment = me_summary.loc[self._treatment_col, "dy/dx"]
+                    me_se = me_summary.loc[self._treatment_col, "Std. Err."]
+                    me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
+                else:
+                    raise KeyError(f"Treatment column '{self._treatment_col}' not found in marginal effects")
+
+                # Predicted probabilities for interpretation
+                # Control: treatment = 0
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                prob_control = results.predict(data_control).mean()
+
+                # Treatment: treatment = 1
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                prob_treatment = results.predict(data_treatment).mean()
+
+                control_value = prob_control
+                treatment_value = prob_treatment
+                absolute_effect = me_treatment  # Change in probability (percentage points)
+                relative_effect = absolute_effect / prob_control if prob_control > 0 else 0
+                final_se = me_se
+                final_pvalue = me_pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log-odds scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            # Fall back to log-odds scale
+            control_value = results.params["Intercept"]
+            treatment_value = control_value + coefficient
+            absolute_effect = coefficient
+            relative_effect = odds_ratio - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "odds_ratio": odds_ratio,
+            "log_odds": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "logistic",
+            "effect_type": "probability_change" if compute_marginal_effects else "log_odds",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def weighted_logistic_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        weight_column: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform weighted logistic regression with IPW weights.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Binary outcome variable (0/1)
+        weight_column : str
+            Column containing IPW weights
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Control marginal effects computation (default: "overall")
+            - Any truthy value: Compute marginal effects
+            - False: Return odds ratios
+            Note: Weighted models use manual computation (equivalent to "overall")
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        import statsmodels.api as sm
+
+        formula = self.__create_formula(outcome_variable, covariates)
+        model = smf.glm(formula, data=data, family=sm.families.Binomial(), freq_weights=data[weight_column])
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+        else:
+            results = model.fit(cov_type="HC3")
+
+        # Extract treatment effect
+        coefficient = results.params[self._treatment_col]
+        odds_ratio = np.exp(coefficient)
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects
+        if compute_marginal_effects:
+            try:
+                # For weighted GLM, manually compute marginal effects
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                prob_control = results.predict(data_control).mean()
+
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                prob_treatment = results.predict(data_treatment).mean()
+
+                me_treatment = prob_treatment - prob_control
+                control_value = prob_control
+                treatment_value = prob_treatment
+                absolute_effect = me_treatment
+                relative_effect = absolute_effect / prob_control if prob_control > 0 else 0
+
+                # Use delta method for SE approximation
+                final_se = standard_error * prob_control * (1 - prob_control)
+                final_pvalue = pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log-odds scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            control_value = results.params["Intercept"]
+            treatment_value = control_value + coefficient
+            absolute_effect = coefficient
+            relative_effect = odds_ratio - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "odds_ratio": odds_ratio,
+            "log_odds": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "logistic",
+            "effect_type": "probability_change" if compute_marginal_effects else "log_odds",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def poisson_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform Poisson regression for count outcomes with optional marginal effects.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Count outcome variable (non-negative integers)
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Control marginal effects computation (default: "overall")
+            - "overall": Average Marginal Effect (AME)
+            - "mean": Marginal Effect at the Mean (MEM)
+            - "median": Marginal effect at median
+            - True: Same as "overall"
+            - False: Return rate ratios
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        formula = self.__create_formula(outcome_variable, covariates)
+        model = smf.poisson(formula, data=data)
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]}, disp=False)
+        else:
+            results = model.fit(cov_type="HC3", disp=False)
+
+        # Extract treatment effect on log scale
+        coefficient = results.params[self._treatment_col]
+        irr = np.exp(coefficient)  # Incidence rate ratio
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects (change in expected count)
+        if compute_marginal_effects:
+            try:
+                # Determine at value based on method
+                if compute_marginal_effects == "overall":
+                    at_value = "overall"  # AME
+                elif compute_marginal_effects == "mean":
+                    at_value = "mean"  # MEM
+                elif compute_marginal_effects == "median":
+                    at_value = "median"
+                else:
+                    at_value = "overall"  # Default
+
+                marginal_effects = results.get_margeff(at=at_value, method="dydx")
+
+                # Get all info from summary_frame
+                me_summary = marginal_effects.summary_frame()
+
+                if self._treatment_col in me_summary.index:
+                    me_treatment = me_summary.loc[self._treatment_col, "dy/dx"]
+                    me_se = me_summary.loc[self._treatment_col, "Std. Err."]
+                    me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
+                else:
+                    raise KeyError(f"Treatment column '{self._treatment_col}' not found in marginal effects")
+
+                # Predicted counts
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                count_control = results.predict(data_control).mean()
+
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                count_treatment = results.predict(data_treatment).mean()
+
+                control_value = count_control
+                treatment_value = count_treatment
+                absolute_effect = me_treatment  # Change in expected count
+                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                final_se = me_se
+                final_pvalue = me_pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            # Fall back to log scale
+            control_value = np.exp(results.params["Intercept"])
+            treatment_value = control_value * irr
+            absolute_effect = coefficient
+            relative_effect = irr - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "incidence_rate_ratio": irr,
+            "log_irr": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "poisson",
+            "effect_type": "count_change" if compute_marginal_effects else "log_rate_ratio",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def weighted_poisson_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        weight_column: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform weighted Poisson regression with IPW weights.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Count outcome variable
+        weight_column : str
+            Column containing IPW weights
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Control marginal effects computation (default: "overall")
+            Note: Weighted models use manual computation
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        import statsmodels.api as sm
+
+        formula = self.__create_formula(outcome_variable, covariates)
+        model = smf.glm(formula, data=data, family=sm.families.Poisson(), freq_weights=data[weight_column])
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+        else:
+            results = model.fit(cov_type="HC3")
+
+        # Extract treatment effect
+        coefficient = results.params[self._treatment_col]
+        irr = np.exp(coefficient)
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects
+        if compute_marginal_effects:
+            try:
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                count_control = results.predict(data_control).mean()
+
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                count_treatment = results.predict(data_treatment).mean()
+
+                me_treatment = count_treatment - count_control
+                control_value = count_control
+                treatment_value = count_treatment
+                absolute_effect = me_treatment
+                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                final_se = standard_error * count_control
+                final_pvalue = pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            control_value = np.exp(results.params["Intercept"])
+            treatment_value = control_value * irr
+            absolute_effect = coefficient
+            relative_effect = irr - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "incidence_rate_ratio": irr,
+            "log_irr": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "poisson",
+            "effect_type": "count_change" if compute_marginal_effects else "log_rate_ratio",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def negative_binomial_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform Negative Binomial regression for overdispersed count outcomes.
+
+        Use this instead of Poisson when variance > mean (overdispersion).
+        Common in real-world count data (orders, page views, etc.)
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Count outcome variable (non-negative integers)
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Control marginal effects computation (default: "overall")
+            - "overall": Average Marginal Effect (AME)
+            - "mean": Marginal Effect at the Mean (MEM)
+            - "median": Marginal effect at median
+            - True: Same as "overall"
+            - False: Return rate ratios
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        formula = self.__create_formula(outcome_variable, covariates)
+        model = smf.negativebinomial(formula, data=data)
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]}, disp=False)
+        else:
+            results = model.fit(cov_type="HC3", disp=False)
+
+        # Extract treatment effect on log scale
+        coefficient = results.params[self._treatment_col]
+        irr = np.exp(coefficient)  # Incidence rate ratio
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects (change in expected count)
+        if compute_marginal_effects:
+            try:
+                # Determine at value based on method
+                if compute_marginal_effects == "overall":
+                    at_value = "overall"  # AME
+                elif compute_marginal_effects == "mean":
+                    at_value = "mean"  # MEM
+                elif compute_marginal_effects == "median":
+                    at_value = "median"
+                else:
+                    at_value = "overall"  # Default
+
+                marginal_effects = results.get_margeff(at=at_value, method="dydx")
+
+                # Get all info from summary_frame
+                me_summary = marginal_effects.summary_frame()
+
+                if self._treatment_col in me_summary.index:
+                    me_treatment = me_summary.loc[self._treatment_col, "dy/dx"]
+                    me_se = me_summary.loc[self._treatment_col, "Std. Err."]
+                    me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
+                else:
+                    raise KeyError(f"Treatment column '{self._treatment_col}' not found in marginal effects")
+
+                # Predicted counts
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                count_control = results.predict(data_control).mean()
+
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                count_treatment = results.predict(data_treatment).mean()
+
+                control_value = count_control
+                treatment_value = count_treatment
+                absolute_effect = me_treatment  # Change in expected count
+                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                final_se = me_se
+                final_pvalue = me_pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            # Fall back to log scale
+            control_value = np.exp(results.params["Intercept"])
+            treatment_value = control_value * irr
+            absolute_effect = coefficient
+            relative_effect = irr - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "incidence_rate_ratio": irr,
+            "log_irr": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "negative_binomial",
+            "effect_type": "count_change" if compute_marginal_effects else "log_rate_ratio",
+            "alpha_param": results.params.get("alpha", np.nan),  # Dispersion parameter
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def weighted_negative_binomial_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        weight_column: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        compute_marginal_effects: str | bool = "overall",
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform weighted Negative Binomial regression with IPW weights.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Count outcome variable
+        weight_column : str
+            Column containing IPW weights
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        compute_marginal_effects : str | bool, optional
+            Whether to compute marginal effects (default: True)
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        import statsmodels.api as sm
+
+        formula = self.__create_formula(outcome_variable, covariates)
+
+        # For weighted NB, use GLM with NegativeBinomial family
+        model = smf.glm(formula, data=data, family=sm.families.NegativeBinomial(), freq_weights=data[weight_column])
+
+        if cluster_col:
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+        else:
+            results = model.fit(cov_type="HC3")
+
+        # Extract treatment effect
+        coefficient = results.params[self._treatment_col]
+        irr = np.exp(coefficient)
+        standard_error = results.bse[self._treatment_col]
+        pvalue = results.pvalues[self._treatment_col]
+
+        # Convert True to "overall" for backward compatibility
+        if compute_marginal_effects is True:
+            compute_marginal_effects = "overall"
+
+        # Compute marginal effects
+        if compute_marginal_effects:
+            try:
+                data_control = data.copy()
+                data_control[self._treatment_col] = 0
+                count_control = results.predict(data_control).mean()
+
+                data_treatment = data.copy()
+                data_treatment[self._treatment_col] = 1
+                count_treatment = results.predict(data_treatment).mean()
+
+                me_treatment = count_treatment - count_control
+                control_value = count_control
+                treatment_value = count_treatment
+                absolute_effect = me_treatment
+                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                final_se = standard_error * count_control
+                final_pvalue = pvalue
+            except Exception as e:
+                self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
+                compute_marginal_effects = False
+
+        if not compute_marginal_effects:
+            control_value = np.exp(results.params["Intercept"])
+            treatment_value = control_value * irr
+            absolute_effect = coefficient
+            relative_effect = irr - 1
+            final_se = standard_error
+            final_pvalue = pvalue
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "control_value": control_value,
+            "treatment_value": treatment_value,
+            "absolute_effect": absolute_effect,
+            "relative_effect": relative_effect,
+            "standard_error": final_se,
+            "pvalue": final_pvalue,
+            "stat_significance": 1 if final_pvalue < self._alpha else 0,
+            "incidence_rate_ratio": irr,
+            "log_irr": coefficient,
+            "marginal_effect": absolute_effect if compute_marginal_effects else None,
+            "model_type": "negative_binomial",
+            "effect_type": "count_change" if compute_marginal_effects else "log_rate_ratio",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = results
+
+        return output
+
+    def cox_proportional_hazards(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        event_col: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform Cox proportional hazards regression for survival analysis.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Duration/time column
+        event_col : str
+            Event indicator column (1=event, 0=censored)
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        try:
+            from lifelines import CoxPHFitter
+        except ImportError as e:
+            import sys
+
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            error_msg = (
+                f"lifelines package is required for Cox regression but could not be imported.\n"
+                f"Python version: {python_version}\n"
+                f"Error: {e}\n\n"
+                f"Installation instructions:\n"
+                f"  - Python 3.11+: pip install 'lifelines>=0.29.0'\n"
+                f"  - Python 3.10: pip install 'lifelines>=0.27.0,<0.30.0'\n"
+                f"  - Or install with package extras: pip install experiment-utils-pd[survival]"
+            )
+            log_and_raise_error(self._logger, error_msg)
+
+        cph = CoxPHFitter()
+
+        # Prepare data for lifelines
+        if covariates:
+            formula_cols = [self._treatment_col] + [f"z_{c}" for c in covariates]
+        else:
+            formula_cols = [self._treatment_col]
+
+        # Select columns for modeling
+        model_data = data[[outcome_variable, event_col, self._treatment_col]].copy()
+        if covariates:
+            for cov in covariates:
+                model_data[f"z_{cov}"] = data[f"z_{cov}"]
+
+        # Fit model
+        try:
+            cph.fit(
+                model_data,
+                duration_col=outcome_variable,
+                event_col=event_col,
+                formula=" + ".join(formula_cols),
+                cluster_col=cluster_col if cluster_col else None,
+                robust=True if cluster_col else False,
+            )
+        except Exception as e:
+            log_and_raise_error(self._logger, f"Cox regression failed: {e}")
+
+        # Extract treatment effect (log hazard ratio)
+        coefficient = cph.params_[self._treatment_col]
+        hr = np.exp(coefficient)  # Hazard ratio
+        standard_error = cph.standard_errors_[self._treatment_col]
+        pvalue = cph.summary.loc[self._treatment_col, "p"]
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "absolute_effect": coefficient,  # Log hazard ratio
+            "relative_effect": hr,  # Hazard ratio itself
+            "standard_error": standard_error,
+            "pvalue": pvalue,
+            "stat_significance": 1 if pvalue < self._alpha else 0,
+            "hazard_ratio": hr,
+            "log_hazard_ratio": coefficient,
+            "marginal_effect": None,
+            "model_type": "cox",
+            "effect_type": "hazard_ratio",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = cph
+
+        return output
+
+    def weighted_cox_proportional_hazards(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        event_col: str,
+        weight_column: str,
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        store_model: bool = False,
+        compute_relative_ci: bool = True,
+    ) -> dict[str, str | int | float]:
+        """
+        Perform Cox PH regression with IPW weights for balance adjustment.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Input data
+        outcome_variable : str
+            Duration/time column
+        event_col : str
+            Event indicator column (1=event, 0=censored)
+        weight_column : str
+            Column containing IPW weights
+        covariates : list[str], optional
+            Covariates to include
+        cluster_col : str, optional
+            Column for clustered standard errors
+        store_model : bool, optional
+            Whether to store the fitted model object (default: False)
+
+        Returns
+        -------
+        dict
+            Results dictionary with treatment effects, p-values, etc.
+        """
+        try:
+            from lifelines import CoxPHFitter
+        except ImportError as e:
+            import sys
+
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            error_msg = (
+                f"lifelines package is required for Cox regression but could not be imported.\n"
+                f"Python version: {python_version}\n"
+                f"Error: {e}\n\n"
+                f"Installation instructions:\n"
+                f"  - Python 3.11+: pip install 'lifelines>=0.29.0'\n"
+                f"  - Python 3.10: pip install 'lifelines>=0.27.0,<0.30.0'\n"
+                f"  - Or install with package extras: pip install experiment-utils-pd[survival]"
+            )
+            log_and_raise_error(self._logger, error_msg)
+
+        cph = CoxPHFitter()
+
+        # Prepare data
+        if covariates:
+            formula_cols = [self._treatment_col] + [f"z_{c}" for c in covariates]
+        else:
+            formula_cols = [self._treatment_col]
+
+        model_data = data[[outcome_variable, event_col, self._treatment_col, weight_column]].copy()
+        if covariates:
+            for cov in covariates:
+                model_data[f"z_{cov}"] = data[f"z_{cov}"]
+
+        # Fit model with weights and clustering
+        try:
+            cph.fit(
+                model_data,
+                duration_col=outcome_variable,
+                event_col=event_col,
+                formula=" + ".join(formula_cols),
+                weights_col=weight_column,  # IPW weights
+                cluster_col=cluster_col if cluster_col else None,
+                robust=True,  # Recommended with sampling weights
+            )
+        except Exception as e:
+            log_and_raise_error(self._logger, f"Weighted Cox regression failed: {e}")
+
+        # Extract treatment effect
+        coefficient = cph.params_[self._treatment_col]
+        hr = np.exp(coefficient)
+        standard_error = cph.standard_errors_[self._treatment_col]
+        pvalue = cph.summary.loc[self._treatment_col, "p"]
+
+        output = {
+            "outcome": outcome_variable,
+            "treatment_units": int(data[self._treatment_col].sum()),
+            "control_units": int(data[self._treatment_col].count() - data[self._treatment_col].sum()),
+            "absolute_effect": coefficient,  # Log hazard ratio
+            "relative_effect": hr,  # Hazard ratio itself
+            "standard_error": standard_error,
+            "pvalue": pvalue,
+            "stat_significance": 1 if pvalue < self._alpha else 0,
+            "hazard_ratio": hr,
+            "log_hazard_ratio": coefficient,
+            "marginal_effect": None,
+            "model_type": "cox",
+            "effect_type": "hazard_ratio",
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+        }
+
+        if store_model:
+            output["fitted_model"] = cph
+
+        return output
 
     def ipw_logistic(
         self, data: pd.DataFrame, covariates: list[str], penalty: str = "l2", C: float = 1.0, max_iter: int = 5000

@@ -244,8 +244,15 @@ test_multiple_comparison_adjustment()
 # %%
 from experiment_utils.power_sim import PowerSim  # noqa: E402
 
-p = PowerSim(metric='proportion', variants=2, nsim=1000, 
+p = PowerSim(metric='proportion', variants=1, nsim=1200, 
              alpha=0.05)
+
+# %% 
+p.get_power(
+    baseline=[0.0089],
+    effect=0.01,
+    sample_size=[1500])
+
 
 # %% get exaggertion  ratio
 p.simulate_retrodesign(
