@@ -721,12 +721,22 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             )
             adjustment = None
 
-        if adjustment == "aipw" and model_type not in ("ols", "logistic"):
+        if adjustment == "aipw" and model_type == "cox":
             self._logger.warning(
-                f"AIPW adjustment currently supports 'ols' and 'logistic' models. "
-                f"Falling back to unadjusted estimation for {model_type} model on outcome '{outcome}'."
+                "AIPW adjustment not supported for Cox survival models "
+                "(requires specialized survival AIPW methodology). "
+                f"Falling back to unadjusted estimation for outcome '{outcome}'."
             )
             adjustment = None
+
+        if adjustment == "balance" and model_type == "cox":
+            regression_covs_for_outcome = set(self._final_covariates) & set(self._regression_covariates)
+            if len(regression_covs_for_outcome) == 0:
+                self._logger.warning(
+                    "IPW without regression covariates for Cox models estimates the marginal hazard ratio, "
+                    "which differs from the conditional HR due to non-collapsibility of the hazard ratio. "
+                    "Consider adding regression_covariates for IPW+Regression to recover the conditional HR."
+                )
 
         estimator_map = {
             ("ols", None): self._estimator.linear_regression,
@@ -738,8 +748,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             ("logistic", "aipw"): self._estimator.aipw_logistic,
             ("poisson", None): self._estimator.poisson_regression,
             ("poisson", "balance"): self._estimator.weighted_poisson_regression,
+            ("poisson", "aipw"): self._estimator.aipw_poisson,
             ("negative_binomial", None): self._estimator.negative_binomial_regression,
             ("negative_binomial", "balance"): self._estimator.weighted_negative_binomial_regression,
+            ("negative_binomial", "aipw"): self._estimator.aipw_negative_binomial,
             ("cox", None): self._estimator.cox_proportional_hazards,
             ("cox", "balance"): self._estimator.weighted_cox_proportional_hazards,
         }
