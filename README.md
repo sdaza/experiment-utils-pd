@@ -7,8 +7,12 @@ A comprehensive Python package for designing, analyzing, and validating experime
 
 ## Features
 
-- **Experiment Analysis**: Estimate treatment effects with multiple adjustment methods (covariate balancing, regression, IV)
+- **Experiment Analysis**: Estimate treatment effects with multiple adjustment methods (covariate balancing, regression, IV, AIPW)
+- **Multiple Outcome Models**: OLS, logistic, Poisson, negative binomial, and Cox proportional hazards
+- **Doubly Robust Estimation**: Augmented IPW (AIPW) for OLS, logistic, Poisson, and negative binomial models
+- **Survival Analysis**: Cox proportional hazards with IPW and regression adjustment
 - **Covariate Balance**: Check and visualize balance between treatment groups
+- **Marginal Effects**: Average marginal effects for GLMs (probability change, count change)
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
@@ -28,6 +32,8 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Basic Experiment Analysis](#basic-experiment-analysis)
     - [Checking Covariate Balance](#checking-covariate-balance)
     - [Covariate Adjustment Methods](#covariate-adjustment-methods)
+    - [Outcome Models](#outcome-models)
+    - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)
     - [Bootstrap Inference](#bootstrap-inference)
     - [Multiple Experiments](#multiple-experiments)
     - [Categorical Treatment Variables](#categorical-treatment-variables)
@@ -43,6 +49,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Standalone Balance Checker](#standalone-balance-checker)
   - [Advanced Topics](#advanced-topics)
     - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)
+    - [Non-Collapsibility of Hazard and Odds Ratios](#non-collapsibility-of-hazard-and-odds-ratios)
     - [Handling Missing Data](#handling-missing-data)
     - [Best Practices](#best-practices)
     - [Common Workflows](#common-workflows)
@@ -232,6 +239,210 @@ analyzer = ExperimentAnalyzer(
 )
 
 analyzer.get_effects()
+```
+
+**Option 3: IPW + Regression (Combined)**
+
+Use both propensity score weighting and regression covariates for extra robustness:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion", "revenue"],
+    covariates=["age", "income", "is_member"],
+    adjustment="balance",
+    regression_covariates=["age", "income"],  # Also include in regression
+    target_effect="ATE",
+)
+
+analyzer.get_effects()
+```
+
+**Option 4: Doubly Robust / AIPW**
+
+Augmented Inverse Probability Weighting is consistent if either the propensity score model or the outcome model is correctly specified. Available for OLS, logistic, Poisson, and negative binomial models:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    covariates=["age", "income", "is_member"],
+    adjustment="aipw",
+    target_effect="ATE",
+)
+
+analyzer.get_effects()
+
+# AIPW results include influence-function based standard errors
+print(analyzer.results[["outcome", "absolute_effect", "standard_error", "pvalue"]])
+```
+
+AIPW works by fitting separate outcome models for treated and control groups, predicting potential outcomes for all units, and combining them with IPW via the augmented influence function. Standard errors are derived from the influence function, making them robust without requiring bootstrap.
+
+> **Note**: AIPW is not supported for Cox survival models due to the complexity of survival-specific doubly robust methods. For Cox models, use IPW + Regression instead.
+
+### Outcome Models
+
+By default, all outcomes are analyzed with OLS. Use `outcome_models` to specify different model types:
+
+**Logistic regression (binary outcomes)**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["converted", "churned"],
+    outcome_models="logistic",  # Apply to all outcomes
+    covariates=["age", "tenure"],
+)
+
+analyzer.get_effects()
+
+# By default, results report marginal effects (probability change in percentage points)
+# Use compute_marginal_effects=False for odds ratios instead
+```
+
+**Poisson / Negative binomial (count outcomes)**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["orders", "page_views"],
+    outcome_models="poisson",  # or "negative_binomial" for overdispersed counts
+    covariates=["age", "tenure"],
+)
+
+analyzer.get_effects()
+
+# Results report change in expected count (marginal effects) by default
+# Use compute_marginal_effects=False for rate ratios
+```
+
+**Mixed models per outcome**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted", "orders"],
+    outcome_models={
+        "revenue": "ols",
+        "converted": "logistic",
+        "orders": ["poisson", "negative_binomial"],  # Compare both
+    },
+    covariates=["age"],
+)
+
+analyzer.get_effects()
+
+# Results include model_type column to distinguish
+print(analyzer.results[["outcome", "model_type", "absolute_effect", "pvalue"]])
+```
+
+**Marginal effects options**
+
+```python
+# Average Marginal Effect (default) - recommended
+analyzer = ExperimentAnalyzer(..., compute_marginal_effects="overall")
+
+# Marginal Effect at the Mean
+analyzer = ExperimentAnalyzer(..., compute_marginal_effects="mean")
+
+# Odds ratios / rate ratios instead of marginal effects
+analyzer = ExperimentAnalyzer(..., compute_marginal_effects=False)
+```
+
+| `compute_marginal_effects` | Logistic output | Poisson/NB output |
+|---|---|---|
+| `"overall"` (default) | Probability change (pp) | Change in expected count |
+| `"mean"` | Probability change at mean | Count change at mean |
+| `False` | Odds ratio | Rate ratio |
+
+### Survival Analysis (Cox Models)
+
+Analyze time-to-event outcomes using Cox proportional hazards:
+
+```python
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+
+# Specify Cox outcomes as tuples: (time_col, event_col)
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=[("time_to_event", "event_occurred")],
+    outcome_models="cox",
+    covariates=["age", "income"],
+)
+
+analyzer.get_effects()
+
+# Results report log(HR) as absolute_effect and HR as relative_effect
+print(analyzer.results[["outcome", "absolute_effect", "relative_effect", "pvalue"]])
+```
+
+**Cox with regression adjustment**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=[("survival_time", "died")],
+    outcome_models="cox",
+    covariates=["age", "comorbidity_score"],
+    regression_covariates=["age", "comorbidity_score"],
+)
+
+analyzer.get_effects()
+```
+
+**Cox with IPW + Regression (recommended for confounded data)**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=[("survival_time", "died")],
+    outcome_models="cox",
+    covariates=["age", "comorbidity_score"],
+    adjustment="balance",
+    regression_covariates=["age", "comorbidity_score"],  # Include both
+    target_effect="ATE",
+)
+
+analyzer.get_effects()
+```
+
+> **Note**: IPW alone for Cox models estimates the marginal hazard ratio, which differs from the conditional HR due to non-collapsibility. The package will warn you if you use IPW without regression covariates. See [Non-Collapsibility](#non-collapsibility-of-hazard-and-odds-ratios) for details.
+
+**Alternative: separate event_col parameter**
+
+```python
+# Equivalent to tuple notation
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["survival_time"],
+    outcome_models="cox",
+    event_col="died",  # Applies to all outcomes
+)
+```
+
+**Bootstrap for survival models**
+
+Bootstrap can be slow for Cox models with low event rates. Use `skip_bootstrap_for_survival` to fall back to robust standard errors:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=[("survival_time", "died")],
+    outcome_models="cox",
+    bootstrap=True,
+    skip_bootstrap_for_survival=True,  # Use Cox robust SEs instead
+)
 ```
 
 ### Bootstrap Inference
@@ -709,26 +920,44 @@ print(balance[balance["covariate"].str.contains("region")])
 
 ### When to Use Different Adjustment Methods
 
-**No Adjustment:**
-- Randomized experiments with successful randomization
-- Large sample sizes with good balance
-- Simplest, most transparent analysis
+| Method | `adjustment` | `regression_covariates` | Best for |
+|---|---|---|---|
+| No adjustment | `None` | `None` | Well-randomized experiments |
+| Regression | `None` | `["x1", "x2"]` | Variance reduction, simple confounding |
+| IPW | `"balance"` | `None` | Many covariates, non-linear confounding |
+| IPW + Regression | `"balance"` | `["x1", "x2"]` | Extra robustness, survival models |
+| AIPW (doubly robust) | `"aipw"` | (automatic) | Best protection against misspecification |
 
-**Propensity Score Weighting (balance adjustment):**
-- Observational studies
-- Quasi-experiments
-- Randomized experiments with baseline imbalance
-- When you need to adjust for many covariates
-
-**Regression Adjustment:**
-- Want to include covariates but maintain simplicity
-- Covariates are strongly predictive of outcome
-- Linear relationships expected
-
-**Which balance method?**
+**Choosing a balance method:**
 - `ps-logistic`: Default, fast, interpretable
 - `ps-xgboost`: Non-linear relationships, complex interactions
-- `entropy`: Exact moment matching, but can be unstable
+- `entropy`: Exact moment matching, but can be unstable with many covariates
+
+**Choosing an outcome model:**
+
+| Outcome type | Model | `outcome_models` |
+|---|---|---|
+| Continuous (revenue, time) | OLS | `"ols"` (default) |
+| Binary (converted, churned) | Logistic | `"logistic"` |
+| Count (orders, clicks) | Poisson | `"poisson"` |
+| Overdispersed count | Negative binomial | `"negative_binomial"` |
+| Time-to-event | Cox PH | `"cox"` |
+
+### Non-Collapsibility of Hazard and Odds Ratios
+
+When using IPW without regression covariates for Cox or logistic models, the estimated effect may differ from the conditional effect even with perfect covariate balancing. This is not a bug -- it reflects a fundamental property called **non-collapsibility**.
+
+**What happens**: IPW creates a pseudo-population where treatment is independent of covariates, then fits a model without covariates. This estimates the **marginal** effect (population-average). For non-collapsible measures like hazard ratios and odds ratios, the marginal effect differs from the conditional effect.
+
+**When it matters**: The gap increases with stronger covariate effects on the outcome. For Cox models the effect is typically larger than for logistic models.
+
+**Recommendations**:
+- For Cox models: use **regression adjustment** or **IPW + Regression** to recover the conditional HR
+- For logistic models: the default marginal effects output (probability change) is collapsible, so this mainly affects odds ratios (`compute_marginal_effects=False`)
+- For OLS: no issue (mean differences are collapsible)
+- AIPW estimates are on the marginal scale but are doubly robust
+
+The package warns when IPW is used without regression covariates for Cox models.
 
 ### Handling Missing Data
 
