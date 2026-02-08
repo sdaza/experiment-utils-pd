@@ -234,6 +234,201 @@ class PowerSim:
 
         return dd, vv
 
+    def _run_single_power_simulation(
+        self,
+        baseline: list[float],
+        effect: list[float],
+        sample_size: list[int],
+        compliance: list[float],
+        standard_deviation: list[float],
+        comparisons_to_compute: list[tuple[int, int]],
+    ) -> list[bool]:
+        """
+        Run a single power simulation iteration.
+
+        Parameters
+        ----------
+        baseline : list[float]
+            Baseline values for all groups
+        effect : list[float]
+            Effect sizes
+        sample_size : list[int]
+            Sample sizes
+        compliance : list[float]
+            Compliance rates
+        standard_deviation : list[float]
+            Standard deviations
+        comparisons_to_compute : list[tuple[int, int]]
+            List of (control, treatment) comparison pairs
+
+        Returns
+        -------
+        list[bool]
+            List of significance results (True/False) for each comparison
+        """
+        # y = output, x = index of condition
+        y, x = self.__run_experiment(
+            baseline=baseline,
+            effect=effect,
+            sample_size=sample_size,
+            compliance=compliance,
+            standard_deviation=standard_deviation,
+        )
+
+        # iterate only over comparisons we need to compute
+        l_pvalues = []
+        for j, h in comparisons_to_compute:
+            # Skip comparison if either group has 0 sample size (bounds check first)
+            if j >= len(sample_size) or h >= len(sample_size) or sample_size[j] == 0 or sample_size[h] == 0:
+                l_pvalues.append(1.0)  # p-value of 1.0 (not significant)
+                continue
+
+            # getting pvalues
+            if self.metric == "count":
+                ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
+                tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
+                tx[np.isin(tx, j)] = 0
+                tx[np.isin(tx, h)] = 1
+
+                model = sm.Poisson(ty, sm.add_constant(tx))
+                pm = model.fit(disp=False)
+                pvalue = pm.pvalues[1]
+                z = pm.params[1]
+
+            elif self.metric == "proportion":
+                z, pvalue = sm.stats.proportions_ztest(
+                    [np.sum(y[np.isin(x, h)]), np.sum(y[np.isin(x, j)])],
+                    [len(y[np.isin(x, h)]), len(y[np.isin(x, j)])],
+                )
+
+            elif self.metric == "average":
+                z, pvalue = stats.ttest_ind(y[np.isin(x, h)], y[np.isin(x, j)], equal_var=False)
+
+            l_pvalues.append(pvalue)
+
+        pvalue_adjustment = {"two-tailed": 1, "greater": 0.5, "smaller": 0.5}
+
+        correction_methods = {
+            "bonferroni": self.bonferroni,
+            "holm": self.holm_bonferroni,
+            "hochberg": self.hochberg,
+            "sidak": self.sidak,
+            "fdr": self.lsu,
+        }
+
+        if self.correction in correction_methods:
+            # Apply correction based on total number of comparisons defined, not just computed ones
+            # This ensures consistent power calculation even when only computing subset
+            if len(self.comparisons) == 1:
+                # Only one comparison defined total - no correction needed
+                significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
+            elif len(l_pvalues) < len(self.comparisons):
+                # Computing subset of comparisons - manually apply correction using total count
+                # to ensure consistency (e.g., Bonferroni: alpha / total_comparisons)
+                adjusted_alpha = self.alpha / pvalue_adjustment[self.alternative]
+                if self.correction == "bonferroni":
+                    # Bonferroni: compare each p-value to alpha / m (where m = total comparisons)
+                    significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
+                elif self.correction == "sidak":
+                    # Sidak: 1 - (1-alpha)^(1/m)
+                    sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
+                    significant = [p < sidak_alpha for p in l_pvalues]
+                else:
+                    # For other methods (Holm, Hochberg, FDR), need all p-values
+                    # Use simple Bonferroni as fallback
+                    significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
+            else:
+                # Computing all comparisons - use standard correction
+                significant = correction_methods[self.correction](
+                    np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
+                )  # noqa: E501
+        else:
+            # No correction - compare each p-value to alpha directly
+            significant = [p < self.alpha for p in l_pvalues]
+
+        return significant
+
+    def _run_single_retrodesign_simulation(
+        self,
+        baseline: list[float],
+        sample_size: list[int],
+        true_effect: list[float],
+        compliance: list[float],
+        standard_deviation: list[float],
+        comp_true_effect: float,
+        h: int,
+        j: int,
+    ) -> tuple[float, float, bool]:
+        """
+        Run a single retrodesign simulation iteration for one comparison.
+
+        Parameters
+        ----------
+        baseline : list[float]
+            Baseline values for all groups
+        sample_size : list[int]
+            Sample sizes
+        true_effect : list[float]
+            True effect sizes
+        compliance : list[float]
+            Compliance rates
+        standard_deviation : list[float]
+            Standard deviations
+        comp_true_effect : float
+            The true effect for this comparison
+        h : int
+            Control group index
+        j : int
+            Treatment group index
+
+        Returns
+        -------
+        tuple[float, float, bool]
+            (observed_effect, pvalue, is_significant)
+        """
+        y, x = self.__run_experiment(
+            baseline=baseline,
+            sample_size=sample_size,
+            effect=true_effect,
+            compliance=compliance,
+            standard_deviation=standard_deviation,
+        )
+
+        if self.metric == "count":
+            ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
+            tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
+            tx[np.isin(tx, j)] = 0
+            tx[np.isin(tx, h)] = 1
+
+            model = sm.Poisson(ty, sm.add_constant(tx))
+            pm = model.fit(disp=False)
+            pvalue = pm.pvalues[1]
+            observed_effect = pm.params[1]
+
+        elif self.metric == "proportion":
+            count_h = np.sum(y[np.isin(x, h)])
+            count_j = np.sum(y[np.isin(x, j)])
+            nobs_h = len(y[np.isin(x, h)])
+            nobs_j = len(y[np.isin(x, j)])
+
+            z, pvalue = sm.stats.proportions_ztest([count_h, count_j], [nobs_h, nobs_j])
+
+            p_h = count_h / nobs_h if nobs_h > 0 else 0
+            p_j = count_j / nobs_j if nobs_j > 0 else 0
+            observed_effect = p_j - p_h
+
+        elif self.metric == "average":
+            sample_h = y[np.isin(x, h)]
+            sample_j = y[np.isin(x, j)]
+
+            t_stat, pvalue = stats.ttest_ind(sample_j, sample_h, equal_var=False)
+            observed_effect = np.mean(sample_j) - np.mean(sample_h)
+
+        pvalue_threshold = {"two-tailed": self.alpha, "greater": self.alpha, "smaller": self.alpha}
+        is_significant = pvalue < pvalue_threshold.get(self.alternative, self.alpha)
+
+        return observed_effect, pvalue, is_significant
+
     def get_power(
         self,
         baseline: float | list[float] = None,
@@ -330,128 +525,87 @@ class PowerSim:
         # Determine if we should use early stopping
         early_stopping_enabled = self.early_stopping if use_early_stopping is None else use_early_stopping
 
-        # Early stopping parameters
-        check_interval = 20  # Check every 20 simulations
-        min_sims = 50  # Minimum simulations before considering early stopping
+        # Decide whether to use parallel processing
+        use_parallel = self.nsim >= 500 and not early_stopping_enabled
 
-        # iterate over simulations
-        for _i in range(self.nsim):
-            # y = output, x = index of condition
-            y, x = self.__run_experiment(
-                baseline=baseline,
-                effect=effect,
-                sample_size=sample_size,
-                compliance=compliance,
-                standard_deviation=standard_deviation,
+        if use_parallel:
+            from joblib import Parallel, delayed
+
+            self.logger.info(f"Running {self.nsim} power simulations in parallel...")
+
+            # Run all simulations in parallel
+            results = Parallel(n_jobs=-1, backend="loky")(
+                delayed(self._run_single_power_simulation)(
+                    baseline=baseline,
+                    effect=effect,
+                    sample_size=sample_size,
+                    compliance=compliance,
+                    standard_deviation=standard_deviation,
+                    comparisons_to_compute=comparisons_to_compute,
+                )
+                for _ in range(self.nsim)
             )
 
-            # iterate only over comparisons we need to compute
-            l_pvalues = []
-            for j, h in comparisons_to_compute:
-                # Skip comparison if either group has 0 sample size (bounds check first)
-                if j >= len(sample_size) or h >= len(sample_size) or sample_size[j] == 0 or sample_size[h] == 0:
-                    l_pvalues.append(1.0)  # p-value of 1.0 (not significant)
-                    continue
+            # Aggregate results
+            for significant in results:
+                for v, p in enumerate(significant):
+                    pvalues[v].append(p)
+        else:
+            # Sequential execution (needed for early stopping or small nsim)
+            if self.nsim >= 500:
+                self.logger.info(f"Running {self.nsim} power simulations sequentially (early stopping enabled)...")
 
-                # getting pvalues
-                if self.metric == "count":
-                    ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
-                    tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
-                    tx[np.isin(tx, j)] = 0
-                    tx[np.isin(tx, h)] = 1
+            # Early stopping parameters
+            check_interval = 20  # Check every 20 simulations
+            min_sims = 50  # Minimum simulations before considering early stopping
 
-                    model = sm.Poisson(ty, sm.add_constant(tx))
-                    pm = model.fit(disp=False)
-                    pvalue = pm.pvalues[1]
-                    z = pm.params[1]
+            # iterate over simulations
+            for _i in range(self.nsim):
+                significant = self._run_single_power_simulation(
+                    baseline=baseline,
+                    effect=effect,
+                    sample_size=sample_size,
+                    compliance=compliance,
+                    standard_deviation=standard_deviation,
+                    comparisons_to_compute=comparisons_to_compute,
+                )
 
-                elif self.metric == "proportion":
-                    z, pvalue = sm.stats.proportions_ztest(
-                        [np.sum(y[np.isin(x, h)]), np.sum(y[np.isin(x, j)])],
-                        [len(y[np.isin(x, h)]), len(y[np.isin(x, j)])],
-                    )
+                for v, p in enumerate(significant):
+                    pvalues[v].append(p)
 
-                elif self.metric == "average":
-                    z, pvalue = stats.ttest_ind(y[np.isin(x, h)], y[np.isin(x, j)], equal_var=False)
+                # Early stopping check
+                if early_stopping_enabled and (_i + 1) >= min_sims and (_i + 1) % check_interval == 0:
+                    # Check if all comparisons have stabilized
+                    all_stable = True
+                    for comp_idx in range(len(comparisons_to_compute)):
+                        results_so_far = pvalues[comp_idx]
+                        n = len(results_so_far)
+                        if n > 0:
+                            p_hat = np.mean(results_so_far)
+                            # Standard error of proportion: sqrt(p*(1-p)/n)
+                            # Clip p_hat to avoid division issues at boundaries
+                            p_hat_clipped = np.clip(p_hat, 0.01, 0.99)
+                            se = np.sqrt(p_hat_clipped * (1 - p_hat_clipped) / n)
 
-                l_pvalues.append(pvalue)
-
-            pvalue_adjustment = {"two-tailed": 1, "greater": 0.5, "smaller": 0.5}
-
-            correction_methods = {
-                "bonferroni": self.bonferroni,
-                "holm": self.holm_bonferroni,
-                "hochberg": self.hochberg,
-                "sidak": self.sidak,
-                "fdr": self.lsu,
-            }
-
-            if self.correction in correction_methods:
-                # Apply correction based on total number of comparisons defined, not just computed ones
-                # This ensures consistent power calculation even when only computing subset
-                if len(self.comparisons) == 1:
-                    # Only one comparison defined total - no correction needed
-                    significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
-                elif len(l_pvalues) < len(self.comparisons):
-                    # Computing subset of comparisons - manually apply correction using total count
-                    # to ensure consistency (e.g., Bonferroni: alpha / total_comparisons)
-                    adjusted_alpha = self.alpha / pvalue_adjustment[self.alternative]
-                    if self.correction == "bonferroni":
-                        # Bonferroni: compare each p-value to alpha / m (where m = total comparisons)
-                        significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
-                    elif self.correction == "sidak":
-                        # Sidak: 1 - (1-alpha)^(1/m)
-                        sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
-                        significant = [p < sidak_alpha for p in l_pvalues]
-                    else:
-                        # For other methods (Holm, Hochberg, FDR), need all p-values
-                        # Use simple Bonferroni as fallback
-                        significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
-                else:
-                    # Computing all comparisons - use standard correction
-                    significant = correction_methods[self.correction](
-                        np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
-                    )  # noqa: E501
-            else:
-                # No correction - compare each p-value to alpha directly
-                significant = [p < self.alpha for p in l_pvalues]
-
-            for v, p in enumerate(significant):
-                pvalues[v].append(p)
-
-            # Early stopping check
-            if early_stopping_enabled and (_i + 1) >= min_sims and (_i + 1) % check_interval == 0:
-                # Check if all comparisons have stabilized
-                all_stable = True
-                for comp_idx in range(len(comparisons_to_compute)):
-                    results_so_far = pvalues[comp_idx]
-                    n = len(results_so_far)
-                    if n > 0:
-                        p_hat = np.mean(results_so_far)
-                        # Standard error of proportion: sqrt(p*(1-p)/n)
-                        # Clip p_hat to avoid division issues at boundaries
-                        p_hat_clipped = np.clip(p_hat, 0.01, 0.99)
-                        se = np.sqrt(p_hat_clipped * (1 - p_hat_clipped) / n)
-
-                        # Be more conservative near boundaries (power near 0 or 1)
-                        # to avoid premature stopping when power is marginal
-                        precision_threshold = self.early_stopping_precision
-                        if 0.3 < p_hat < 0.95:  # Only use aggressive stopping when power is clearly high or low
+                            # Be more conservative near boundaries (power near 0 or 1)
+                            # to avoid premature stopping when power is marginal
                             precision_threshold = self.early_stopping_precision
-                        else:
-                            # Need more precision near boundaries
-                            precision_threshold = self.early_stopping_precision / 2
+                            if 0.3 < p_hat < 0.95:  # Only use aggressive stopping when power is clearly high or low
+                                precision_threshold = self.early_stopping_precision
+                            else:
+                                # Need more precision near boundaries
+                                precision_threshold = self.early_stopping_precision / 2
 
-                        if se > precision_threshold:
-                            all_stable = False
-                            break
+                            if se > precision_threshold:
+                                all_stable = False
+                                break
 
-                if all_stable:
-                    self.logger.debug(
-                        f"Early stopping at {_i + 1}/{self.nsim} simulations "
-                        f"(precision target: {self.early_stopping_precision})"
-                    )
-                    break
+                    if all_stable:
+                        self.logger.debug(
+                            f"Early stopping at {_i + 1}/{self.nsim} simulations "
+                            f"(precision target: {self.early_stopping_precision})"
+                        )
+                        break
 
         power = pd.DataFrame(pd.DataFrame(pvalues).mean()).reset_index()
         power.columns = ["comparisons", "power"]
@@ -1742,69 +1896,79 @@ class PowerSim:
         results = []
 
         try:
-            for h, j in target_comparisons:
-                significant_effects = []
-                all_effects = []
-                sign_errors = 0
-                significant_count = 0
+            # Decide whether to use parallel processing
+            use_parallel = nsim_val >= 500
 
+            for h, j in target_comparisons:
                 if h == 0:
                     comp_true_effect = true_effect[j - 1]
                 else:
                     comp_true_effect = true_effect[j - 1] - true_effect[h - 1]
 
-                for _ in range(nsim_val):
-                    y, x = self.__run_experiment(
-                        baseline=baseline,
-                        sample_size=sample_size,
-                        effect=true_effect,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
+                if use_parallel:
+                    from joblib import Parallel, delayed
+
+                    self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel...")
+
+                    # Run simulations in parallel
+                    simulation_results = Parallel(n_jobs=-1, backend="loky")(
+                        delayed(self._run_single_retrodesign_simulation)(
+                            baseline=baseline,
+                            sample_size=sample_size,
+                            true_effect=true_effect,
+                            compliance=compliance,
+                            standard_deviation=standard_deviation,
+                            comp_true_effect=comp_true_effect,
+                            h=h,
+                            j=j,
+                        )
+                        for _ in range(nsim_val)
                     )
 
-                    if self.metric == "count":
-                        ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
-                        tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
-                        tx[np.isin(tx, j)] = 0
-                        tx[np.isin(tx, h)] = 1
+                    # Aggregate results
+                    significant_effects = []
+                    all_effects = []
+                    sign_errors = 0
+                    significant_count = 0
 
-                        model = sm.Poisson(ty, sm.add_constant(tx))
-                        pm = model.fit(disp=False)
-                        pvalue = pm.pvalues[1]
-                        observed_effect = pm.params[1]
+                    for observed_effect, _pvalue, is_significant in simulation_results:
+                        all_effects.append(observed_effect)
 
-                    elif self.metric == "proportion":
-                        count_h = np.sum(y[np.isin(x, h)])
-                        count_j = np.sum(y[np.isin(x, j)])
-                        nobs_h = len(y[np.isin(x, h)])
-                        nobs_j = len(y[np.isin(x, j)])
+                        if is_significant:
+                            significant_count += 1
+                            significant_effects.append(observed_effect)
 
-                        z, pvalue = sm.stats.proportions_ztest([count_h, count_j], [nobs_h, nobs_j])
+                            if comp_true_effect != 0:
+                                if np.sign(observed_effect) != np.sign(comp_true_effect):
+                                    sign_errors += 1
+                else:
+                    # Sequential execution for small nsim
+                    significant_effects = []
+                    all_effects = []
+                    sign_errors = 0
+                    significant_count = 0
 
-                        p_h = count_h / nobs_h if nobs_h > 0 else 0
-                        p_j = count_j / nobs_j if nobs_j > 0 else 0
-                        observed_effect = p_j - p_h
+                    for _ in range(nsim_val):
+                        observed_effect, pvalue, is_significant = self._run_single_retrodesign_simulation(
+                            baseline=baseline,
+                            sample_size=sample_size,
+                            true_effect=true_effect,
+                            compliance=compliance,
+                            standard_deviation=standard_deviation,
+                            comp_true_effect=comp_true_effect,
+                            h=h,
+                            j=j,
+                        )
 
-                    elif self.metric == "average":
-                        sample_h = y[np.isin(x, h)]
-                        sample_j = y[np.isin(x, j)]
+                        all_effects.append(observed_effect)
 
-                        t_stat, pvalue = stats.ttest_ind(sample_j, sample_h, equal_var=False)
-                        observed_effect = np.mean(sample_j) - np.mean(sample_h)
+                        if is_significant:
+                            significant_count += 1
+                            significant_effects.append(observed_effect)
 
-                    all_effects.append(observed_effect)
-
-                    pvalue_threshold = {"two-tailed": self.alpha, "greater": self.alpha, "smaller": self.alpha}
-
-                    is_significant = pvalue < pvalue_threshold.get(self.alternative, self.alpha)
-
-                    if is_significant:
-                        significant_count += 1
-                        significant_effects.append(observed_effect)
-
-                        if comp_true_effect != 0:
-                            if np.sign(observed_effect) != np.sign(comp_true_effect):
-                                sign_errors += 1
+                            if comp_true_effect != 0:
+                                if np.sign(observed_effect) != np.sign(comp_true_effect):
+                                    sign_errors += 1
 
                 power = significant_count / nsim_val
                 type_s = sign_errors / significant_count if significant_count > 0 else np.nan

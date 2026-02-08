@@ -7,7 +7,7 @@ name = "experiment-utils-pd"
 version = "0.1.11"
 description = "Set of utility functions for analyzing experimental and observational data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Sebastian Daza", email = "sebastian.daza@gmail.com" }
 ]
@@ -42,6 +42,7 @@ dependencies = [
     "ipykernel>=6.29.5",
     "build>=1.3.0",
     "twine>=6.1.0",
+    "lifelines>=0.30.1",
 ]
 
 [tool.setuptools.packages.find]

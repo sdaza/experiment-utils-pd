@@ -168,7 +168,7 @@ class TestBootstrapInference:
         )
 
         # Test the resampling function directly
-        resampled = analyzer._ExperimentAnalyzer__stratified_resample(sample_data, seed=123)
+        resampled = analyzer._stratified_resample(sample_data, seed=123)
 
         original_ratio = sample_data["treatment"].mean()
         resampled_ratio = resampled["treatment"].mean()
