@@ -1,11 +1,12 @@
 # %% [markdown]
 # # IPW vs Regression Adjustment: When Do They Diverge?
 #
-# Simulation study comparing 4 estimators under varying conditions:
+# Simulation study comparing 5 estimators under varying conditions:
 # - **Unadjusted**: no covariates, no weighting
 # - **Regression**: covariates in outcome model
 # - **IPW**: propensity score weighting (no covariates in outcome model)
-# - **Doubly robust**: IPW + regression covariates
+# - **IPW + Regression**: IPW weighting with covariates in outcome model (NOT formally doubly robust)
+# - **AIPW**: Augmented IPW (true doubly robust estimator)
 #
 # Factors varied:
 # 1. **Selection into treatment**: weak (near-random) vs strong (confounded)
@@ -115,9 +116,9 @@ def generate_data(
 # %% Estimation
 def run_estimators(data: pd.DataFrame) -> dict[str, float]:
     """
-    Run 4 estimators on the data and return absolute_effect for each.
+    Run 5 estimators on the data and return absolute_effect for each.
 
-    Returns dict with keys: unadjusted, regression, ipw, doubly_robust
+    Returns dict with keys: unadjusted, regression, ipw, ipw_regression, aipw
     """
     results = {}
     covs = ["x1", "x2"]
@@ -172,7 +173,7 @@ def run_estimators(data: pd.DataFrame) -> dict[str, float]:
     except Exception:
         results["ipw"] = np.nan
 
-    # 4. Doubly robust (IPW + regression)
+    # 4. IPW + Regression (weighted outcome model with covariates, NOT formally doubly robust)
     try:
         a = ExperimentAnalyzer(
             data=data,
@@ -187,9 +188,27 @@ def run_estimators(data: pd.DataFrame) -> dict[str, float]:
             bootstrap=False,
         )
         a.get_effects()
-        results["doubly_robust"] = a.results["absolute_effect"].iloc[0]
+        results["ipw_regression"] = a.results["absolute_effect"].iloc[0]
     except Exception:
-        results["doubly_robust"] = np.nan
+        results["ipw_regression"] = np.nan
+
+    # 5. AIPW (true doubly robust)
+    try:
+        a = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            covariates=covs,
+            adjustment="aipw",
+            target_effect="ATE",
+            outcome_models={"outcome": "logistic"},
+            bootstrap=False,
+        )
+        a.get_effects()
+        results["aipw"] = a.results["absolute_effect"].iloc[0]
+    except Exception:
+        results["aipw"] = np.nan
 
     return results
 
@@ -266,7 +285,7 @@ print("Done!")
 # %% Compute metrics
 def compute_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
     """Compute bias, RMSE for each estimator x scenario."""
-    estimators = ["unadjusted", "regression", "ipw", "doubly_robust"]
+    estimators = ["unadjusted", "regression", "ipw", "ipw_regression", "aipw"]
     rows = []
 
     for scenario in results_df["scenario"].unique():
@@ -297,9 +316,9 @@ def compute_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
 metrics = compute_metrics(results_df)
 
 # %% Display results
-print("\n" + "=" * 90)
+print("\n" + "=" * 100)
 print("RESULTS: Bias and RMSE by Scenario and Estimator")
-print("=" * 90)
+print("=" * 100)
 
 for scenario in SCENARIOS:
     print(f"\n--- {scenario} ---")
@@ -312,30 +331,20 @@ for scenario in SCENARIOS:
         )
     )
 
-# %% Summary: when do IPW and regression diverge?
-print("\n" + "=" * 90)
-print("SUMMARY: |Bias(regression) - Bias(IPW)| by scenario")
-print("=" * 90)
+# %% Summary
+print("\n" + "=" * 100)
+print("SUMMARY: Bias by scenario and estimator")
+print("=" * 100)
 
 summary_rows = []
 for scenario in SCENARIOS:
     sdf = metrics[metrics["scenario"] == scenario]
-    reg_bias = sdf[sdf["estimator"] == "regression"]["bias"].iloc[0]
-    ipw_bias = sdf[sdf["estimator"] == "ipw"]["bias"].iloc[0]
-    dr_bias = sdf[sdf["estimator"] == "doubly_robust"]["bias"].iloc[0]
-    unadj_bias = sdf[sdf["estimator"] == "unadjusted"]["bias"].iloc[0]
-    summary_rows.append(
-        {
-            "scenario": scenario,
-            "unadjusted_bias": unadj_bias,
-            "regression_bias": reg_bias,
-            "ipw_bias": ipw_bias,
-            "dr_bias": dr_bias,
-            "reg_vs_ipw_gap": abs(reg_bias - ipw_bias),
-        }
-    )
+    row = {"scenario": scenario}
+    for est in ["unadjusted", "regression", "ipw", "ipw_regression", "aipw"]:
+        row[f"{est}"] = sdf[sdf["estimator"] == est]["bias"].iloc[0]
+    summary_rows.append(row)
 
 summary_df = pd.DataFrame(summary_rows)
-print(summary_df.to_string(index=False, float_format=lambda x: f"{x:.5f}"))
+print(summary_df.to_string(index=False, float_format=lambda x: f"{x:+.5f}"))
 
 # %%
