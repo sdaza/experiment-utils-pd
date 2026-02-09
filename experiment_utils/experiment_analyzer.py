@@ -2,6 +2,8 @@
 ExperimentAnalyzer class to analyze and design experiments
 """
 
+import re as _re
+
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -13,6 +15,14 @@ from .bootstrap import BootstrapMixin
 from .estimators import Estimators
 from .retrodesign import RetrodesignMixin
 from .utils import get_logger, log_and_raise_error
+
+
+def _clean_category_name(cat):
+    """Convert category to lowercase and replace spaces/special chars with underscores"""
+    cat_str = str(cat).lower()
+    cat_str = _re.sub(r"[^\w]+", "_", cat_str)
+    cat_str = cat_str.strip("_")
+    return cat_str
 
 
 class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
@@ -489,15 +499,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         reference_map : dict
             Mapping of {covariate: reference_category_used}
         """
-        import re
-
-        def _clean_category_name(cat):
-            """Convert category to lowercase and replace spaces/special chars with underscores"""
-            cat_str = str(cat).lower()
-            cat_str = re.sub(r"[^\w]+", "_", cat_str)
-            cat_str = cat_str.strip("_")
-            return cat_str
-
         dummy_cols_map = {}
         reference_map = {}
 
@@ -1012,6 +1013,24 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 comp_binary_covariates = [c for c in binary_covariates if comparison_data[c].sum() >= min_binary_count]
                 comp_binary_covariates = [c for c in comp_binary_covariates if comparison_data[c].std(ddof=0) != 0]
 
+                # exclude dummies that only appear in one treatment group
+                removed_single_group = []
+                if dummy_map:
+                    treated_mask = comparison_data[self._treatment_col] == 1
+                    control_mask = comparison_data[self._treatment_col] == 0
+                    comp_binary_covariates_filtered = []
+                    for c in comp_binary_covariates:
+                        if c in dummy_map:
+                            t_sum = comparison_data.loc[treated_mask, c].sum()
+                            c_sum = comparison_data.loc[control_mask, c].sum()
+                            if t_sum > 0 and c_sum > 0:
+                                comp_binary_covariates_filtered.append(c)
+                            else:
+                                removed_single_group.append(c)
+                        else:
+                            comp_binary_covariates_filtered.append(c)
+                    comp_binary_covariates = comp_binary_covariates_filtered
+
                 removed_numeric_var = set(numeric_covariates) - set(comp_numeric_covariates)
                 removed_binary_freq = [c for c in binary_covariates if comparison_data[c].sum() < min_binary_count]
                 removed_binary_var = [
@@ -1021,7 +1040,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 final_covariates = comp_numeric_covariates + comp_binary_covariates
                 self._final_covariates = final_covariates
 
-                if removed_numeric_var or removed_binary_freq or removed_binary_var:
+                if removed_numeric_var or removed_binary_freq or removed_binary_var or removed_single_group:
                     self._logger.warning(f"Removed covariates for comparison {treatment_val} vs {control_val}:")
                     if removed_numeric_var:
                         self._logger.warning(f"  - Zero variance (numeric): {sorted(removed_numeric_var)}")
@@ -1029,6 +1048,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         self._logger.warning(f"  - Low frequency (< {min_binary_count}): {sorted(removed_binary_freq)}")
                     if removed_binary_var:
                         self._logger.warning(f"  - Zero variance (binary): {sorted(removed_binary_var)}")
+                    if removed_single_group:
+                        self._logger.warning(f"  - Single group only (dummy): {sorted(removed_single_group)}")
 
                 if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
                     self._logger.warning(
@@ -1055,7 +1076,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
                         for cov in categorical_info.keys():
                             for cat in categorical_info[cov]:
-                                dummy_col = f"{cov}_{cat}"
+                                cat_clean = _clean_category_name(cat)
+                                dummy_col = f"{cov}_{cat_clean}"
                                 if dummy_col in comparison_data_balance.columns:
                                     if comparison_data_balance[dummy_col].sum() >= min_binary_count:
                                         if comparison_data_balance[dummy_col].std(ddof=0) != 0:

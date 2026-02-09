@@ -1955,11 +1955,7 @@ class Estimators:
         mu0 = model_c.predict(data)
 
         # AIPW influence function
-        phi = (
-            (mu1 - mu0)
-            + T * (Y - mu1) / ps
-            - (1 - T) * (Y - mu0) / (1 - ps)
-        )
+        phi = (mu1 - mu0) + T * (Y - mu1) / ps - (1 - T) * (Y - mu0) / (1 - ps)
 
         ate = float(np.mean(phi))
         se = float(np.std(phi, ddof=1) / np.sqrt(n))
@@ -2095,11 +2091,7 @@ class Estimators:
         mu0 = model_c.predict(data)
 
         # AIPW influence function
-        phi = (
-            (mu1 - mu0)
-            + T * (Y - mu1) / ps
-            - (1 - T) * (Y - mu0) / (1 - ps)
-        )
+        phi = (mu1 - mu0) + T * (Y - mu1) / ps - (1 - T) * (Y - mu0) / (1 - ps)
 
         ate = float(np.mean(phi))
         se = float(np.std(phi, ddof=1) / np.sqrt(n))
