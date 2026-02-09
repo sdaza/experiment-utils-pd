@@ -35,8 +35,8 @@ logit_ps = -0.5 + 0.6 * (data["age"] - 35) / 10 + 0.3 * np.log(data["income"]) /
 data["treatment"] = np.random.binomial(1, 1 / (1 + np.exp(-logit_ps)), n)
 
 print(f"Treatment rate: {data['treatment'].mean():.2%}")
-print(f"Mean age (treated): {data.loc[data['treatment']==1, 'age'].mean():.1f}")
-print(f"Mean age (control): {data.loc[data['treatment']==0, 'age'].mean():.1f}")
+print(f"Mean age (treated): {data.loc[data['treatment'] == 1, 'age'].mean():.1f}")
+print(f"Mean age (control): {data.loc[data['treatment'] == 0, 'age'].mean():.1f}")
 
 # %% Simulate time-to-churn
 # TRUE causal effect: treatment REDUCES hazard (protective)

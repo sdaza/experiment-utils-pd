@@ -433,3 +433,176 @@ def test_integration_standalone_and_method(sample_data_with_covariates):
         smd_standalone = balance_standalone[balance_standalone["covariate"] == cov]["smd"].values[0]
         smd_method = balance_method[balance_method["covariate"] == cov]["smd"].values[0]
         assert abs(smd_standalone - smd_method) < 0.01  # Allow small numerical differences
+
+
+class TestDummyExclusionSingleGroup:
+    """Tests that dummy variables appearing in only one treatment group are excluded"""
+
+    def test_dummy_excluded_from_balance_when_only_in_treatment(self):
+        """Category present only in treated group should be excluded from balance"""
+        np.random.seed(42)
+        n = 200
+
+        # 'pl' only in treatment group
+        countries_treatment = np.random.choice(["br", "tr", "pl"], n // 2, p=[0.5, 0.3, 0.2])
+        countries_control = np.random.choice(["br", "tr"], n // 2, p=[0.6, 0.4])
+
+        df = pd.DataFrame(
+            {
+                "experiment_id": 1,
+                "treatment": [1] * (n // 2) + [0] * (n // 2),
+                "outcome": np.random.randn(n),
+                "country": np.concatenate([countries_treatment, countries_control]),
+                "age": np.random.normal(35, 10, n),
+            }
+        )
+
+        analyzer = ExperimentAnalyzer(
+            data=df,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            covariates=["country", "age"],
+            experiment_identifier="experiment_id",
+        )
+
+        analyzer.get_effects()
+        balance = analyzer.balance
+
+        if balance is not None and not balance.empty:
+            balance_covs = balance["covariate"].tolist()
+            assert "country_pl" not in balance_covs, (
+                "country_pl should be excluded from balance (only in treatment group)"
+            )
+
+    def test_dummy_excluded_from_balance_when_only_in_control(self):
+        """Category present only in control group should be excluded from balance"""
+        np.random.seed(42)
+        n = 200
+
+        # 'mx' only in control group
+        countries_treatment = np.random.choice(["br", "tr"], n // 2, p=[0.6, 0.4])
+        countries_control = np.random.choice(["br", "tr", "mx"], n // 2, p=[0.5, 0.3, 0.2])
+
+        df = pd.DataFrame(
+            {
+                "experiment_id": 1,
+                "treatment": [1] * (n // 2) + [0] * (n // 2),
+                "outcome": np.random.randn(n),
+                "country": np.concatenate([countries_treatment, countries_control]),
+                "age": np.random.normal(35, 10, n),
+            }
+        )
+
+        analyzer = ExperimentAnalyzer(
+            data=df,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            covariates=["country", "age"],
+            experiment_identifier="experiment_id",
+        )
+
+        analyzer.get_effects()
+        balance = analyzer.balance
+
+        if balance is not None and not balance.empty:
+            balance_covs = balance["covariate"].tolist()
+            assert "country_mx" not in balance_covs, (
+                "country_mx should be excluded from balance (only in control group)"
+            )
+
+    def test_dummy_excluded_from_standalone_balance_check(self):
+        """Standalone check_covariate_balance should also exclude single-group dummies"""
+        np.random.seed(42)
+        n = 200
+
+        countries_treatment = np.random.choice(["br", "tr", "pl"], n // 2, p=[0.5, 0.3, 0.2])
+        countries_control = np.random.choice(["br", "tr"], n // 2, p=[0.6, 0.4])
+
+        df = pd.DataFrame(
+            {
+                "treatment": [1] * (n // 2) + [0] * (n // 2),
+                "country": np.concatenate([countries_treatment, countries_control]),
+                "age": np.random.normal(35, 10, n),
+            }
+        )
+
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["country", "age"],
+            threshold=0.1,
+        )
+
+        assert not balance_df.empty
+        balance_covs = balance_df["covariate"].tolist()
+        assert "country_pl" not in balance_covs, "country_pl should be excluded (only in treatment group)"
+        assert "country_br" in balance_covs
+        assert "country_tr" in balance_covs
+
+    def test_dummy_excluded_with_uppercase_categories(self):
+        """Categories with uppercase names should be properly cleaned and excluded"""
+        np.random.seed(42)
+        n = 1000
+
+        countries_treatment = np.random.choice(["BR", "TR", "PL"], n // 2, p=[0.5, 0.3, 0.2])
+        countries_control = np.random.choice(["BR", "TR"], n // 2, p=[0.6, 0.4])
+
+        df = pd.DataFrame(
+            {
+                "experiment_id": 1,
+                "treatment": [1] * (n // 2) + [0] * (n // 2),
+                "outcome": np.random.randn(n),
+                "country": np.concatenate([countries_treatment, countries_control]),
+            }
+        )
+
+        analyzer = ExperimentAnalyzer(
+            data=df,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            covariates=["country"],
+            experiment_identifier="experiment_id",
+        )
+
+        analyzer.get_effects()
+        balance = analyzer.balance
+
+        if balance is not None and not balance.empty:
+            balance_covs = balance["covariate"].tolist()
+            assert "country_pl" not in balance_covs, (
+                "country_pl should be excluded (only in treatment group, uppercase cleaned)"
+            )
+            assert "country_br" in balance_covs
+            assert "country_tr" in balance_covs
+
+    def test_dummy_excluded_from_regression_covariates(self):
+        """Dummies in only one group should not be used as regression covariates"""
+        np.random.seed(42)
+        n = 1000
+
+        countries_treatment = np.random.choice(["br", "tr", "pl"], n // 2, p=[0.5, 0.3, 0.2])
+        countries_control = np.random.choice(["br", "tr"], n // 2, p=[0.6, 0.4])
+
+        df = pd.DataFrame(
+            {
+                "experiment_id": 1,
+                "treatment": [1] * (n // 2) + [0] * (n // 2),
+                "outcome": np.random.randn(n),
+                "country": np.concatenate([countries_treatment, countries_control]),
+                "age": np.random.normal(35, 10, n),
+            }
+        )
+
+        analyzer = ExperimentAnalyzer(
+            data=df,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            covariates=["country", "age"],
+            experiment_identifier="experiment_id",
+            adjustment="balance",
+        )
+
+        analyzer.get_effects()
+
+        final_covs = analyzer.get_attribute("final_covariates")
+        assert "country_pl" not in final_covs, "country_pl should be excluded from regression covariates"
