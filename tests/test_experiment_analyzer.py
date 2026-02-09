@@ -286,20 +286,20 @@ def test_categorical_covariates_comprehensive():
             # All should be lowercase (no region_East, only region_east)
             assert dummy.islower(), f"Dummy variable {dummy} should be lowercase"
 
-    # Check status (2 categories - should be treated as binary, not categorical with 3-10 range)
+    # Check status (2 non-{0,1} values - should be recoded to binary 0/1, not dummy-encoded)
     status_dummies = [c for c in covariate_names if c.startswith("status_")]
-    assert len(status_dummies) == 0, f"Status should not be converted to dummies (only 2 values), got: {status_dummies}"
-    # Status should appear as-is if it passes binary checks
+    assert len(status_dummies) == 0, f"Status should be recoded to binary, not dummy-encoded, got: {status_dummies}"
+    assert "status" in covariate_names, "Status should appear as a binary covariate (recoded to 0/1)"
 
     # Check numeric covariate appears once
     assert "income" in covariate_names
 
-    # Check binary covariate appears once
+    # Check binary covariate {0, 1} appears once (not dummy-encoded)
     assert "has_feature" in covariate_names
 
-    # Total should have at least segment(4) + income(1) + has_feature(1) = 6 covariates
+    # Total should have at least segment(4) + status(1) + income(1) + has_feature(1) = 7 covariates
     # Region dummies may be filtered due to low counts in treatment/control splits
-    assert len(balance) >= 6, f"Expected at least 6 balance rows, got {len(balance)}"
+    assert len(balance) >= 7, f"Expected at least 7 balance rows, got {len(balance)}"
 
 
 def test_categorical_reference_category():
