@@ -1208,8 +1208,17 @@ class Estimators:
 
         formula = self.__create_formula(outcome_variable, covariates)
 
-        # For weighted NB, use GLM with NegativeBinomial family
-        model = smf.glm(formula, data=data, family=sm.families.NegativeBinomial(), freq_weights=data[weight_column])
+        # For weighted NB, use GLM with NegativeBinomial family (alpha is fixed, not estimated)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Negative binomial dispersion parameter alpha not set")
+            model = smf.glm(
+                formula,
+                data=data,
+                family=sm.families.NegativeBinomial(),
+                freq_weights=data[weight_column],
+            )
 
         if cluster_col:
             results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
