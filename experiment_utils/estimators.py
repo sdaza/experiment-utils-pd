@@ -254,14 +254,10 @@ class Estimators:
         formula = self.__create_formula(outcome_variable=outcome_variable, covariates=covariates)
         model = smf.ols(formula, data=data)
 
-        # TODO: Add clustered SE support for OLS
         if cluster_col:
-            self._logger.warning(
-                "Clustered standard errors not yet implemented for OLS. "
-                "Using heteroskedasticity-robust (HC3) standard errors instead."
-            )
-
-        results = model.fit(cov_type="HC3")
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+        else:
+            results = model.fit(cov_type="HC3")
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
@@ -357,14 +353,10 @@ class Estimators:
             weights=data[weight_column],
         )
 
-        # TODO: Add clustered SE support for WLS
         if cluster_col:
-            self._logger.warning(
-                "Clustered standard errors not yet implemented for WLS. "
-                "Using heteroskedasticity-robust (HC3) standard errors instead."
-            )
-
-        results = model.fit(cov_type="HC3")
+            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+        else:
+            results = model.fit(cov_type="HC3")
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
@@ -457,14 +449,10 @@ class Estimators:
         formula = self.__create_formula(outcome_variable=outcome_variable, model_type="iv", covariates=covariates)
         model = IV2SLS.from_formula(formula, data)
 
-        # TODO: Add clustered SE support for IV
         if cluster_col:
-            self._logger.warning(
-                "Clustered standard errors not yet implemented for IV regression. "
-                "Using heteroskedasticity-robust standard errors instead."
-            )
-
-        results = model.fit(cov_type="robust")
+            results = model.fit(cov_type="clustered", clusters=data[cluster_col])
+        else:
+            results = model.fit(cov_type="robust")
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
