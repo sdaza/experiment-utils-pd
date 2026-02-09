@@ -249,8 +249,12 @@ def check_covariate_balance(
                 continue
 
             is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(data[cov].dtype, pd.CategoricalDtype)
+            n_unique = data[cov].nunique()
+            is_natural_binary = n_unique == 2 and set(data[cov].dropna().unique()) <= {0, 1}
             is_low_cardinality_numeric = (
-                pd.api.types.is_numeric_dtype(data[cov]) and 3 <= data[cov].nunique() <= categorical_max_unique
+                pd.api.types.is_numeric_dtype(data[cov])
+                and 2 <= n_unique <= categorical_max_unique
+                and not is_natural_binary
             )
 
             if is_object or is_low_cardinality_numeric:
