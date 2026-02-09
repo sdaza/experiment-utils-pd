@@ -97,11 +97,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
         Maximum number of unique values for numeric columns to be treated as categorical.
-        Numeric columns (int or float) with 3 to categorical_max_unique unique values
-        will be converted to dummy variables.
-        Numeric columns with exactly 2 unique values are automatically recoded to {0, 1}
-        and treated as binary (most frequent value becomes 0/reference).
-        Set to 2 to disable categorical treatment for numeric columns (nothing will match 3 <= n <= 2).
+        Numeric columns (int or float) with 2 to categorical_max_unique unique values
+        will be converted to dummy variables, excluding natural binary {0, 1} columns
+        which are kept as-is. A reference category (most frequent) is picked and excluded
+        from regression but included in balance tables.
+        Set to 1 to disable categorical treatment for numeric columns.
         Set to 5, 10, or higher for more inclusive behavior.
         By default 2.
     outcome_models : dict[str, str | list[str]] | str | list[str] | None, optional
@@ -422,31 +422,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         self._data = self._data[required_columns]
 
-    def __recode_binary_covariates(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Recode numeric covariates with exactly 2 unique non-{0,1} values to {0, 1}.
-
-        The most frequent value becomes 0 (reference), the other becomes 1.
-        This is called before covariate classification so these columns are
-        detected as binary covariates rather than needing dummy encoding.
-        """
-        if self._covariates is None:
-            return data
-        for c in self._covariates:
-            if c not in data.columns or not pd.api.types.is_numeric_dtype(data[c]):
-                continue
-            unique_vals = set(data[c].dropna().unique())
-            if len(unique_vals) == 2 and unique_vals != {0, 1} and not unique_vals <= {0, 1}:
-                ref_val = data[c].value_counts().idxmax()  # most frequent → 0 (reference)
-                other_val = (unique_vals - {ref_val}).pop()
-                data[c] = (data[c] == other_val).astype(int)
-                self._logger.info(f"Recoded '{c}' to binary: {ref_val} → 0 (reference), {other_val} → 1")
-        return data
-
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
         """Get binary covariates, optionally excluding categorical columns that were converted to dummies.
 
-        Detects any numeric column with exactly 2 unique values.
-        Non-{0,1} columns should be recoded to {0,1} via __recode_binary_covariates first.
+        Only detects columns that are already natural binary indicators (values are {0, 1}).
+        Numeric columns with 2 unique non-{0,1} values (e.g., {10.0, 11.0}) are handled
+        by __get_categorical_covariates and dummy-encoded instead.
         """
         binary_covariates = []
         if exclude_categoricals is None:
@@ -455,7 +436,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             for c in self._covariates:
                 if c in exclude_categoricals:
                     continue  # Skip categorical columns that are now dummies
-                if pd.api.types.is_numeric_dtype(data[c]) and data[c].nunique() == 2:
+                if data[c].nunique() == 2 and set(data[c].dropna().unique()) <= {0, 1}:
                     binary_covariates.append(c)
         return binary_covariates
 
@@ -478,8 +459,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         Detection rules:
         - object/category dtype columns
-        - numeric columns (int or float) with 3 to categorical_max_unique unique values
-          (2-value columns are handled as binary by __get_binary_covariates)
+        - numeric columns (int or float) with 2 to categorical_max_unique unique values,
+          excluding natural binary columns (values already {0, 1})
 
         Returns dict: {covariate_name: [list_of_categories]}
         """
@@ -489,10 +470,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
 
                 # treat numeric columns (int or float) as categorical if they have
-                # 3 to categorical_max_unique unique values
-                # 2-value columns are handled as binary (recoded to 0/1)
+                # 2 to categorical_max_unique unique values
+                # exclude natural binary {0, 1} columns since those don't need dummy encoding
+                n_unique = data[c].nunique()
+                is_natural_binary = n_unique == 2 and set(data[c].dropna().unique()) <= {0, 1}
                 is_low_cardinality_numeric = (
-                    pd.api.types.is_numeric_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
+                    pd.api.types.is_numeric_dtype(data[c])
+                    and 2 <= n_unique <= self._categorical_max_unique
+                    and not is_natural_binary
                 )
 
                 if is_object or is_low_cardinality_numeric:
@@ -615,12 +600,15 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 if cov not in data.columns:
                     continue
 
+                n_unique = data[cov].nunique()
+                is_natural_binary = n_unique == 2 and set(data[cov].dropna().unique()) <= {0, 1}
                 is_likely_categorical = (
                     pd.api.types.is_object_dtype(data[cov])
                     or isinstance(data[cov].dtype, pd.CategoricalDtype)
                     or (
                         pd.api.types.is_numeric_dtype(data[cov])
-                        and 3 <= data[cov].nunique() <= self._categorical_max_unique
+                        and 2 <= n_unique <= self._categorical_max_unique
+                        and not is_natural_binary
                     )
                 )
 
@@ -971,8 +959,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     f"Dropped {missing_summary['rows_dropped']} rows due to missing values "
                     f"({missing_summary['pct_dropped']:.1f}% of data)"
                 )
-
-            temp_pd = self.__recode_binary_covariates(temp_pd)
 
             categorical_info = self.__get_categorical_covariates(data=temp_pd)
             dummy_map = {}
