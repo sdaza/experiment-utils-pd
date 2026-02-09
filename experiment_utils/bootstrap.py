@@ -154,7 +154,10 @@ class BootstrapMixin:
 
             if adjustment == "balance":
                 weight_col = self._target_weights[self._target_effect]
-                if self._bootstrap_fixed_weights:
+                if len(boot_final_covariates) == 0:
+                    # No covariates to balance on: assign uniform weights
+                    boot_data[weight_col] = 1.0
+                elif self._bootstrap_fixed_weights:
                     if weight_col not in boot_data.columns:
                         self._logger.warning(
                             f"bootstrap_fixed_weights=True but weight column '{weight_col}' not found in data. "

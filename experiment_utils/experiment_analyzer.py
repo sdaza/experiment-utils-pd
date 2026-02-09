@@ -96,12 +96,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     pvalue_adjustment : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
-        Maximum number of unique values for integer/numeric columns to be treated as categorical.
-        Integer columns with 3 to categorical_max_unique unique values will be converted to dummy variables.
-        Binary integers (2 values) are excluded and kept as-is.
-        Set to 2 to disable categorical treatment for integers (nothing will match 3 <= n <= 2).
+        Maximum number of unique values for numeric columns to be treated as categorical.
+        Numeric columns (int or float) with 3 to categorical_max_unique unique values
+        will be converted to dummy variables.
+        Binary numeric columns (2 unique values) are automatically detected and treated as binary covariates.
+        Set to 2 to disable categorical treatment for numeric columns (nothing will match 3 <= n <= 2).
         Set to 5, 10, or higher for more inclusive behavior.
-        By default 2 (effectively disables categorical treatment for integer columns).
+        By default 2 (effectively disables categorical treatment for numeric columns).
     outcome_models : dict[str, str | list[str]] | str | list[str] | None, optional
         Specify model type(s) per outcome or globally. By default None (uses OLS for all outcomes).
         - Dict: {"revenue": "ols", "clicked": "logistic", "orders": "poisson"}
@@ -416,7 +417,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._data = self._data[required_columns]
 
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
-        """Get binary covariates, optionally excluding categorical columns that were converted to dummies."""
+        """Get binary covariates, optionally excluding categorical columns that were converted to dummies.
+
+        Detects any numeric column with exactly 2 unique values (e.g., 0/1, 10.0/11.0).
+        """
         binary_covariates = []
         if exclude_categoricals is None:
             exclude_categoricals = set()
@@ -424,7 +428,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             for c in self._covariates:
                 if c in exclude_categoricals:
                     continue  # Skip categorical columns that are now dummies
-                if data[c].nunique() == 2 and data[c].max() == 1:
+                if pd.api.types.is_numeric_dtype(data[c]) and data[c].nunique() == 2:
                     binary_covariates.append(c)
         return binary_covariates
 
@@ -447,7 +451,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         Detection rules:
         - object/category dtype columns
-        - integer columns with 3-10 unique values (excludes binary 0/1 columns)
+        - numeric columns (int or float) with 3 to categorical_max_unique unique values
+          (excludes binary columns with 2 values since those are handled by __get_binary_covariates)
 
         Returns dict: {covariate_name: [list_of_categories]}
         """
@@ -456,13 +461,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             for c in self._covariates:
                 is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
 
-                # treat integers as categorical if they have 3 to categorical_max_unique values
-                # exclude binary (2 values) since those don't need dummy encoding
-                is_low_cardinality_int = (
-                    pd.api.types.is_integer_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
+                # treat numeric columns (int or float) as categorical if they have
+                # 3 to categorical_max_unique unique values
+                # exclude binary (2 values) since those are handled by __get_binary_covariates
+                is_low_cardinality_numeric = (
+                    pd.api.types.is_numeric_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
                 )
 
-                if is_object or is_low_cardinality_int:
+                if is_object or is_low_cardinality_numeric:
                     categories = sorted(data[c].dropna().unique())
                     categorical_info[c] = categories
 
@@ -586,7 +592,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     pd.api.types.is_object_dtype(data[cov])
                     or isinstance(data[cov].dtype, pd.CategoricalDtype)
                     or (
-                        pd.api.types.is_integer_dtype(data[cov])
+                        pd.api.types.is_numeric_dtype(data[cov])
                         and 3 <= data[cov].nunique() <= self._categorical_max_unique
                     )
                 )
@@ -1130,7 +1136,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         adjusted_balance, "experiment", self._experiment_identifier
                     )
                     self._adjusted_balance.append(adjusted_balance)
-
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
                     self._logger.info(f"Adjusted balance: {adj_balance_mean:.2%}")
                     if self._assess_overlap:
@@ -1166,6 +1171,15 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             )
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
+                elif len(final_covariates) == 0 and adjustment in ("balance", "aipw"):
+                    # No covariates to balance on: assign uniform weights so the pipeline
+                    # proceeds without error and produces results equivalent to unadjusted analysis.
+                    weight_col = self._target_weights[self._target_effect]
+                    comparison_data[weight_col] = 1.0
+                    self._logger.info(
+                        "No covariates for balance adjustment — assigning uniform weights (1.0). "
+                        "Results will be equivalent to unadjusted analysis."
+                    )
 
                 if len(final_covariates) > 0 and adjustment == "balance":
                     weight_col = self._target_weights[self._target_effect]
@@ -1257,7 +1271,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         self._logger,
                                         f"Weight column '{weight_col}' not found after balance calculation.",
                                     )
-                                if comparison_data[weight_col].var() == 0:
+                                if len(final_covariates) > 0 and comparison_data[weight_col].var() == 0:
                                     self._logger.warning(
                                         f"Weight column '{weight_col}' has zero variance for comparison {treatment_val} vs {control_val}. Results might be unreliable."  # noqa: E501
                                     )

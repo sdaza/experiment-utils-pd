@@ -249,11 +249,11 @@ def check_covariate_balance(
                 continue
 
             is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(data[cov].dtype, pd.CategoricalDtype)
-            is_low_cardinality_int = (
-                pd.api.types.is_integer_dtype(data[cov]) and 3 <= data[cov].nunique() <= categorical_max_unique
+            is_low_cardinality_numeric = (
+                pd.api.types.is_numeric_dtype(data[cov]) and 3 <= data[cov].nunique() <= categorical_max_unique
             )
 
-            if is_object or is_low_cardinality_int:
+            if is_object or is_low_cardinality_numeric:
                 categories = sorted(data[cov].dropna().unique())
                 categorical_covariates[cov] = categories
 
