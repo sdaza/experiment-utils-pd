@@ -695,6 +695,7 @@ class Estimators:
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
             if cluster_col:
                 results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
             else:
@@ -952,6 +953,7 @@ class Estimators:
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
             if cluster_col:
                 results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
             else:
@@ -1218,6 +1220,7 @@ class Estimators:
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
             if cluster_col:
                 results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
             else:
@@ -1618,16 +1621,25 @@ class Estimators:
         eb = EntropyBalance()
         weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_effect)
 
-        # Rescale weights so they sum to n_group instead of 1.0 per group.
-        # Entropy balancing returns normalized probabilities (summing to 1),
+        # Entropy balancing normalizes reweighted groups so their weights sum to 1.0,
         # but freq_weights in statsmodels GLM expect count-like magnitudes.
-        # Without rescaling, near-zero weights cause division warnings in GLM.
+        # Rescale only the group(s) that entropy balancing actually normalized:
+        #   ATT  -> control reweighted, treated kept at 1.0
+        #   ATE  -> both groups reweighted
+        #   ATC  -> treated reweighted, control kept at 1.0
         treatment_np = treatment_indicator.values if hasattr(treatment_indicator, "values") else treatment_indicator
-        for group_val in [0, 1]:
+        estimand_upper = self._target_effect.upper()
+        reweight_groups = {"ATT": [0], "ATE": [0, 1], "ATC": [1]}.get(estimand_upper, [0, 1])
+        for group_val in reweight_groups:
             mask = treatment_np == group_val
-            group_sum = weights[mask].sum()
-            if group_sum > 0:
-                weights[mask] = weights[mask] * mask.sum()
+            n_group = mask.sum()
+            if n_group > 0 and weights[mask].sum() > 0:
+                weights[mask] = weights[mask] * n_group
+
+        # Clip to a small positive floor so no weight is exactly zero
+        # (exp underflow in entropy optimization can produce 0.0, which
+        # causes division-by-zero warnings in statsmodels GLM).
+        weights = np.maximum(weights, 1e-10)
 
         data[self._target_weights[self._target_effect]] = weights
 
