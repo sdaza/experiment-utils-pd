@@ -686,15 +686,19 @@ class Estimators:
         dict
             Results dictionary with treatment effects, p-values, etc.
         """
+        import warnings
+
         import statsmodels.api as sm
 
         formula = self.__create_formula(outcome_variable, covariates)
         model = smf.glm(formula, data=data, family=sm.families.Binomial(), freq_weights=data[weight_column])
 
-        if cluster_col:
-            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
-        else:
-            results = model.fit(cov_type="HC3")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            if cluster_col:
+                results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+            else:
+                results = model.fit(cov_type="HC3")
 
         # Extract treatment effect
         coefficient = results.params[self._treatment_col]
@@ -939,15 +943,19 @@ class Estimators:
         dict
             Results dictionary with treatment effects, p-values, etc.
         """
+        import warnings
+
         import statsmodels.api as sm
 
         formula = self.__create_formula(outcome_variable, covariates)
         model = smf.glm(formula, data=data, family=sm.families.Poisson(), freq_weights=data[weight_column])
 
-        if cluster_col:
-            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
-        else:
-            results = model.fit(cov_type="HC3")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            if cluster_col:
+                results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+            else:
+                results = model.fit(cov_type="HC3")
 
         # Extract treatment effect
         coefficient = results.params[self._treatment_col]
@@ -1208,10 +1216,12 @@ class Estimators:
                 freq_weights=data[weight_column],
             )
 
-        if cluster_col:
-            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
-        else:
-            results = model.fit(cov_type="HC3")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+            if cluster_col:
+                results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]})
+            else:
+                results = model.fit(cov_type="HC3")
 
         # Extract treatment effect
         coefficient = results.params[self._treatment_col]

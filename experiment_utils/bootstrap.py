@@ -205,6 +205,7 @@ class BootstrapMixin:
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
+                warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
                 output = model_func(**estimator_params)
             return output["absolute_effect"], output["relative_effect"], None
 
