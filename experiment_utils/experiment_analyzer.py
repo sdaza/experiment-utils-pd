@@ -99,10 +99,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Maximum number of unique values for numeric columns to be treated as categorical.
         Numeric columns (int or float) with 3 to categorical_max_unique unique values
         will be converted to dummy variables.
-        Binary numeric columns (2 unique values) are automatically detected and treated as binary covariates.
+        Numeric columns with exactly 2 unique values are automatically recoded to {0, 1}
+        and treated as binary (most frequent value becomes 0/reference).
         Set to 2 to disable categorical treatment for numeric columns (nothing will match 3 <= n <= 2).
         Set to 5, 10, or higher for more inclusive behavior.
-        By default 2 (effectively disables categorical treatment for numeric columns).
+        By default 2.
     outcome_models : dict[str, str | list[str]] | str | list[str] | None, optional
         Specify model type(s) per outcome or globally. By default None (uses OLS for all outcomes).
         - Dict: {"revenue": "ols", "clicked": "logistic", "orders": "poisson"}
@@ -124,6 +125,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Results interpretation:
         - Logistic: change in probability (percentage points) or odds ratio
         - Poisson/NegBin: change in expected count or rate ratio
+    min_binary_count : int, optional
+        Minimum number of observations required for a binary/dummy covariate to be included
+        in the analysis. Covariates with fewer observations are excluded. By default 10.
     store_fitted_models : bool, optional
         Store fitted model instances for retrieval via get_fitted_models(). By default True.
         Enables post-hoc analysis, diagnostics, predictions, and accurate retrodesign simulation.
@@ -169,6 +173,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         outcome_models: dict[str, str | list[str]] | str | list[str] | None = None,
         cluster_col: str | None = None,
         compute_marginal_effects: str | bool = True,
+        min_binary_count: int = 10,
         store_fitted_models: bool = True,
         event_col: str | None = None,
     ) -> None:
@@ -218,6 +223,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._outcome_models = outcome_models
         self._cluster_col = cluster_col
         self._compute_marginal_effects = compute_marginal_effects
+        self._min_binary_count = min_binary_count
         self._store_fitted_models = store_fitted_models
         self._event_col = event_col
         self.__check_input()
@@ -416,10 +422,31 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         self._data = self._data[required_columns]
 
+    def __recode_binary_covariates(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Recode numeric covariates with exactly 2 unique non-{0,1} values to {0, 1}.
+
+        The most frequent value becomes 0 (reference), the other becomes 1.
+        This is called before covariate classification so these columns are
+        detected as binary covariates rather than needing dummy encoding.
+        """
+        if self._covariates is None:
+            return data
+        for c in self._covariates:
+            if c not in data.columns or not pd.api.types.is_numeric_dtype(data[c]):
+                continue
+            unique_vals = set(data[c].dropna().unique())
+            if len(unique_vals) == 2 and unique_vals != {0, 1} and not unique_vals <= {0, 1}:
+                ref_val = data[c].value_counts().idxmax()  # most frequent → 0 (reference)
+                other_val = (unique_vals - {ref_val}).pop()
+                data[c] = (data[c] == other_val).astype(int)
+                self._logger.info(f"Recoded '{c}' to binary: {ref_val} → 0 (reference), {other_val} → 1")
+        return data
+
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
         """Get binary covariates, optionally excluding categorical columns that were converted to dummies.
 
-        Detects any numeric column with exactly 2 unique values (e.g., 0/1, 10.0/11.0).
+        Detects any numeric column with exactly 2 unique values.
+        Non-{0,1} columns should be recoded to {0,1} via __recode_binary_covariates first.
         """
         binary_covariates = []
         if exclude_categoricals is None:
@@ -452,7 +479,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Detection rules:
         - object/category dtype columns
         - numeric columns (int or float) with 3 to categorical_max_unique unique values
-          (excludes binary columns with 2 values since those are handled by __get_binary_covariates)
+          (2-value columns are handled as binary by __get_binary_covariates)
 
         Returns dict: {covariate_name: [list_of_categories]}
         """
@@ -463,7 +490,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
                 # treat numeric columns (int or float) as categorical if they have
                 # 3 to categorical_max_unique unique values
-                # exclude binary (2 values) since those are handled by __get_binary_covariates
+                # 2-value columns are handled as binary (recoded to 0/1)
                 is_low_cardinality_numeric = (
                     pd.api.types.is_numeric_dtype(data[c]) and 3 <= data[c].nunique() <= self._categorical_max_unique
                 )
@@ -812,7 +839,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
     def get_effects(
         self,
-        min_binary_count: int = 100,
+        min_binary_count: int | None = None,
         adjustment: str | None = None,
         bootstrap: bool | None = None,
         compute_marginal_effects: str | bool | None = None,
@@ -823,7 +850,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Parameters
         ----------
         min_binary_count : int, optional
-            The minimum number of observations required for a binary covariate to be included in the analysis. Defaults to 100.
+            The minimum number of observations required for a binary covariate to be included
+            in the analysis. If None, uses the value set in __init__ (default 10).
         adjustment : str, optional
             The type of adjustment to apply to estimation: 'IPW', 'IV'. Default is None.
         bootstrap : bool, optional
@@ -896,6 +924,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         else:
             me_setting = self._compute_marginal_effects
 
+        if min_binary_count is None:
+            min_binary_count = self._min_binary_count
+
         get_balance_method = self._estimator.get_balance_method
 
         temp_results = []
@@ -940,6 +971,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     f"Dropped {missing_summary['rows_dropped']} rows due to missing values "
                     f"({missing_summary['pct_dropped']:.1f}% of data)"
                 )
+
+            temp_pd = self.__recode_binary_covariates(temp_pd)
 
             categorical_info = self.__get_categorical_covariates(data=temp_pd)
             dummy_map = {}
@@ -1237,6 +1270,19 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     model_types = self._normalized_outcome_models.get(outcome, ["ols"])
 
                     for model_type in model_types:
+                        # Auto-detect binary outcomes: when using AIPW with OLS on a binary outcome,
+                        # switch to logistic to avoid predicted values outside [0, 1]
+                        if (
+                            adjustment == "aipw"
+                            and model_type == "ols"
+                            and comparison_data[outcome].dropna().isin([0, 1]).all()
+                        ):
+                            self._logger.info(
+                                f"Outcome '{outcome}' is binary — switching from OLS to logistic for AIPW "
+                                f"to ensure predicted values stay within [0, 1]."
+                            )
+                            model_type = "logistic"
+
                         estimator_func = self.__get_estimator_function(model_type, adjustment, outcome)
 
                         try:
@@ -1923,7 +1969,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def check_balance(
         self,
         threshold: float = 0.1,
-        min_binary_count: int = 5,
+        min_binary_count: int | None = None,
     ) -> pd.DataFrame | None:
         """
         Check covariate balance between treatment and control groups.
@@ -1938,7 +1984,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             SMD threshold for balance flag (default 0.1). Covariates with
             |SMD| < threshold are considered balanced.
         min_binary_count : int, optional
-            Minimum count required for binary covariates (default 5).
+            Minimum count required for binary covariates.
+            If None, uses the value set in __init__ (default 10).
             Binary covariates with fewer observations are excluded.
 
         Returns
@@ -1975,6 +2022,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - Can be called before or after get_effects()
         """
         from .utils import check_covariate_balance
+
+        if min_binary_count is None:
+            min_binary_count = self._min_binary_count
 
         if self._covariates is None or len(self._covariates) == 0:
             self._logger.warning("No covariates specified, balance cannot be assessed!")
