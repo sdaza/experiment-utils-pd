@@ -1617,6 +1617,18 @@ class Estimators:
 
         eb = EntropyBalance()
         weights = eb.fit(covariate_data, treatment_indicator, estimand=self._target_effect)
+
+        # Rescale weights so they sum to n_group instead of 1.0 per group.
+        # Entropy balancing returns normalized probabilities (summing to 1),
+        # but freq_weights in statsmodels GLM expect count-like magnitudes.
+        # Without rescaling, near-zero weights cause division warnings in GLM.
+        treatment_np = treatment_indicator.values if hasattr(treatment_indicator, "values") else treatment_indicator
+        for group_val in [0, 1]:
+            mask = treatment_np == group_val
+            group_sum = weights[mask].sum()
+            if group_sum > 0:
+                weights[mask] = weights[mask] * mask.sum()
+
         data[self._target_weights[self._target_effect]] = weights
 
         return data
