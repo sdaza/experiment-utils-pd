@@ -1157,6 +1157,28 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     self._adjusted_balance.append(adjusted_balance)
                     adj_balance_mean = adjusted_balance["balance_flag"].mean() if not adjusted_balance.empty else np.nan
                     self._logger.info(f"Adjusted balance: {adj_balance_mean:.2%}")
+
+                    # When using entropy balancing, compute propensity scores via
+                    # logistic regression for overlap diagnostics only (not for weighting).
+                    if "propensity_score" not in comparison_data.columns and (
+                        self._assess_overlap or self._overlap_plot
+                    ):
+                        try:
+                            from sklearn.linear_model import LogisticRegression
+
+                            z_covs = [f"z_{cov}" for cov in final_covariates]
+                            X_diag = comparison_data[z_covs]
+                            y_diag = comparison_data[self._treatment_col]
+                            lr = LogisticRegression(max_iter=1000)
+                            lr.fit(X_diag, y_diag)
+                            comparison_data["propensity_score"] = lr.predict_proba(X_diag)[:, 1]
+                            self._logger.info(
+                                "Computed propensity scores via logistic regression for overlap diagnostics "
+                                "(entropy balancing weights used for estimation)."
+                            )
+                        except Exception as e:
+                            self._logger.warning(f"Could not compute diagnostic propensity scores for overlap: {e}")
+
                     if self._assess_overlap:
                         if "propensity_score" in comparison_data.columns:
                             treatment_scores = comparison_data.loc[
