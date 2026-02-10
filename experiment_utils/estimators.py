@@ -830,41 +830,28 @@ class Estimators:
         # Compute marginal effects (change in expected count)
         if compute_marginal_effects:
             try:
-                # Determine at value based on method
-                if compute_marginal_effects == "overall":
-                    at_value = "overall"  # AME
-                elif compute_marginal_effects == "mean":
-                    at_value = "mean"  # MEM
-                elif compute_marginal_effects == "median":
-                    at_value = "median"
-                else:
-                    at_value = "overall"  # Default
-
-                marginal_effects = results.get_margeff(at=at_value, method="dydx")
+                # Use at="mean" to evaluate marginal effects at covariate means.
+                # For z-scored covariates (mean=0), this avoids Jensen's inequality
+                # inflation that occurs with at="overall" and log-link models:
+                # E[exp(X)] >> exp(E[X]) when X has high variance.
+                marginal_effects = results.get_margeff(at="mean", method="dydx")
 
                 # Get all info from summary_frame
                 me_summary = marginal_effects.summary_frame()
 
-                if self._treatment_col in me_summary.index:
-                    me_treatment = me_summary.loc[self._treatment_col, "dy/dx"]
-                    me_se = me_summary.loc[self._treatment_col, "Std. Err."]
-                    me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
-                else:
+                if self._treatment_col not in me_summary.index:
                     raise KeyError(f"Treatment column '{self._treatment_col}' not found in marginal effects")
 
-                # Predicted counts
-                data_control = data.copy()
-                data_control[self._treatment_col] = 0
-                count_control = results.predict(data_control).mean()
+                me_se = me_summary.loc[self._treatment_col, "Std. Err."]
+                me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
 
-                data_treatment = data.copy()
-                data_treatment[self._treatment_col] = 1
-                count_treatment = results.predict(data_treatment).mean()
-
-                control_value = count_control
-                treatment_value = count_treatment
-                absolute_effect = me_treatment  # Change in expected count
-                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                # Compute predicted values at covariate means (MEM approach).
+                # For z-scored covariates, the mean is 0, so exp(intercept) gives
+                # the predicted count at the average covariate profile.
+                control_value = np.exp(results.params["Intercept"])
+                treatment_value = control_value * irr
+                absolute_effect = treatment_value - control_value
+                relative_effect = irr - 1
                 final_se = me_se
                 final_pvalue = me_pvalue
             except Exception as e:
@@ -969,23 +956,19 @@ class Estimators:
         if compute_marginal_effects is True:
             compute_marginal_effects = "overall"
 
-        # Compute marginal effects
+        # Compute marginal effects on count scale
         if compute_marginal_effects:
             try:
-                data_control = data.copy()
-                data_control[self._treatment_col] = 0
-                count_control = results.predict(data_control).mean()
-
-                data_treatment = data.copy()
-                data_treatment[self._treatment_col] = 1
-                count_treatment = results.predict(data_treatment).mean()
-
-                me_treatment = count_treatment - count_control
-                control_value = count_control
-                treatment_value = count_treatment
-                absolute_effect = me_treatment
-                relative_effect = absolute_effect / count_control if count_control > 0 else 0
-                final_se = standard_error * count_control
+                # Compute predicted values at covariate means (MEM approach).
+                # For z-scored covariates (mean=0), exp(intercept) gives the predicted
+                # count at the average covariate profile. This avoids Jensen's inequality
+                # inflation that occurs when averaging exp() predictions with log-link models.
+                control_value = np.exp(results.params["Intercept"])
+                treatment_value = control_value * irr
+                absolute_effect = treatment_value - control_value
+                relative_effect = irr - 1
+                # Delta method SE for the count-scale effect
+                final_se = treatment_value * standard_error
                 final_pvalue = pvalue
             except Exception as e:
                 self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
@@ -1088,41 +1071,28 @@ class Estimators:
         # Compute marginal effects (change in expected count)
         if compute_marginal_effects:
             try:
-                # Determine at value based on method
-                if compute_marginal_effects == "overall":
-                    at_value = "overall"  # AME
-                elif compute_marginal_effects == "mean":
-                    at_value = "mean"  # MEM
-                elif compute_marginal_effects == "median":
-                    at_value = "median"
-                else:
-                    at_value = "overall"  # Default
-
-                marginal_effects = results.get_margeff(at=at_value, method="dydx")
+                # Use at="mean" to evaluate marginal effects at covariate means.
+                # For z-scored covariates (mean=0), this avoids Jensen's inequality
+                # inflation that occurs with at="overall" and log-link models:
+                # E[exp(X)] >> exp(E[X]) when X has high variance.
+                marginal_effects = results.get_margeff(at="mean", method="dydx")
 
                 # Get all info from summary_frame
                 me_summary = marginal_effects.summary_frame()
 
-                if self._treatment_col in me_summary.index:
-                    me_treatment = me_summary.loc[self._treatment_col, "dy/dx"]
-                    me_se = me_summary.loc[self._treatment_col, "Std. Err."]
-                    me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
-                else:
+                if self._treatment_col not in me_summary.index:
                     raise KeyError(f"Treatment column '{self._treatment_col}' not found in marginal effects")
 
-                # Predicted counts
-                data_control = data.copy()
-                data_control[self._treatment_col] = 0
-                count_control = results.predict(data_control).mean()
+                me_se = me_summary.loc[self._treatment_col, "Std. Err."]
+                me_pvalue = me_summary.loc[self._treatment_col, "Pr(>|z|)"]
 
-                data_treatment = data.copy()
-                data_treatment[self._treatment_col] = 1
-                count_treatment = results.predict(data_treatment).mean()
-
-                control_value = count_control
-                treatment_value = count_treatment
-                absolute_effect = me_treatment  # Change in expected count
-                relative_effect = absolute_effect / count_control if count_control > 0 else 0
+                # Compute predicted values at covariate means (MEM approach).
+                # For z-scored covariates, the mean is 0, so exp(intercept) gives
+                # the predicted count at the average covariate profile.
+                control_value = np.exp(results.params["Intercept"])
+                treatment_value = control_value * irr
+                absolute_effect = treatment_value - control_value
+                relative_effect = irr - 1
                 final_se = me_se
                 final_pvalue = me_pvalue
             except Exception as e:
@@ -1236,23 +1206,19 @@ class Estimators:
         if compute_marginal_effects is True:
             compute_marginal_effects = "overall"
 
-        # Compute marginal effects
+        # Compute marginal effects on count scale
         if compute_marginal_effects:
             try:
-                data_control = data.copy()
-                data_control[self._treatment_col] = 0
-                count_control = results.predict(data_control).mean()
-
-                data_treatment = data.copy()
-                data_treatment[self._treatment_col] = 1
-                count_treatment = results.predict(data_treatment).mean()
-
-                me_treatment = count_treatment - count_control
-                control_value = count_control
-                treatment_value = count_treatment
-                absolute_effect = me_treatment
-                relative_effect = absolute_effect / count_control if count_control > 0 else 0
-                final_se = standard_error * count_control
+                # Compute predicted values at covariate means (MEM approach).
+                # For z-scored covariates (mean=0), exp(intercept) gives the predicted
+                # count at the average covariate profile. This avoids Jensen's inequality
+                # inflation that occurs when averaging exp() predictions with log-link models.
+                control_value = np.exp(results.params["Intercept"])
+                treatment_value = control_value * irr
+                absolute_effect = treatment_value - control_value
+                relative_effect = irr - 1
+                # Delta method SE for the count-scale effect
+                final_se = treatment_value * standard_error
                 final_pvalue = pvalue
             except Exception as e:
                 self._logger.warning(f"Could not compute marginal effects: {e}. Using log scale.")
