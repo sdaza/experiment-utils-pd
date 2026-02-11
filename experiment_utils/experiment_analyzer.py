@@ -1300,6 +1300,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                 "covariates": list(relevant_covariates),
                                 "cluster_col": self._cluster_col,
                                 "store_model": self._store_fitted_models,
+                                # Skip Fieller CI when bootstrap is enabled (CIs come from percentiles)
+                                "compute_relative_ci": not self._bootstrap,
                             }
 
                             if model_type in ["logistic", "poisson", "negative_binomial"]:
