@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "experiment-utils-pd"
-version = "0.1.10"
+version = "0.1.11"
 description = "Set of utility functions for analyzing experimental and observational data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Sebastian Daza", email = "sebastian.daza@gmail.com" }
 ]
@@ -42,6 +42,7 @@ dependencies = [
     "ipykernel>=6.29.5",
     "build>=1.3.0",
     "twine>=6.1.0",
+    "lifelines>=0.30.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -85,6 +86,7 @@ exclude = [
     "node_modules",
     "site-packages",
     "venv",
+    "interactive_testing.py"
 ]
 line-length = 120
 indent-width = 4
@@ -106,3 +108,23 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = false
 docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+    "papers",
+    "notebooks",
+    "testing"
+]
