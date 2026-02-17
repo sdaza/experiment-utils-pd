@@ -82,9 +82,10 @@ class PowerSim:
         if not isinstance(self.variants, int) or self.variants < 1:
             log_and_raise_error(self.logger, "'variants' must be an integer >= 1")
 
-        self.comparisons = (
-            list(itertools.combinations(range(self.variants + 1), 2)) if comparisons is None else comparisons
-        )  # noqa: E501
+        if comparisons is None:
+            self.comparisons = list(itertools.combinations(range(self.variants + 1), 2))
+        else:
+            self.comparisons = [tuple(sorted(c)) for c in comparisons]
         self.nsim = nsim
         self.alternative = alternative
         self.alpha = alpha
@@ -233,6 +234,25 @@ class PowerSim:
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))
 
         return dd, vv
+
+    def _normalize_and_validate_comparisons(
+        self, target_comparisons: list[tuple[int, int]] | None
+    ) -> list[tuple[int, int]]:
+        """
+        Normalize target_comparisons to canonical order (smaller, larger) and validate
+        against self.comparisons. Returns self.comparisons if target_comparisons is None.
+        """
+        if target_comparisons is None:
+            return self.comparisons
+
+        normalized = [tuple(sorted(c)) for c in target_comparisons]
+        invalid = [c for c in normalized if c not in self.comparisons]
+        if invalid:
+            log_and_raise_error(
+                self.logger,
+                f"target_comparisons {invalid} are not in defined comparisons {self.comparisons}",
+            )
+        return normalized
 
     def _run_single_power_simulation(
         self,
@@ -494,28 +514,7 @@ class PowerSim:
             sample_size = sample_size * (self.variants + 1)
 
         # Handle target_comparisons
-        if target_comparisons is None:
-            comparisons_to_compute = self.comparisons
-        else:
-            # Normalize comparison order (always smaller group first)
-            normalized_comps = []
-            for g1, g2 in target_comparisons:
-                if g1 > g2:
-                    normalized_comps.append((g2, g1))
-                    if (g1, g2) not in self.comparisons:
-                        self.logger.debug(f"Auto-corrected comparison order: ({g1}, {g2}) → ({g2}, {g1})")
-                else:
-                    normalized_comps.append((g1, g2))
-            target_comparisons = normalized_comps
-
-            # Validate that target_comparisons are in self.comparisons
-            invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
-            if invalid_comps:
-                log_and_raise_error(
-                    self.logger,
-                    f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
-                )
-            comparisons_to_compute = target_comparisons
+        comparisons_to_compute = self._normalize_and_validate_comparisons(target_comparisons)
 
         # create empty values for results (only for comparisons we're computing)
         pvalues = {}
@@ -553,7 +552,7 @@ class PowerSim:
         else:
             # Sequential execution (needed for early stopping or small nsim)
             if self.nsim >= 500:
-                self.logger.info(f"Running {self.nsim} power simulations sequentially (early stopping enabled)...")
+                self.logger.debug(f"Running {self.nsim} power simulations sequentially (early stopping enabled)...")
 
             # Early stopping parameters
             check_interval = 20  # Check every 20 simulations
@@ -1170,8 +1169,8 @@ class PowerSim:
         target_power: float | dict[tuple[int, int], float] = 0.80,
         baseline: float | list[float] = None,
         effect: float | list[float] = None,
-        compliance: list[float] = None,
-        standard_deviation: list[float] = None,
+        compliance: float | list[float] = None,
+        standard_deviation: float | list[float] = None,
         allocation_ratio: list[float] = None,
         target_comparisons: list[tuple[int, int]] = None,
         power_criteria: str = "all",
@@ -1209,10 +1208,10 @@ class PowerSim:
             Effect size(s) for each variant.
             - Single float: Same effect applied to all variants
             - List: Specific effect for each variant [effect1, effect2, ...]
-        compliance : list
-            List with compliance values.
-        standard_deviation : list
-            List of standard deviations by groups.
+        compliance : float or list
+            Compliance value(s). Provide a single float or list per variant.
+        standard_deviation : float or list
+            Standard deviation(s) for control and variants. Provide a single float or list per group.
         allocation_ratio : list
             Proportion of total sample size for each group (control + variants).
             Must sum to 1.0. Default is equal allocation across all groups.
@@ -1305,8 +1304,12 @@ class PowerSim:
 
         if compliance is None:
             compliance = [1.0]
+        elif isinstance(compliance, int | float):
+            compliance = [float(compliance)]
         if standard_deviation is None:
             standard_deviation = [1]
+        elif isinstance(standard_deviation, int | float):
+            standard_deviation = [float(standard_deviation)]
 
         num_groups = self.variants + 1
         if allocation_ratio is None or optimize_allocation:
@@ -1344,25 +1347,7 @@ class PowerSim:
                         self.logger, f"Group {group} is used in target_comparisons but has zero allocation"
                     )
 
-        if target_comparisons is None:
-            target_comparisons = self.comparisons
-        else:
-            normalized_comps = []
-            for g1, g2 in target_comparisons:
-                if g1 > g2:
-                    normalized_comps.append((g2, g1))
-                    if (g1, g2) not in self.comparisons:
-                        self.logger.info(f"Auto-corrected comparison order: ({g1}, {g2}) → ({g2}, {g1})")
-                else:
-                    normalized_comps.append((g1, g2))
-            target_comparisons = normalized_comps
-
-            invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
-            if invalid_comps:
-                log_and_raise_error(
-                    self.logger,
-                    f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
-                )
+        target_comparisons = self._normalize_and_validate_comparisons(target_comparisons)
 
         if power_criteria not in ["all", "any"]:
             log_and_raise_error(self.logger, "power_criteria must be 'all' or 'any'")
@@ -1393,6 +1378,11 @@ class PowerSim:
                 tolerance=tolerance,
                 step_size=step_size,
             )
+
+        self.logger.info(
+            f"Finding sample size for {len(target_comparisons)} comparison(s) "
+            f"using {self.nsim} simulations per evaluation..."
+        )
 
         results = []
 
@@ -1861,25 +1851,7 @@ class PowerSim:
             if len(sample_size) == 1:
                 sample_size = sample_size * num_groups
 
-        if target_comparisons is None:
-            target_comparisons = self.comparisons
-        else:
-            normalized_comps = []
-            for g1, g2 in target_comparisons:
-                if g1 > g2:
-                    normalized_comps.append((g2, g1))
-                    if (g1, g2) not in self.comparisons:
-                        self.logger.debug(f"Auto-corrected comparison order: ({g1}, {g2}) → ({g2}, {g1})")
-                else:
-                    normalized_comps.append((g1, g2))
-            target_comparisons = normalized_comps
-
-            invalid_comps = [c for c in target_comparisons if c not in self.comparisons]
-            if invalid_comps:
-                log_and_raise_error(
-                    self.logger,
-                    f"target_comparisons {invalid_comps} are not in defined comparisons {self.comparisons}",
-                )
+        target_comparisons = self._normalize_and_validate_comparisons(target_comparisons)
 
         if len(true_effect) != self.variants:
             if len(true_effect) == 1:
