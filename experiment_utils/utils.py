@@ -398,8 +398,10 @@ def balanced_random_assignment(
     variants=None,
     balance_covariates=None,
     check_balance=True,
+    check_balance_covariates=None,
     comparison=None,
     smd_threshold=0.1,
+    n_bins=5,
 ):
     """
     Randomly assign units to variants with forced balance according to allocation ratios.
@@ -420,17 +422,22 @@ def balanced_random_assignment(
         List of variant names. If provided, allocation_ratio should be a dict or
         units will be split equally among variants. If None, uses ['control', 'test']
     balance_covariates : list, optional
-        List of column names to use for stratification. If provided, balanced assignment
-        will be performed within each stratum defined by these columns.
+        List of column names to use for stratification (block randomization).
+        Continuous covariates are automatically binned into quantiles for stratification.
     check_balance : bool, optional
         Whether to check and print balance diagnostics after assignment (default True).
-        Only applies when balance_covariates is provided.
+    check_balance_covariates : list, optional
+        List of column names to check balance for after assignment. If None, falls back
+        to balance_covariates. Use this to check balance on covariates that were not
+        used for stratification.
     comparison : list[tuple], optional
         List of (variant1, variant2) tuples specifying which pairs to compare for balance.
-        If None, performs all pairwise comparisons. Example: [('test', 'control'), ('variant_a', 'control')]
+        If None, performs all pairwise comparisons.
     smd_threshold : float, optional
         Threshold for standardized mean difference to flag imbalance (default 0.1).
         Covariates with |SMD| < threshold are considered balanced.
+    n_bins : int, optional
+        Number of quantile bins for continuous covariates in stratification (default 5).
 
     Returns
     -------
@@ -442,38 +449,59 @@ def balanced_random_assignment(
     # Binary assignment (test/control) without stratification
     assignment = balanced_random_assignment(df, allocation_ratio=0.5)
 
-    # Binary assignment with stratification and balance checking
+    # Stratified assignment with categorical covariates
     assignment = balanced_random_assignment(
         df,
         allocation_ratio=0.5,
-        balance_covariates=['age', 'prior_purchase']
+        balance_covariates=['region', 'segment']
     )
 
-    # Multiple variants with custom comparisons
+    # Stratified assignment with continuous covariates (auto-binned)
     assignment = balanced_random_assignment(
         df,
-        variants=['control', 'variant_a', 'variant_b'],
-        balance_covariates=['age', 'region'],
-        comparison=[('variant_a', 'control'), ('variant_b', 'control')]
+        variants=['control', 'treatment'],
+        balance_covariates=['age', 'previous_purchases']
     )
 
-    # Disable balance checking
+    # No stratification, but check balance on covariates
     assignment = balanced_random_assignment(
         df,
-        balance_covariates=['age'],
-        check_balance=False
+        variants=['control', 'treatment'],
+        check_balance_covariates=['age', 'income', 'region']
+    )
+
+    # Stratify by region, but check balance on additional covariates
+    assignment = balanced_random_assignment(
+        df,
+        variants=['control', 'treatment'],
+        balance_covariates=['region'],
+        check_balance_covariates=['age', 'income', 'region']
     )
     """
 
     np.random.seed(seed)
 
-    if balance_covariates is None:
-        df = df.copy()
-        df["_dummy_group"] = 1
-        balance_covariates = ["_dummy_group"]
+    df_work = df.copy()
+    use_stratification = balance_covariates is not None
+
+    if use_stratification:
+        # Auto-bin continuous covariates for stratification
+        stratify_cols = []
+        for cov in balance_covariates:
+            is_numeric = pd.api.types.is_numeric_dtype(df_work[cov])
+            n_unique = df_work[cov].nunique()
+            if is_numeric and n_unique > n_bins * 2:
+                bin_col = f"_bin_{cov}"
+                df_work[bin_col] = pd.qcut(df_work[cov], q=n_bins, duplicates="drop")
+                stratify_cols.append(bin_col)
+            else:
+                stratify_cols.append(cov)
+    else:
+        df_work["_dummy_group"] = 1
+        stratify_cols = ["_dummy_group"]
 
     assignments = []
-    for _, group_df in df.groupby(balance_covariates):
+    for _, group_df in df_work.groupby(stratify_cols, observed=True):
         n = len(group_df)
         if variants is None:
             if isinstance(allocation_ratio, dict):
@@ -511,7 +539,10 @@ def balanced_random_assignment(
 
     final_assignments = pd.concat(assignments).sort_index()
 
-    if check_balance and balance_covariates is not None and balance_covariates != ["_dummy_group"]:
+    # Determine which covariates to check balance for
+    covs_to_check = check_balance_covariates or (balance_covariates if use_stratification else None)
+
+    if check_balance and covs_to_check is not None:
         temp_df = df.copy()
         temp_df["_assignment"] = final_assignments
 
@@ -530,9 +561,7 @@ def balanced_random_assignment(
         print("=" * 70)
 
         for var1, var2 in comparison_pairs:
-            balance_df = _check_assignment_balance(
-                temp_df, "_assignment", balance_covariates, var1, var2, smd_threshold
-            )
+            balance_df = _check_assignment_balance(temp_df, "_assignment", covs_to_check, var1, var2, smd_threshold)
 
             print(f"\nComparison: {var1} vs {var2}")
             print("-" * 70)

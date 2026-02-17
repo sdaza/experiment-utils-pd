@@ -92,22 +92,29 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Bootstrap Inference](#bootstrap-inference)
     - [Multiple Experiments](#multiple-experiments)
     - [Categorical Treatment Variables](#categorical-treatment-variables)
+    - [Instrumental Variables (IV)](#instrumental-variables-iv)
     - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
     - [Non-Inferiority Testing](#non-inferiority-testing)
+    - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
+    - [Power from Real Data](#power-from-real-data)
+    - [Grid Power Simulation](#grid-power-simulation)
     - [Find Sample Size](#find-sample-size)
     - [Simulate Retrodesign](#simulate-retrodesign)
   - [Utilities](#utilities)
     - [Balanced Random Assignment](#balanced-random-assignment)
     - [Standalone Balance Checker](#standalone-balance-checker)
-  - [Advanced Topics](#advanced-topics)
-    - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)
-    - [Non-Collapsibility of Hazard and Odds Ratios](#non-collapsibility-of-hazard-and-odds-ratios)
-    - [Handling Missing Data](#handling-missing-data)
-    - [Best Practices](#best-practices)
-    - [Common Workflows](#common-workflows)
+    - [Advanced Topics](#advanced-topics)
+        - [Covariate Adjustment Methods](#covariate-adjustment-methods)  
+        - [Outcome Models](#outcome-models)  
+        - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)  
+        - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)  
+        - [Non-Collapsibility of Hazard and Odds Ratios](#non-collapsibility-of-hazard-and-odds-ratios)  
+        - [Handling Missing Data](#handling-missing-data)
+        - [Best Practices](#best-practices)
+        - [Common Workflows](#common-workflows)
   - [Contributing](#contributing)
   - [License](#license)
   - [Citation](#citation)
@@ -586,6 +593,60 @@ results = analyzer.results
 print(results[["treatment_group", "control_group", "absolute_effect", "pvalue"]])
 ```
 
+### Instrumental Variables (IV)
+
+When treatment assignment is confounded (e.g., non-compliance in an experiment), use an instrument -- a variable that affects treatment receipt but only affects the outcome through treatment:
+
+```python
+import numpy as np
+import pandas as pd
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+
+# Simulate encouragement design with non-compliance
+np.random.seed(42)
+n = 5000
+Z = np.random.binomial(1, 0.5, n)            # Random encouragement (instrument)
+U = np.random.normal(0, 1, n)                 # Unobserved confounder
+D = np.random.binomial(1, 1 / (1 + np.exp(-(-1 + 0.5 * U + 2.5 * Z))))  # Actual treatment (confounded)
+Y = 2.0 * D + 1.0 * U + np.random.normal(0, 1, n)  # Outcome (true LATE = 2.0)
+
+df = pd.DataFrame({"encouragement": Z, "treatment": D, "outcome": Y})
+
+# IV estimation using encouragement as instrument for treatment
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["outcome"],
+    instrument_col="encouragement",
+    adjustment="IV",
+)
+
+analyzer.get_effects()
+print(analyzer.results[["outcome", "absolute_effect", "standard_error", "pvalue"]])
+```
+
+**IV with covariates:**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["outcome"],
+    instrument_col="encouragement",
+    adjustment="IV",
+    covariates=["age", "region"],  # Balance checked on instrument
+)
+
+analyzer.get_effects()
+```
+
+**Key assumptions for valid IV estimation:**
+- **Relevance**: The instrument must be correlated with treatment (check first-stage F-statistic)
+- **Exclusion restriction**: The instrument affects the outcome *only* through treatment
+- **Independence**: The instrument is independent of unobserved confounders (holds by design in randomized encouragement)
+
+> **Note**: IV estimation is only supported for OLS outcome models. For other model types (logistic, Cox, etc.), the analyzer will fall back to unadjusted estimation with a warning.
+
 ### Multiple Comparison Adjustments
 
 Control family-wise error rate when testing multiple hypotheses:
@@ -631,6 +692,50 @@ analyzer.test_non_inferiority(relative_margin=0.10)
 results = analyzer.results
 print(results[["outcome", "relative_effect", "is_non_inferior", 
                "non_inferiority_margin"]])
+```
+
+### Combining Effects (Meta-Analysis)
+
+When you have multiple experiments or segments, pool results using fixed-effects meta-analysis or weighted averaging.
+
+**Fixed-effects meta-analysis (`combine_effects`)**
+
+Combines effect estimates using inverse-variance weighting, producing a pooled effect with proper standard errors:
+
+```python
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+
+# Analyze multiple experiments
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    experiment_identifier="experiment",
+    covariates=["age"],
+)
+
+analyzer.get_effects()
+
+# Pool results across experiments using fixed-effects meta-analysis
+pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+print(pooled[["outcome", "experiments", "absolute_effect", "standard_error", "pvalue"]])
+```
+
+**Custom grouping:**
+
+```python
+# Pool by outcome and region (e.g., combine experiments within each region)
+pooled_by_region = analyzer.combine_effects(grouping_cols=["region", "outcome"])
+print(pooled_by_region)
+```
+
+**Weighted average aggregation (`aggregate_effects`)**
+
+A simpler alternative that weights by treatment group size (useful for quick summaries, but `combine_effects` provides better standard error estimates):
+
+```python
+aggregated = analyzer.aggregate_effects(grouping_cols=["outcome"])
+print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 ```
 
 ### Retrodesign Analysis
@@ -706,6 +811,82 @@ power_result = power_sim.get_power(
 
 print(power_result[["comparison", "power"]])
 ```
+
+### Power from Real Data
+
+When your data doesn't follow standard parametric assumptions, estimate power by bootstrapping directly from observed data using `get_power_from_data()`. Instead of generating synthetic data from a distribution, it repeatedly samples from your actual dataset and injects the specified effect:
+
+```python
+from experiment_utils.power_sim import PowerSim
+import pandas as pd
+
+# Use real data for power estimation
+power_sim = PowerSim(metric="average", variants=1, nsim=1000)
+
+power_result = power_sim.get_power_from_data(
+    df=historical_data,          # Your actual dataset
+    metric_col="revenue",        # Column to test
+    sample_size=5000,            # Sample size per group
+    effect=3.0,                  # Effect to inject (absolute)
+)
+
+print(f"Power: {power_result['power'].iloc[0]:.2%}")
+```
+
+**When to use `get_power_from_data` vs `get_power`:**
+- Use `get_power_from_data` when your metric has a non-standard distribution (heavy tails, skewed, zero-inflated)
+- Use `get_power` for standard parametric scenarios (proportions, means, counts)
+
+**With compliance:**
+
+```python
+# Account for 80% compliance
+power_result = power_sim.get_power_from_data(
+    df=historical_data,
+    metric_col="revenue",
+    sample_size=5000,
+    effect=3.0,
+    compliance=0.80,
+)
+```
+
+### Grid Power Simulation
+
+Explore power across a grid of parameter combinations using `grid_sim_power()`. This is useful for understanding how power varies with sample size, effect size, and baseline rates:
+
+```python
+from experiment_utils.power_sim import PowerSim
+
+power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
+
+# Simulate power across a grid of scenarios
+grid_results = power_sim.grid_sim_power(
+    baseline_rates=[0.05, 0.10, 0.15],
+    effects=[0.02, 0.03, 0.05],
+    sample_sizes=[1000, 2000, 5000, 10000],
+    plot=True,  # Generate power curves
+)
+
+print(grid_results.head())
+```
+
+**With multiple variants and custom compliance:**
+
+```python
+power_sim = PowerSim(metric="average", variants=2, nsim=1000)
+
+grid_results = power_sim.grid_sim_power(
+    baseline_rates=[50.0],
+    effects=[2.0, 5.0],
+    sample_sizes=[500, 1000, 2000, 5000],
+    standard_deviations=[[20.0]],
+    compliances=[[0.8]],
+    threads=4,        # Parallelize across scenarios
+    plot=True,
+)
+```
+
+The output DataFrame includes all input parameters alongside the estimated power for each comparison, making it easy to filter and compare scenarios.
 
 ### Find Sample Size
 
@@ -982,6 +1163,7 @@ print(balance[balance["covariate"].str.contains("region")])
 | IPW | `"balance"` | `None` | Many covariates, non-linear confounding |
 | IPW + Regression | `"balance"` | `["x1", "x2"]` | Extra robustness, survival models |
 | AIPW (doubly robust) | `"aipw"` | (automatic) | Best protection against misspecification |
+| IV | `"IV"` | `None` or `["x1"]` | Non-compliance, endogenous treatment (requires `instrument_col`) |
 
 **Choosing a balance method:**
 - `ps-logistic`: Default, fast, interpretable
