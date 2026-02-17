@@ -1549,7 +1549,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "se_intercept",
             "cov_coef_intercept",
             "alpha_param",
-            "control_std",
         ]
 
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
