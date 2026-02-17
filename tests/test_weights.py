@@ -60,5 +60,3 @@ if weights is not None:
     print(weights.head(10))
 else:
     print("No weights saved")
-
-# %%

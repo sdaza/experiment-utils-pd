@@ -82,3 +82,73 @@ print(pd.crosstab(df["segment"], df["assignment_6"], normalize="index"))
 print("\n" + "=" * 60)
 print("All tests completed successfully!")
 print("=" * 60)
+
+# %%
+print("\n" + "=" * 60)
+print("TEST 7: Balance checking with categorical covariate")
+print("=" * 60)
+
+# Add categorical covariates for stratification
+np.random.seed(42)
+df["age_group"] = np.random.choice(["18-30", "31-45", "46-60", "60+"], n)
+df["region"] = np.random.choice(["North", "South", "East", "West"], n)
+
+# Assignment with balance checking using categorical stratification
+df["assignment_7"] = balanced_random_assignment(
+    df, seed=42, allocation_ratio=0.5, balance_covariates=["age_group"], check_balance=True
+)
+
+# %%
+print("\n" + "=" * 60)
+print("TEST 8: Balance checking with multiple categorical covariates")
+print("=" * 60)
+
+# Assignment with multiple categorical covariates
+df["assignment_8"] = balanced_random_assignment(
+    df, seed=42, allocation_ratio=0.5, balance_covariates=["age_group", "region"], check_balance=True
+)
+
+# %%
+print("\n" + "=" * 60)
+print("TEST 9: Balance checking with custom comparisons (3 variants)")
+print("=" * 60)
+
+# Multiple variants with custom comparisons
+df["assignment_9"] = balanced_random_assignment(
+    df,
+    seed=42,
+    variants=["control", "variant_a", "variant_b"],
+    balance_covariates=["age_group"],
+    comparison=[("variant_a", "control"), ("variant_b", "control")],
+    check_balance=True,
+)
+
+# %%
+print("\n" + "=" * 60)
+print("TEST 10: Disable balance checking")
+print("=" * 60)
+
+# Assignment with balance checking disabled
+df["assignment_10"] = balanced_random_assignment(
+    df, seed=42, allocation_ratio=0.5, balance_covariates=["region"], check_balance=False
+)
+print("No balance output (check_balance=False)")
+
+# %%
+print("\n" + "=" * 60)
+print("TEST 11: Balance checking with custom SMD threshold")
+print("=" * 60)
+
+# Assignment with custom SMD threshold
+df["assignment_11"] = balanced_random_assignment(
+    df,
+    seed=42,
+    allocation_ratio=0.5,
+    balance_covariates=["age_group", "region"],
+    check_balance=True,
+    smd_threshold=0.05,  # Stricter threshold
+)
+
+print("\n" + "=" * 60)
+print("All balance checking tests completed successfully!")
+print("=" * 60)

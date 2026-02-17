@@ -168,7 +168,7 @@ class TestBootstrapInference:
         )
 
         # Test the resampling function directly
-        resampled = analyzer._ExperimentAnalyzer__stratified_resample(sample_data, seed=123)
+        resampled = analyzer._stratified_resample(sample_data, seed=123)
 
         original_ratio = sample_data["treatment"].mean()
         resampled_ratio = resampled["treatment"].mean()
@@ -253,6 +253,39 @@ class TestBootstrapInference:
         assert results1["pvalue"].values[0] == results2["pvalue"].values[0]
         assert results1["abs_effect_lower"].values[0] == results2["abs_effect_lower"].values[0]
         assert results1["abs_effect_upper"].values[0] == results2["abs_effect_upper"].values[0]
+
+    def test_bootstrap_relative_ci(self, sample_data):
+        """Test that bootstrap computes relative effect CIs correctly"""
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=100,
+            bootstrap_seed=123,
+        )
+
+        analyzer.get_effects()
+        results = analyzer.results
+
+        # Check that relative effect CIs are present and not NaN
+        assert "rel_effect_lower" in results.columns
+        assert "rel_effect_upper" in results.columns
+        assert not pd.isna(results["rel_effect_lower"].values[0])
+        assert not pd.isna(results["rel_effect_upper"].values[0])
+
+        # Check that relative CI bounds make sense
+        assert results["rel_effect_lower"].values[0] < results["rel_effect_upper"].values[0]
+
+        # Relative effect should be within the CI bounds (approximately)
+        rel_effect = results["relative_effect"].values[0]
+        rel_lower = results["rel_effect_lower"].values[0]
+        rel_upper = results["rel_effect_upper"].values[0]
+
+        # Allow for some numerical tolerance
+        assert rel_lower <= rel_effect * 1.01 or rel_effect <= rel_lower * 1.01
+        assert rel_effect <= rel_upper * 1.01 or rel_upper <= rel_effect * 1.01
 
 
 if __name__ == "__main__":
