@@ -154,7 +154,7 @@ class RetrodesignMixin:
                 retro_result = power_sim.simulate_retrodesign(
                     true_effect=true_effect,
                     sample_size=[n_control, n_treatment],
-                    baseline=[baseline],
+                    baseline=baseline,
                     nsim=nsim,
                 )
             elif metric == "count":
@@ -162,14 +162,14 @@ class RetrodesignMixin:
                 retro_result = power_sim.simulate_retrodesign(
                     true_effect=true_effect,
                     sample_size=[n_control, n_treatment],
-                    baseline=[baseline],
+                    baseline=baseline,
                     nsim=nsim,
                 )
             else:
                 retro_result = power_sim.simulate_retrodesign(
                     true_effect=true_effect,
                     sample_size=[n_control, n_treatment],
-                    baseline=[baseline],
+                    baseline=baseline,
                     standard_deviation=[control_std],
                     nsim=nsim,
                 )
@@ -192,8 +192,10 @@ class RetrodesignMixin:
                 f"sample_sizes=[{n_control}, {n_treatment}]"
             )
             self._logger.warning(
-                f"PowerSim retrodesign failed for outcome '{row.get('outcome', 'unknown')}'. "
-                f"Falling back to full simulation."
+                f"PowerSim retrodesign failed for outcome '{row.get('outcome', 'unknown')}': {e}. "
+                f"Falling back to full simulation. "
+                f"(Parameters: metric={metric}, baseline={baseline}, true_effect={true_effect}, "
+                f"sample_sizes=[{n_control}, {n_treatment}])"
             )
             return None
 
@@ -494,6 +496,10 @@ class RetrodesignMixin:
 
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
+
+        # Drop internal columns not meant for display
+        internal_cols = ["se_intercept", "cov_coef_intercept", "control_std"]
+        df_filtered = df_filtered.drop(columns=[c for c in internal_cols if c in df_filtered.columns])
 
         return df_filtered
 
