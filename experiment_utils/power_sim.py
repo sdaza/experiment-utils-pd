@@ -94,19 +94,20 @@ class PowerSim:
 
     def __run_experiment(
         self,
-        baseline: list[float] = None,
+        baseline: float = None,
         sample_size: list[int] = None,
         effect: list[float] = None,
         compliance: list[float] = None,
         standard_deviation: list[float] = None,
-    ) -> tuple[np.ndarray, np.ndarray]:  # noqa: E501
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Simulate data to run power analysis.
 
         Parameters
         ----------
-        baseline : list
-            List baseline rates for counts or proportions, or base average for mean comparisons
+        baseline : float
+            Baseline rate for counts or proportions, or base average for mean comparisons.
+            Same value is used for all groups (consistent with randomized experiment design).
         sample_size : list
             List with sample for control and arm groups
         effect : list
@@ -131,19 +132,20 @@ class PowerSim:
         if compliance is None:
             compliance = [1.0]
         if baseline is None:
-            baseline = [1.0]
+            baseline = 1.0
+
         if len(effect) != self.variants:
             if len(effect) > 1:
                 log_and_raise_error(
                     self.logger, "Effects should be same length as the number of self.variants or length 1!"
-                )  # noqa: E501
+                )
             effect = list(itertools.repeat(effect[0], self.variants))
 
         if len(compliance) != self.variants:
             if len(compliance) > 1:
                 log_and_raise_error(
                     self.logger, "Compliance rates should be same length as the number of self.variants or length 1!"
-                )  # noqa: E501
+                )
             compliance = list(itertools.repeat(compliance[0], self.variants))
 
         if len(standard_deviation) != self.variants + 1:
@@ -151,22 +153,15 @@ class PowerSim:
                 log_and_raise_error(
                     self.logger,
                     "Standard deviations should be same length as the number of self.variants + 1 or length 1!",
-                )  # noqa: E501
+                )
             standard_deviation = list(itertools.repeat(standard_deviation[0], self.variants + 1))
 
         if len(sample_size) != self.variants + 1:
             if len(sample_size) > 1:
                 log_and_raise_error(
                     self.logger, "N should be same length as the number of self.variants + 1 or length 1!"
-                )  # noqa: E501
+                )
             sample_size = list(itertools.repeat(sample_size[0], self.variants + 1))
-
-        if len(baseline) != self.variants + 1:
-            if len(baseline) > 1:
-                log_and_raise_error(
-                    self.logger, "Baseline values should be same length as the number of self.variants + 1 or length 1!"
-                )  # noqa: E501
-            baseline = list(itertools.repeat(baseline[0], self.variants + 1))
 
         re = list(range(self.variants))
 
@@ -177,57 +172,57 @@ class PowerSim:
         vv = np.array([])
 
         if self.metric == "count":
-            c_data = np.random.poisson(baseline[0], sample_size[0])
+            c_data = np.random.poisson(baseline, sample_size[0])
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
             for i in range(self.variants):
                 if self.relative_effect:
-                    re[i] = baseline[i + 1] * (1.00 + effect[i])
+                    re[i] = baseline * (1.00 + effect[i])
                 else:
-                    re[i] = baseline[i + 1] + effect[i]
+                    re[i] = baseline + effect[i]
                 t_data_c = np.random.poisson(re[i], int(np.round(sample_size[i + 1] * compliance[i])))
-                t_data_nc = np.random.poisson(baseline[i + 1], int(np.round(sample_size[i + 1] * (1 - compliance[i]))))
+                t_data_nc = np.random.poisson(baseline, int(np.round(sample_size[i + 1] * (1 - compliance[i]))))
                 t_data = np.append(t_data_c, t_data_nc)
                 dd = np.append(dd, t_data)
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))
 
         if self.metric == "proportion":
-            c_data = np.random.binomial(n=1, size=int(sample_size[0]), p=baseline[0])
+            c_data = np.random.binomial(n=1, size=int(sample_size[0]), p=baseline)
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
             for i in range(self.variants):
                 if self.relative_effect:
-                    re[i] = baseline[i + 1] * (1.00 + effect[i])
+                    re[i] = baseline * (1.00 + effect[i])
                 else:
-                    re[i] = baseline[i + 1] + effect[i]
+                    re[i] = baseline + effect[i]
 
                 t_data_c = np.random.binomial(n=1, size=int(np.round(sample_size[i + 1] * compliance[i])), p=re[i])
                 t_data_nc = np.random.binomial(
-                    n=1, size=int(np.round(sample_size[i + 1] * (1 - compliance[i]))), p=baseline[i + 1]
-                )  # noqa: E501
+                    n=1, size=int(np.round(sample_size[i + 1] * (1 - compliance[i]))), p=baseline
+                )
                 t_data = np.append(t_data_c, t_data_nc)
                 dd = np.append(dd, t_data)
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))
 
         if self.metric == "average":
-            c_data = np.random.normal(baseline[0], standard_deviation[0], sample_size[0])
+            c_data = np.random.normal(baseline, standard_deviation[0], sample_size[0])
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
             for i in range(self.variants):
                 if self.relative_effect:
-                    re[i] = baseline[i + 1] * (1.00 + effect[i])
+                    re[i] = baseline * (1.00 + effect[i])
                 else:
-                    re[i] = baseline[i + 1] + effect[i]
+                    re[i] = baseline + effect[i]
 
                 t_data_c = np.random.normal(
                     re[i], standard_deviation[i + 1], int(np.round(sample_size[i + 1] * compliance[i]))
-                )  # noqa: E501
+                )
                 t_data_nc = np.random.normal(
-                    baseline[i + 1], standard_deviation[i + 1], int(np.round(sample_size[i + 1] * (1 - compliance[i])))
-                )  # noqa: E501
+                    baseline, standard_deviation[i + 1], int(np.round(sample_size[i + 1] * (1 - compliance[i])))
+                )
 
                 t_data = np.append(t_data_c, t_data_nc)
                 dd = np.append(dd, t_data)
@@ -256,7 +251,7 @@ class PowerSim:
 
     def _run_single_power_simulation(
         self,
-        baseline: list[float],
+        baseline: float,
         effect: list[float],
         sample_size: list[int],
         compliance: list[float],
@@ -268,8 +263,8 @@ class PowerSim:
 
         Parameters
         ----------
-        baseline : list[float]
-            Baseline values for all groups
+        baseline : float
+            Baseline value (same for all groups)
         effect : list[float]
             Effect sizes
         sample_size : list[int]
@@ -370,7 +365,7 @@ class PowerSim:
 
     def _run_single_retrodesign_simulation(
         self,
-        baseline: list[float],
+        baseline: float,
         sample_size: list[int],
         true_effect: list[float],
         compliance: list[float],
@@ -384,8 +379,8 @@ class PowerSim:
 
         Parameters
         ----------
-        baseline : list[float]
-            Baseline values for all groups
+        baseline : float
+            Baseline value (same for all groups)
         sample_size : list[int]
             Sample sizes
         true_effect : list[float]
@@ -451,7 +446,7 @@ class PowerSim:
 
     def get_power(
         self,
-        baseline: float | list[float] = None,
+        baseline: float = None,
         effect: float | list[float] = None,
         sample_size: int | list[int] = None,
         compliance: float | list[float] = None,
@@ -464,9 +459,9 @@ class PowerSim:
 
         Parameters
         ----------
-        baseline : float or list
+        baseline : float
             Baseline rate for counts or proportions, or base average for mean comparisons.
-            Can be a single float or list of floats.
+            Same value is used for all groups (consistent with randomized experiment design).
         effect : float or list
             Effect size(s). Can be a single float or list of floats.
         sample_size : int or list
@@ -489,9 +484,7 @@ class PowerSim:
 
         # Set default values for mutable arguments
         if baseline is None:
-            baseline = [1.0]
-        elif isinstance(baseline, int | float):
-            baseline = [float(baseline)]
+            baseline = 1.0
         if effect is None:
             effect = [0.10]
         elif isinstance(effect, int | float):
@@ -784,8 +777,8 @@ class PowerSim:
 
         Parameters
         ----------
-        baseline_rates : list
-            List of baseline rates for counts or proportions, or base average for mean comparisons.
+        baseline_rates : list of float
+            List of baseline rate scenarios to sweep over (e.g., [0.10, 0.20]).
         effects : list
             List with effect sizes.
         sample_sizes : list
@@ -1042,7 +1035,7 @@ class PowerSim:
         self,
         power_dict: dict,
         target_comparisons: list,
-        baseline: list,
+        baseline: float,
         effect: list,
         compliance: list,
         standard_deviation: list,
@@ -1167,7 +1160,7 @@ class PowerSim:
     def find_sample_size(
         self,
         target_power: float | dict[tuple[int, int], float] = 0.80,
-        baseline: float | list[float] = None,
+        baseline: float = None,
         effect: float | list[float] = None,
         compliance: float | list[float] = None,
         standard_deviation: float | list[float] = None,
@@ -1200,10 +1193,9 @@ class PowerSim:
             - A single float (e.g., 0.80) to apply the same target to all comparisons
             - A dict mapping comparisons to their specific power targets
               (e.g., {(0,1): 0.90, (0,2): 0.80})
-        baseline : float or list
+        baseline : float
             Baseline rate for counts or proportions, or base average for mean comparisons.
-            - Single float: Applied to all groups (control + variants)
-            - List: Specific value for each group [control, variant1, variant2, ...]
+            Same value is used for all groups (consistent with randomized experiment design).
         effect : float or list
             Effect size(s) for each variant.
             - Single float: Same effect applied to all variants
@@ -1273,7 +1265,7 @@ class PowerSim:
         >>> p = PowerSim(metric='proportion', variants=3, nsim=500)
         >>> result = p.find_sample_size(
         ...     target_power=0.80,
-        ...     baseline=[0.10],
+        ...     baseline=0.10,
         ...     effect=[0.05, 0.03, 0.07],
         ...     target_comparisons=[(0, 1), (0, 2)]  # Only power first two variants
         ... )
@@ -1293,9 +1285,7 @@ class PowerSim:
             self.correction = correction
 
         if baseline is None:
-            baseline = [1.0]
-        elif isinstance(baseline, int | float):
-            baseline = [float(baseline)] * (self.variants + 1)
+            baseline = 1.0
 
         if effect is None:
             effect = [0.10]
@@ -1448,7 +1438,7 @@ class PowerSim:
             comp_target_power = power_dict[(group1, group2)]
 
             # Get analytical estimate for better starting point
-            baseline_val = baseline[group2] if group2 < len(baseline) else baseline[0]
+            baseline_val = baseline
             if self.metric != "average" and group2 > 0 and group2 - 1 < len(effect):
                 effect_val = effect[group2 - 1]
             else:
@@ -1715,7 +1705,7 @@ class PowerSim:
         self,
         true_effect: float | list[float],
         sample_size: int | list[int],
-        baseline: float | list[float] = None,
+        baseline: float = None,
         compliance: float | list[float] = None,
         standard_deviation: float | list[float] = None,
         allocation_ratio: list[float] = None,
@@ -1742,8 +1732,9 @@ class PowerSim:
             The true effect size(s) to simulate. Can be a single value or list per variant.
         sample_size : int or list
             Sample size(s) per group. Can be a single value or list per group.
-        baseline : float or list, optional
+        baseline : float, optional
             Baseline rate for proportions/counts or mean for averages.
+            Same value is used for all groups (consistent with randomized experiment design).
         compliance : float or list, optional
             Compliance rate(s). Can be a single value or list per variant.
         standard_deviation : float or list, optional
@@ -1820,7 +1811,8 @@ class PowerSim:
 
         true_effect = self.__ensure_list(true_effect)
         sample_size = self.__ensure_list(sample_size)
-        baseline = self.__ensure_list(baseline) if baseline is not None else [None]
+        if baseline is None:
+            baseline = 1.0
 
         if compliance is None:
             compliance = [1.0]

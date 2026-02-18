@@ -446,6 +446,32 @@ class Estimators:
         if not self._instrument_col:
             log_and_raise_error(self._logger, "Instrument column must be specified for IV adjustment")
 
+        # First-stage F-test for instrument strength
+        fs_formula = f"{self._treatment_col} ~ {self._instrument_col}"
+        if covariates:
+            fs_formula += " + " + " + ".join(covariates)
+        fs_results = smf.ols(fs_formula, data=data).fit()
+        f_test = fs_results.f_test(f"{self._instrument_col} = 0")
+        f_stat = float(np.squeeze(f_test.fvalue))
+        f_pval = float(f_test.pvalue)
+
+        if f_stat >= 16.38:
+            quality = "Strong instrument (F >= 16.38)"
+        elif f_stat >= 10:
+            quality = "Marginally strong instrument (10 <= F < 16.38)"
+        else:
+            quality = "Weak instrument (F < 10) — IV estimates may be substantially biased"
+
+        print("\n" + "=" * 60)
+        print("IV First-Stage Instrument Diagnostics")
+        print("=" * 60)
+        print(f"  Instrument : {self._instrument_col}")
+        print(f"  Treatment  : {self._treatment_col}")
+        print(f"  F-statistic: {f_stat:.4f}")
+        print(f"  P-value    : {f_pval:.4f}")
+        print(f"  Assessment : {quality}")
+        print("=" * 60 + "\n")
+
         formula = self.__create_formula(outcome_variable=outcome_variable, model_type="iv", covariates=covariates)
         model = IV2SLS.from_formula(formula, data)
 

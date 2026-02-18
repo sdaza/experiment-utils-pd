@@ -11,7 +11,7 @@ def test_power_estimation():
         metric="proportion", relative_effect=False, variants=1, nsim=1000, alpha=0.05, alternative="two-tailed"
     )
     try:
-        p.get_power(baseline=[0.33], effect=[0.03], sample_size=[3000])
+        p.get_power(baseline=0.33, effect=[0.03], sample_size=[3000])
         assert True
     except Exception as e:
         pytest.fail(f" raised an exception: {e}")
@@ -24,7 +24,7 @@ def test_plot_power():
     )
     try:
         p.grid_sim_power(
-            baseline_rates=[[0.33]],
+            baseline_rates=[0.33],
             effects=[[0.01, 0.03], [0.03, 0.05], [0.03, 0.07]],
             sample_sizes=[[1000], [5000], [9000]],
             threads=16,
@@ -54,7 +54,7 @@ def test_find_sample_size():
     p = PowerSim(metric="proportion", relative_effect=False, variants=1, nsim=500, alpha=0.05, alternative="two-tailed")
     try:
         result = p.find_sample_size(
-            target_power=0.80, baseline=[0.10], effect=[0.02], min_sample_size=100, max_sample_size=20000
+            target_power=0.80, baseline=0.10, effect=[0.02], min_sample_size=100, max_sample_size=20000
         )
 
         # Check that result is a DataFrame with expected columns
@@ -94,7 +94,7 @@ def test_find_sample_size_custom_allocation():
         # Test with 30% control, 70% treatment allocation
         result = p.find_sample_size(
             target_power=0.80,
-            baseline=[0.10],
+            baseline=0.10,
             effect=[0.02],
             allocation_ratio=[0.3, 0.7],
             min_sample_size=100,
@@ -122,7 +122,7 @@ def test_find_sample_size_average_metric():
     try:
         result = p.find_sample_size(
             target_power=0.80,
-            baseline=[10.0],
+            baseline=10.0,
             effect=[1.5],
             standard_deviation=[3.0],
             min_sample_size=50,
@@ -153,7 +153,7 @@ def test_find_sample_size_multiple_variants():
         # Test 1: Same power for all comparisons (default behavior)
         result = p.find_sample_size(
             target_power=0.80,
-            baseline=[0.10],
+            baseline=0.10,
             effect=[0.05, 0.03, 0.07],  # Different effects for each variant
             min_sample_size=300,
             max_sample_size=10000,
@@ -194,7 +194,7 @@ def test_find_sample_size_multiple_variants():
         # Test 2: Different power targets per comparison
         result2 = p.find_sample_size(
             target_power={(0, 1): 0.90, (0, 2): 0.80, (0, 3): 0.70},  # Different targets
-            baseline=[0.10],
+            baseline=0.10,
             effect=[0.05, 0.03, 0.07],
             min_sample_size=300,
             max_sample_size=10000,
@@ -213,7 +213,7 @@ def test_find_sample_size_multiple_variants():
         # Test 3: Only power specific comparisons
         result3 = p.find_sample_size(
             target_power=0.80,
-            baseline=[0.10],
+            baseline=0.10,
             effect=[0.05, 0.03, 0.07],
             target_comparisons=[(0, 1), (0, 2)],  # Only first two
             min_sample_size=300,
@@ -230,7 +230,7 @@ def test_find_sample_size_multiple_variants():
         # Test 4: Power criteria "any"
         result4 = p.find_sample_size(
             target_power=0.80,
-            baseline=[0.10],
+            baseline=0.10,
             effect=[0.05, 0.03, 0.07],
             power_criteria="any",  # At least one comparison
             min_sample_size=300,
