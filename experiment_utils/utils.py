@@ -88,7 +88,7 @@ def _check_assignment_balance(df, assignment_col, covariates, variant1, variant2
 
     for cov in covariates:
         # Handle categorical covariates by one-hot encoding
-        if df[cov].dtype == "object" or df[cov].dtype.name == "category":
+        if pd.api.types.is_object_dtype(df[cov]) or isinstance(df[cov].dtype, pd.CategoricalDtype):
             # One-hot encode and calculate SMD for each dummy variable
             dummies = pd.get_dummies(df[cov], prefix=cov)
             for dummy_col in dummies.columns:
