@@ -138,6 +138,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Two ways to specify Cox models:
         1. Tuple notation (recommended): outcomes=[("time_col", "event_col")]
         2. Separate parameter: outcomes=["time_col"], event_col="event_col"
+    interaction_covariates : list[str], optional
+        Covariates to add to OLS formulas as both a main effect and a treatment interaction:
+        ``z_{col} + treatment:z_{col}``. Each covariate is automatically centered and
+        standardized (mean=0, std=1) so that the ``treatment`` coefficient is the ATE at
+        the mean of the covariate — making it directly interpretable.
+
+        Primary use case is **CUPED** (Controlled-experiment Using Pre-Experiment Data,
+        Deng et al. 2013): pass the pre-experiment version of each outcome metric to
+        reduce variance and increase statistical power. This is equivalent to Lin (2013)'s
+        efficient regression estimator with per-group θ*.
+
+        Important notes:
+        - Only applied for OLS models. For GLMs (logistic, Poisson, etc.) a warning is
+          logged and the interactions are skipped — interactions on a log/logit scale do
+          not produce the same variance reduction.
+        - The point estimate (``absolute_effect``) will differ from the naive
+          difference-in-means by a finite-sample correction θ* × (X̄_t − X̄_c). This is
+          expected: the adjusted estimate is unbiased with lower variance and tends to
+          shrink overestimated effects toward the true value (Nubank 2025, Lesson 3).
+        - Stacks with ``regression_covariates`` (additive) and all ``adjustment`` modes.
+        By default None (no interactions).
     """  # noqa: E501
 
     def __init__(
@@ -176,6 +197,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         min_binary_count: int = 10,
         store_fitted_models: bool = True,
         event_col: str | None = None,
+        interaction_covariates: list[str] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -226,6 +248,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._min_binary_count = min_binary_count
         self._store_fitted_models = store_fitted_models
         self._event_col = event_col
+        self._interaction_covariates = self.__ensure_list(interaction_covariates)
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -282,6 +305,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             + ([self._unit_identifier] if self._unit_identifier is not None else [])
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
+            + (self._interaction_covariates if self._interaction_covariates else [])
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -419,6 +443,24 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             )
         if self._compute_marginal_effects is True:
             self._compute_marginal_effects = "overall"
+
+        if self._interaction_covariates:
+            missing_int = [c for c in self._interaction_covariates if c not in self._data.columns]
+            if missing_int:
+                self._logger.warning(
+                    f"interaction_covariates columns not found in data and will be skipped: {missing_int}"
+                )
+                self._interaction_covariates = [c for c in self._interaction_covariates if c in self._data.columns]
+            non_numeric_int = [
+                c
+                for c in self._interaction_covariates
+                if c in self._data.columns and not pd.api.types.is_numeric_dtype(self._data[c])
+            ]
+            if non_numeric_int:
+                log_and_raise_error(
+                    self._logger,
+                    f"interaction_covariates must be numeric columns. Non-numeric found: {non_numeric_int}",
+                )
 
         self._data = self._data[required_columns]
 
@@ -1249,6 +1291,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
                 adjustment_labels = {"balance": "balance", "IV": "IV", "aipw": "aipw"}
+                has_interactions = bool(self._interaction_covariates)
 
                 if adjustment == "aipw":
                     adjustment_label = "aipw"
@@ -1260,6 +1303,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     adjustment_label = "regression"
                 else:
                     adjustment_label = "no adjustment"
+
+                if has_interactions:
+                    if adjustment_label == "no adjustment":
+                        adjustment_label = "regression"
+                    adjustment_label += "+interactions"
 
                 for outcome in self._outcomes:
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
@@ -1332,6 +1380,28 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         f"Weight column '{weight_col}' has zero variance for comparison {treatment_val} vs {control_val}. Results might be unreliable."  # noqa: E501
                                     )
                                 estimator_params["weight_column"] = weight_col
+
+                            active_int_covs = None
+                            if self._interaction_covariates and model_type == "ols":
+                                for col in self._interaction_covariates:
+                                    if col in comparison_data.columns and f"z_{col}" not in comparison_data.columns:
+                                        comparison_data = self.standardize_covariates(comparison_data, [col])
+                                active_int_covs = [
+                                    c for c in self._interaction_covariates if f"z_{c}" in comparison_data.columns
+                                ]
+                                if active_int_covs:
+                                    estimator_params["interaction_covariates"] = active_int_covs
+                                    for col in active_int_covs:
+                                        rho = comparison_data[col].corr(comparison_data[outcome])
+                                        self._logger.info(
+                                            f"Interaction covariate '{col}' for '{outcome}': "
+                                            f"corr={rho:.3f}, expected variance reduction={rho**2:.1%}"
+                                        )
+                            elif self._interaction_covariates and model_type != "ols":
+                                self._logger.warning(
+                                    f"interaction_covariates ignored for outcome '{outcome}' "
+                                    f"with model_type='{model_type}' — only supported for OLS."
+                                )
 
                             output = estimator_func(**estimator_params)
 
@@ -1410,6 +1480,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         min_binary_count=min_binary_count,
                                         model_type=model_type,
                                         compute_marginal_effects=me_setting,
+                                        interaction_covariates=active_int_covs,
                                     )
                                     bootstrap_results = self._calculate_bootstrap_inference(
                                         bootstrap_abs_effects,
