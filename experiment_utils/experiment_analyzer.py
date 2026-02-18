@@ -1336,7 +1336,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output = estimator_func(**estimator_params)
 
                             # Compute control group SD for retrodesign simulation
-                            control_mask = comparison_data[self._treatment_col] == control_val
+                            # Treatment column has been recoded to 0/1 (control=0, treatment=1)
+                            control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
                             if self._store_fitted_models and "fitted_model" in output:
@@ -1371,11 +1372,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                     if event_col and event_col in comparison_data.columns:
                                         event_rate = comparison_data[event_col].mean()
                                         n_events_treated = comparison_data[
-                                            (comparison_data[self._treatment_col] == treatment_val)
+                                            (comparison_data[self._treatment_col] == 1)
                                             & (comparison_data[event_col] == 1)
                                         ].shape[0]
                                         n_events_control = comparison_data[
-                                            (comparison_data[self._treatment_col] == control_val)
+                                            (comparison_data[self._treatment_col] == 0)
                                             & (comparison_data[event_col] == 1)
                                         ].shape[0]
 
@@ -1548,8 +1549,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "stat_significance",
             "se_intercept",
             "cov_coef_intercept",
-            "alpha_param",
             "control_std",
+            "alpha_param",
         ]
 
         balance_calculated = len(self._balance) > 0 or len(self._adjusted_balance) > 0
@@ -1925,7 +1926,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Returns the results DataFrame
         """
         if self._results is not None:
-            internal_columns = ["se_intercept", "cov_coef_intercept", "alpha_param"]
+            internal_columns = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param"]
             return self._results.drop(columns=[col for col in internal_columns if col in self._results.columns])
         else:
             self._logger.warning("Run the `get_effects` function first!")
