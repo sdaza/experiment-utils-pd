@@ -55,7 +55,11 @@ class Estimators:
         return balance_methods[method_name]
 
     def __create_formula(
-        self, outcome_variable: str, covariates: list[str] | None, model_type: str = "regression"
+        self,
+        outcome_variable: str,
+        covariates: list[str] | None,
+        model_type: str = "regression",
+        interaction_covariates: list[str] | None = None,
     ) -> str:  # noqa: E501
         """
         Create the formula for the regression model.
@@ -64,6 +68,11 @@ class Estimators:
         outcome_variable (str): The name of the outcome variable to be predicted.
         covariates (List[str]): The list of covariates to include in the regression model.
         model_type (str): The type of regression model to perform.
+        interaction_covariates (List[str], optional): Covariates to add as both main effects
+            and treatment interactions (z_{col} + treatment:z_{col}). Must already be
+            centered and standardized (z_{col} columns present in data). Used to implement
+            CUPED / Lin (2013): the treatment coefficient at z_{col}=0 is the ATE at the
+            mean of the covariate. Only applied for model_type="regression".
 
         Returns:
         str: The formula for the regression model.
@@ -78,6 +87,12 @@ class Estimators:
             formula = formula_dict[model_type] + " + " + " + ".join(standardized_covariates)
         else:
             formula = formula_dict[model_type]
+
+        if interaction_covariates and model_type == "regression":
+            for col in interaction_covariates:
+                z = f"z_{col}"
+                formula += f" + {z} + {self._treatment_col}:{z}"
+
         return formula
 
     def _compute_fieller_ci(
@@ -224,6 +239,7 @@ class Estimators:
         cluster_col: str | None = None,
         store_model: bool = False,
         compute_relative_ci: bool = True,
+        interaction_covariates: list[str] | None = None,
         **kwargs,
     ) -> dict[str, str | int | float]:  # noqa: E501
         """
@@ -235,6 +251,11 @@ class Estimators:
         covariates (List[str]): The list of covariates to include in the regression model.
         cluster_col (str, optional): Column for clustered standard errors (not supported for OLS yet).
         store_model (bool, optional): Whether to store the fitted model object.
+        interaction_covariates (List[str], optional): Covariates added as main effects and
+            treatment interactions (z_{col} + treatment:z_{col}). Must be centered and
+            standardized. Implements CUPED / Lin (2013): treatment coefficient is the
+            ATE at the mean of each covariate. Point estimate may differ from naive
+            difference-in-means (shrinkage toward true effect — see Deng et al. 2013).
         **kwargs: Additional arguments (ignored for compatibility).
 
         Returns:
@@ -251,7 +272,11 @@ class Estimators:
             - "stat_significance" (int): Indicator of statistical significance (1 if p-value < alpha, else 0).
         """
 
-        formula = self.__create_formula(outcome_variable=outcome_variable, covariates=covariates)
+        formula = self.__create_formula(
+            outcome_variable=outcome_variable,
+            covariates=covariates,
+            interaction_covariates=interaction_covariates,
+        )
         model = smf.ols(formula, data=data)
 
         if cluster_col:
@@ -319,6 +344,7 @@ class Estimators:
         cluster_col: str | None = None,
         store_model: bool = False,
         compute_relative_ci: bool = True,
+        interaction_covariates: list[str] | None = None,
         **kwargs,
     ) -> dict[str, str | int | float]:
         """
@@ -331,6 +357,9 @@ class Estimators:
         covariates (List[str]): The list of covariates to include in the regression model.
         cluster_col (str, optional): Column for clustered standard errors (not supported for WLS yet).
         store_model (bool, optional): Whether to store the fitted model object.
+        interaction_covariates (List[str], optional): Covariates added as main effects and
+            treatment interactions (z_{col} + treatment:z_{col}). Must be centered and
+            standardized. Implements CUPED / Lin (2013) for weighted estimation.
         **kwargs: Additional arguments (ignored for compatibility).
 
         Returns:
@@ -346,7 +375,11 @@ class Estimators:
             - "pvalue" (float): The p-value of the treatment coefficient.
             - "stat_significance" (int): Indicator of statistical significance (1 if p-value < alpha, else 0).
         """
-        formula = self.__create_formula(outcome_variable=outcome_variable, covariates=covariates)
+        formula = self.__create_formula(
+            outcome_variable=outcome_variable,
+            covariates=covariates,
+            interaction_covariates=interaction_covariates,
+        )
         model = smf.wls(
             formula,
             data=data,

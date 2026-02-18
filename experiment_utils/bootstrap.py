@@ -98,6 +98,7 @@ class BootstrapMixin:
         compute_marginal_effects: str | bool,
         iteration: int,
         event_col_for_resample: str | None = None,
+        interaction_covariates: list[str] | None = None,
     ) -> tuple[float | None, float | None, str | None]:
         """
         Execute a single bootstrap iteration.
@@ -128,6 +129,11 @@ class BootstrapMixin:
             Iteration number for seeding
         event_col_for_resample : str | None
             Event column for survival models
+        interaction_covariates : list[str] | None
+            Covariates to include as treatment interactions (z_{col} + treatment:z_{col}).
+            z_{col} columns are resampled from data alongside the outcome. The regression
+            is re-fit on each resample, so interaction coefficients (θ* in CUPED terms)
+            are automatically re-estimated — giving proper bootstrap standard errors.
 
         Returns
         -------
@@ -203,6 +209,9 @@ class BootstrapMixin:
             if adjustment == "balance" and weight_col:
                 estimator_params["weight_column"] = weight_col
 
+            if interaction_covariates and model_type == "ols":
+                estimator_params["interaction_covariates"] = interaction_covariates
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
@@ -225,6 +234,7 @@ class BootstrapMixin:
         min_binary_count: int,
         model_type: str = "ols",
         compute_marginal_effects: str | bool = "overall",
+        interaction_covariates: list[str] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Bootstrap a single effect estimate for one outcome.
@@ -247,6 +257,9 @@ class BootstrapMixin:
             Binary covariates
         min_binary_count : int
             Minimum count for binary covariates
+        interaction_covariates : list[str] | None
+            Covariates to include as treatment interactions. Forwarded to each iteration
+            so the interaction coefficients are re-estimated on every resample.
 
         Returns
         -------
@@ -284,6 +297,7 @@ class BootstrapMixin:
                     compute_marginal_effects=compute_marginal_effects,
                     iteration=i,
                     event_col_for_resample=event_col_for_resample,
+                    interaction_covariates=interaction_covariates,
                 )
                 for i in range(self._bootstrap_iterations)
             )
@@ -330,6 +344,7 @@ class BootstrapMixin:
                     compute_marginal_effects=compute_marginal_effects,
                     iteration=i,
                     event_col_for_resample=event_col_for_resample,
+                    interaction_covariates=interaction_covariates,
                 )
 
                 if abs_eff is not None:
