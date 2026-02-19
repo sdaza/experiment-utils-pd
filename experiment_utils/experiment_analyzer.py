@@ -156,7 +156,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - The point estimate (``absolute_effect``) will differ from the naive
           difference-in-means by a finite-sample correction θ* × (X̄_t − X̄_c). This is
           expected: the adjusted estimate is unbiased with lower variance and tends to
-          shrink overestimated effects toward the true value (Nubank 2025, Lesson 3).
+          shrink overestimated effects toward the true value.
         - Stacks with ``regression_covariates`` (additive) and all ``adjustment`` modes.
         By default None (no interactions).
     """  # noqa: E501
@@ -462,7 +462,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     f"interaction_covariates must be numeric columns. Non-numeric found: {non_numeric_int}",
                 )
 
-        self._data = self._data[required_columns]
+        self._data = self._data[list(dict.fromkeys(required_columns))]
 
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
         """Get binary covariates, optionally excluding categorical columns that were converted to dummies.
@@ -1391,12 +1391,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                 ]
                                 if active_int_covs:
                                     estimator_params["interaction_covariates"] = active_int_covs
-                                    for col in active_int_covs:
-                                        rho = comparison_data[col].corr(comparison_data[outcome])
-                                        self._logger.info(
-                                            f"Interaction covariate '{col}' for '{outcome}': "
-                                            f"corr={rho:.3f}, expected variance reduction={rho**2:.1%}"
-                                        )
                             elif self._interaction_covariates and model_type != "ols":
                                 self._logger.warning(
                                     f"interaction_covariates ignored for outcome '{outcome}' "
