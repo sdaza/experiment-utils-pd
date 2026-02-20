@@ -30,6 +30,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
   - [Quick Start](#quick-start)
   - [User Guide](#user-guide)
     - [Basic Experiment Analysis](#basic-experiment-analysis)
+    - [Covariate Parameters](#covariate-parameters)
     - [Checking Covariate Balance](#checking-covariate-balance)
     - [Covariate Adjustment Methods](#covariate-adjustment-methods)
     - [Outcome Models](#outcome-models)
@@ -80,12 +81,19 @@ pip install git+https://github.com/sdaza/experiment-utils-pd.git
 
 ## Quick Start
 
+All main classes are available directly from the package:
+
+```python
+from experiment_utils import ExperimentAnalyzer, PowerSim
+from experiment_utils import balanced_random_assignment, check_covariate_balance
+```
+
 Here's a complete example analyzing an A/B test with covariate adjustment:
 
 ```python
 import pandas as pd
 import numpy as np
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Create sample experiment data
 np.random.seed(42)
@@ -103,8 +111,8 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion", "revenue"],
-    covariates=["age", "is_member"],
-    adjustment="balance",  # Adjust for covariates
+    balance_covariates=["age", "is_member"],  # balance checking
+    adjustment="balance",
     balance_method="ps-logistic",
 )
 
@@ -137,7 +145,7 @@ Balance: 100.0% of covariates balanced
 Analyze a simple A/B test without covariate adjustment:
 
 ```python
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Simple analysis (no covariates)
 analyzer = ExperimentAnalyzer(
@@ -160,16 +168,44 @@ print(analyzer.results)
 - `abs_effect_lower/upper`: Confidence interval bounds (absolute)
 - `rel_effect_lower/upper`: Confidence interval bounds (relative)
 
+### Covariate Parameters
+
+Three covariate parameters control balance checking and regression adjustment. Each can be specified independently and they can overlap freely — any covariate appearing in any list is automatically included in the balance table.
+
+| Parameter | Role | Balance checked? | In regression formula? |
+|---|---|---|---|
+| `balance_covariates` | Balance checking only | Yes | No |
+| `regression_covariates` | Regression main effects | Yes | Yes (main effects) |
+| `interaction_covariates` | CUPED / Lin interactions | Yes | Yes (`z_col + treatment:z_col`) |
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    balance_covariates=["region"],           # balance table only
+    regression_covariates=["age", "tenure"], # OLS main effects + balance
+    interaction_covariates=["pre_revenue"],  # CUPED variance reduction + balance
+)
+
+analyzer.get_effects()
+
+# Balance table covers all three lists
+print(analyzer.balance[["covariate", "smd", "balance_flag"]])
+```
+
+> `covariates` is still accepted as a deprecated alias for `balance_covariates`.
+
 ### Checking Covariate Balance
 
-**Balance is automatically calculated** when you provide covariates and run `get_effects()`:
+**Balance is automatically calculated** when you provide any covariates and run `get_effects()`:
 
 ```python
 analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion"],
-    covariates=["age", "income", "region"],  # Can include categorical
+    balance_covariates=["age", "income", "region"],  # Can include categorical
 )
 
 analyzer.get_effects()
@@ -208,7 +244,7 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion", "revenue"],
-    covariates=["age", "income", "is_member"],
+    balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
     balance_method="ps-logistic",  # Logistic regression for propensity scores
     target_effect="ATT",  # Average Treatment Effect on Treated
@@ -241,14 +277,30 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion"],
-    regression_covariates=["age", "income"],  # Use regression_covariates
+    regression_covariates=["age", "income"],
     adjustment=None,  # No weighting, just regression
 )
 
 analyzer.get_effects()
 ```
 
-**Option 3: IPW + Regression (Combined)**
+**Option 3: CUPED / Interaction Adjustment**
+
+Add pre-experiment metrics as treatment interactions (Lin 2013 estimator). Each covariate is standardized and entered as `z_col + treatment:z_col`. This reduces variance without changing the point estimate interpretation:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    interaction_covariates=["pre_revenue", "pre_orders"],
+)
+
+analyzer.get_effects()
+# adjustment column in results will show "regression+interactions"
+```
+
+**Option 4: IPW + Regression (Combined)**
 
 Use both propensity score weighting and regression covariates for extra robustness:
 
@@ -257,16 +309,16 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion", "revenue"],
-    covariates=["age", "income", "is_member"],
+    balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
-    regression_covariates=["age", "income"],  # Also include in regression
+    regression_covariates=["age", "income"],
     target_effect="ATE",
 )
 
 analyzer.get_effects()
 ```
 
-**Option 4: Doubly Robust / AIPW**
+**Option 5: Doubly Robust / AIPW**
 
 Augmented Inverse Probability Weighting is consistent if either the propensity score model or the outcome model is correctly specified. Available for OLS, logistic, Poisson, and negative binomial models:
 
@@ -275,7 +327,7 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["revenue"],
-    covariates=["age", "income", "is_member"],
+    balance_covariates=["age", "income", "is_member"],
     adjustment="aipw",
     target_effect="ATE",
 )
@@ -302,7 +354,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["converted", "churned"],
     outcome_models="logistic",  # Apply to all outcomes
-    covariates=["age", "tenure"],
+    balance_covariates=["age", "tenure"],
 )
 
 analyzer.get_effects()
@@ -319,7 +371,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["orders", "page_views"],
     outcome_models="poisson",  # or "negative_binomial" for overdispersed counts
-    covariates=["age", "tenure"],
+    balance_covariates=["age", "tenure"],
 )
 
 analyzer.get_effects()
@@ -340,7 +392,7 @@ analyzer = ExperimentAnalyzer(
         "converted": "logistic",
         "orders": ["poisson", "negative_binomial"],  # Compare both
     },
-    covariates=["age"],
+    balance_covariates=["age"],
 )
 
 analyzer.get_effects()
@@ -373,7 +425,7 @@ analyzer = ExperimentAnalyzer(..., compute_marginal_effects=False)
 Analyze time-to-event outcomes using Cox proportional hazards:
 
 ```python
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Specify Cox outcomes as tuples: (time_col, event_col)
 analyzer = ExperimentAnalyzer(
@@ -381,7 +433,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=[("time_to_event", "event_occurred")],
     outcome_models="cox",
-    covariates=["age", "income"],
+    balance_covariates=["age", "income"],
 )
 
 analyzer.get_effects()
@@ -398,7 +450,6 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=[("survival_time", "died")],
     outcome_models="cox",
-    covariates=["age", "comorbidity_score"],
     regression_covariates=["age", "comorbidity_score"],
 )
 
@@ -413,9 +464,9 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=[("survival_time", "died")],
     outcome_models="cox",
-    covariates=["age", "comorbidity_score"],
+    balance_covariates=["age", "comorbidity_score"],
     adjustment="balance",
-    regression_covariates=["age", "comorbidity_score"],  # Include both
+    regression_covariates=["age", "comorbidity_score"],
     target_effect="ATE",
 )
 
@@ -461,7 +512,7 @@ analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["conversion"],
-    covariates=["age", "income"],
+    balance_covariates=["age", "income"],
     adjustment="balance",
     bootstrap=True,
     bootstrap_iterations=2000,
@@ -501,7 +552,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["outcome"],
     experiment_identifier="experiment",  # Group by experiment
-    covariates=["age"],
+    balance_covariates=["age"],
 )
 
 analyzer.get_effects()
@@ -545,7 +596,7 @@ When treatment assignment is confounded (e.g., non-compliance in an experiment),
 ```python
 import numpy as np
 import pandas as pd
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Simulate encouragement design with non-compliance
 np.random.seed(42)
@@ -579,7 +630,7 @@ analyzer = ExperimentAnalyzer(
     outcomes=["outcome"],
     instrument_col="encouragement",
     adjustment="IV",
-    covariates=["age", "region"],  # Balance checked on instrument
+    balance_covariates=["age", "region"],  # Balance checked on instrument
 )
 
 analyzer.get_effects()
@@ -648,7 +699,7 @@ When you have multiple experiments or segments, pool results using fixed-effects
 Combines effect estimates using inverse-variance weighting, producing a pooled effect with proper standard errors:
 
 ```python
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Analyze multiple experiments
 analyzer = ExperimentAnalyzer(
@@ -656,7 +707,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["conversion"],
     experiment_identifier="experiment",
-    covariates=["age"],
+    balance_covariates=["age"],
 )
 
 analyzer.get_effects()
@@ -688,6 +739,8 @@ print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 Assess reliability of significant results (post-hoc power analysis):
 
 ```python
+from experiment_utils import ExperimentAnalyzer
+
 analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
@@ -699,15 +752,16 @@ analyzer.get_effects()
 # Calculate Type S and Type M errors assuming true effect is 0.02
 retro = analyzer.calculate_retrodesign(true_effect=0.02)
 
-print(retro[["outcome", "power", "type_s_error", "type_m_error", "relative_bias"]])
+print(retro[["outcome", "power", "type_s_error", "type_m_error",
+             "relative_bias", "trimmed_effect"]])
 ```
 
 **Metrics explained:**
 - `power`: Probability of detecting the assumed true effect
 - `type_s_error`: Probability of wrong sign when significant (if underpowered)
 - `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
-- `relative_bias`: Expected bias ratio preserving signs (mean observed/true)
-  - Typically lower than type_m_error because wrong signs partially offset overestimates
+- `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
+- `trimmed_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
 
 
 
@@ -720,7 +774,7 @@ Design well-powered experiments using simulation-based power analysis.
 Estimate statistical power for a given sample size:
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 
 # Initialize power simulator for proportion metric
 power_sim = PowerSim(
@@ -762,7 +816,7 @@ print(power_result[["comparison", "power"]])
 When your data doesn't follow standard parametric assumptions, estimate power by bootstrapping directly from observed data using `get_power_from_data()`. Instead of generating synthetic data from a distribution, it repeatedly samples from your actual dataset and injects the specified effect:
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 import pandas as pd
 
 # Use real data for power estimation
@@ -800,7 +854,7 @@ power_result = power_sim.get_power_from_data(
 Explore power across a grid of parameter combinations using `grid_sim_power()`. This is useful for understanding how power varies with sample size, effect size, and baseline rates:
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 
 power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
 
@@ -838,7 +892,7 @@ The output DataFrame includes all input parameters alongside the estimated power
 Find the minimum sample size needed to achieve target power:
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 
 power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
 
@@ -900,7 +954,7 @@ sample_result = power_sim.find_sample_size(
 Prospective analysis of Type S (sign) and Type M (magnitude) errors:
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 
 power_sim = PowerSim(metric="proportion", variants=1, nsim=5000)
 
@@ -969,7 +1023,7 @@ print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relat
 Generate balanced treatment assignments with optional stratification:
 
 ```python
-from experiment_utils.utils import balanced_random_assignment
+from experiment_utils import balanced_random_assignment
 import pandas as pd
 import numpy as np
 
@@ -1035,7 +1089,7 @@ users["assignment_custom"] = balanced_random_assignment(
 Check covariate balance on any dataset without using ExperimentAnalyzer:
 
 ```python
-from experiment_utils.utils import check_covariate_balance
+from experiment_utils import check_covariate_balance
 import pandas as pd
 import numpy as np
 
@@ -1101,14 +1155,15 @@ print(balance[balance["covariate"].str.contains("region")])
 
 ### When to Use Different Adjustment Methods
 
-| Method | `adjustment` | `regression_covariates` | Best for |
+| Method | `adjustment` | Covariate params | Best for |
 |---|---|---|---|
-| No adjustment | `None` | `None` | Well-randomized experiments |
-| Regression | `None` | `["x1", "x2"]` | Variance reduction, simple confounding |
-| IPW | `"balance"` | `None` | Many covariates, non-linear confounding |
-| IPW + Regression | `"balance"` | `["x1", "x2"]` | Extra robustness, survival models |
-| AIPW (doubly robust) | `"aipw"` | (automatic) | Best protection against misspecification |
-| IV | `"IV"` | `None` or `["x1"]` | Non-compliance, endogenous treatment (requires `instrument_col`) |
+| No adjustment | `None` | none | Well-randomized experiments |
+| Regression | `None` | `regression_covariates=["x1","x2"]` | Variance reduction |
+| CUPED | `None` | `interaction_covariates=["pre_x"]` | Variance reduction with pre-experiment data |
+| IPW | `"balance"` | `balance_covariates=["x1","x2"]` | Many covariates, non-linear confounding |
+| IPW + Regression | `"balance"` | both `balance_covariates` and `regression_covariates` | Extra robustness, survival models |
+| AIPW (doubly robust) | `"aipw"` | `balance_covariates=["x1","x2"]` | Best protection against misspecification |
+| IV | `"IV"` | `balance_covariates` optional | Non-compliance, endogenous treatment (requires `instrument_col`) |
 
 **Choosing a balance method:**
 - `ps-logistic`: Default, fast, interpretable
@@ -1155,7 +1210,7 @@ analyzer = ExperimentAnalyzer(
     data=df,  # Can contain missing values
     treatment_col="treatment",
     outcomes=["conversion"],
-    covariates=["age", "region"],
+    balance_covariates=["age", "region"],
 )
 # Missing data is handled automatically
 analyzer.get_effects()
@@ -1166,8 +1221,9 @@ analyzer.get_effects()
 **1. Always check balance:**
 
 ```python
-analyzer = ExperimentAnalyzer(data=df, treatment_col="treatment", 
-                              outcomes=["conversion"], covariates=["age", "income"])
+analyzer = ExperimentAnalyzer(data=df, treatment_col="treatment",
+                              outcomes=["conversion"],
+                              balance_covariates=["age", "income"])
 
 analyzer.get_effects()
 
@@ -1214,7 +1270,7 @@ if retro["type_m_error"].iloc[0] > 2:
 **Pre-experiment: Sample size calculation**
 
 ```python
-from experiment_utils.power_sim import PowerSim
+from experiment_utils import PowerSim
 
 # Determine required sample size
 power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
@@ -1229,7 +1285,7 @@ print(f"Need {result['total_sample_size'].iloc[0]:,.0f} users")
 **During experiment: Balance check**
 
 ```python
-from experiment_utils.utils import check_covariate_balance
+from experiment_utils import check_covariate_balance
 
 # Check if randomization worked
 balance = check_covariate_balance(
@@ -1243,14 +1299,14 @@ print(f"Balance: {balance['balance_flag'].mean():.1%}")
 **Post-experiment: Analysis**
 
 ```python
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # Full analysis pipeline
 analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
     outcomes=["primary_metric", "secondary_metric"],
-    covariates=["age", "region"],
+    balance_covariates=["age", "region"],
     adjustment="balance",
     bootstrap=True,
 )
