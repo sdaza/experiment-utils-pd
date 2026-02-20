@@ -271,6 +271,9 @@ class RetrodesignMixin:
             - type_s_error: Probability of wrong sign when significant
             - type_m_error: Expected exaggeration ratio using absolute values
             - relative_bias: Expected bias ratio preserving signs
+            - trimmed_effect: Bias-corrected effect estimate (absolute_effect / relative_bias).
+              Deflates the observed effect by the sign-preserving exaggeration factor to
+              approximate the true effect. NaN when relative_bias is unavailable or zero.
             - retrodesign_method: Method used ("powersim" or "simulation")
 
         Examples
@@ -323,7 +326,7 @@ class RetrodesignMixin:
             return pd.DataFrame()
 
         # drop existing retrodesign columns if they exist (from previous calls)
-        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias"]
+        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias", "trimmed_effect"]
         existing_retro_cols = [col for col in retro_cols if col in df_filtered.columns]
         if existing_retro_cols:
             df_filtered = df_filtered.drop(columns=existing_retro_cols)
@@ -496,6 +499,14 @@ class RetrodesignMixin:
 
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
+
+        # trimmed_effect: observed effect deflated by relative_bias to approximate the true effect.
+        # relative_bias = E[estimated / true] among significant estimates, so dividing the
+        # observed effect by it yields a sign-preserving, bias-corrected estimate.
+        rb = df_filtered["relative_bias"]
+        df_filtered["trimmed_effect"] = df_filtered["absolute_effect"].where(
+            rb.isna() | (rb == 0), df_filtered["absolute_effect"] / rb
+        )
 
         # Drop internal columns not meant for display
         internal_cols = ["se_intercept", "cov_coef_intercept", "control_std"]
