@@ -197,7 +197,15 @@ class TestStandaloneBalanceChecker:
 
         # Should have proper column structure even when empty
         assert balance_df.empty or len(balance_df) == 0
-        expected_cols = ["covariate", "mean_treated", "mean_control", "smd", "balance_flag", "treatment_group", "control_group"]
+        expected_cols = [
+            "covariate",
+            "mean_treated",
+            "mean_control",
+            "smd",
+            "balance_flag",
+            "treatment_group",
+            "control_group",
+        ]
         for col in expected_cols:
             assert col in balance_df.columns
 
@@ -371,7 +379,15 @@ class TestStandaloneBalanceChecker:
 
         # Should return empty DataFrame with proper structure
         assert balance_df.empty or len(balance_df) == 0
-        expected_cols = ["covariate", "mean_treated", "mean_control", "smd", "balance_flag", "treatment_group", "control_group"]
+        expected_cols = [
+            "covariate",
+            "mean_treated",
+            "mean_control",
+            "smd",
+            "balance_flag",
+            "treatment_group",
+            "control_group",
+        ]
         for col in expected_cols:
             assert col in balance_df.columns
 

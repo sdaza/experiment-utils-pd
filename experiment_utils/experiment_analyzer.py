@@ -14,7 +14,7 @@ from statsmodels.stats.proportion import proportions_ztest
 from .bootstrap import BootstrapMixin
 from .estimators import Estimators
 from .retrodesign import RetrodesignMixin
-from .utils import get_logger, log_and_raise_error, generate_comparison_pairs, detect_categorical_covariates
+from .utils import detect_categorical_covariates, generate_comparison_pairs, get_logger, log_and_raise_error
 
 
 def _clean_category_name(cat):
@@ -97,6 +97,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         For IPW adjustment (adjustment='balance'), use fixed weights from original data
         instead of recalculating on each bootstrap sample. Faster and reduces variance.
         By default False (recalculates weights on each sample).
+    bootstrap_backend : str, optional
+        Parallelization backend for bootstrap: 'threading' (memory-efficient, shares data)
+        or 'loky' (process-based, better CPU isolation but higher memory overhead).
+        By default 'threading' (recommended for large datasets or many iterations).
     pvalue_adjustment : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -195,6 +199,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         bootstrap_seed: int | None = None,
         skip_bootstrap_for_survival: bool = False,
         bootstrap_fixed_weights: bool = False,
+        bootstrap_backend: str = "threading",
         treatment_comparisons: list[tuple] | None = None,
         pvalue_adjustment: str | None = None,
         categorical_max_unique: int = 2,
@@ -251,6 +256,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._bootstrap_seed = bootstrap_seed
         self._skip_bootstrap_for_survival = skip_bootstrap_for_survival
         self._bootstrap_fixed_weights = bootstrap_fixed_weights
+        self._bootstrap_backend = bootstrap_backend
         self._pvalue_adjustment = pvalue_adjustment
         self._treatment_comparisons = treatment_comparisons
         self._categorical_max_unique = categorical_max_unique
@@ -271,6 +277,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._final_covariates = []
         self._fitted_models = {}
         self._bootstrap_distributions = {}  # Store bootstrap distributions for MCP adjustment
+        self._bootstrap_indices_cache = {}  # Cache bootstrap indices for reuse across outcomes/models
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
             "ATE": "ips_stabilized_weight",
