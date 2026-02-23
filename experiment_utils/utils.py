@@ -173,7 +173,7 @@ def generate_comparison_pairs(
     --------
     >>> # Binary treatment - auto-generates (1, 0)
     >>> pairs = generate_comparison_pairs(df, "treatment")
-    
+
     >>> # Explicit comparisons for categorical treatment
     >>> pairs = generate_comparison_pairs(
     ...     df, "treatment",
@@ -256,7 +256,7 @@ def detect_categorical_covariates(
     >>> # Returns: {"region": ["North", "South", ...], "tier": [1, 2, 3]}
     """
     categorical_info = {}
-    
+
     for cov in covariates:
         if cov not in data.columns:
             continue
@@ -545,7 +545,7 @@ def check_covariate_balance(
     ...     treatment_comparisons=[("variant_1", "control"), ("variant_2", "control")],
     ...     threshold=0.1
     ... )
-    
+
     >>> # Auto-generate all pairwise comparisons
     >>> balance = check_covariate_balance(
     ...     data=df,
@@ -568,8 +568,13 @@ def check_covariate_balance(
         # Return empty DataFrame with proper column structure
         return pd.DataFrame(
             columns=[
-                "covariate", "mean_treated", "mean_control", "smd",
-                "balance_flag", "treatment_group", "control_group"
+                "covariate",
+                "mean_treated",
+                "mean_control",
+                "smd",
+                "balance_flag",
+                "treatment_group",
+                "control_group",
             ]
         )
 
@@ -629,8 +634,13 @@ def check_covariate_balance(
         logger.warning("No balance results computed for any comparison")
         return pd.DataFrame(
             columns=[
-                "covariate", "mean_treated", "mean_control", "smd",
-                "balance_flag", "treatment_group", "control_group"
+                "covariate",
+                "mean_treated",
+                "mean_control",
+                "smd",
+                "balance_flag",
+                "treatment_group",
+                "control_group",
             ]
         )
 
