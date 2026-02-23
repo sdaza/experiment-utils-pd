@@ -33,6 +33,7 @@ class PowerSim:
         fdr_method: str = "indep",
         early_stopping: bool = True,
         early_stopping_precision: float = 0.01,
+        parallel_strategy: str = "hybrid",
     ) -> None:
         """
         PowerSim class for simulation of power analysis.
@@ -63,6 +64,11 @@ class PowerSim:
             If True, stop simulations early when power estimates have stabilized (default: True)
         early_stopping_precision : float
             Target precision (standard error) for early stopping (default: 0.01)
+        parallel_strategy : str
+            Parallelization strategy: 'hybrid' (default, 2-stage: threading+multiprocessing),
+            'loky' (multiprocessing only), 'threading' (threading only), or 'sequential'.
+            Hybrid is recommended for best performance: fast data generation (threading)
+            followed by CPU-intensive statistical tests (multiprocessing).
         """
 
         self.logger = get_logger("Power Simulator")
@@ -70,6 +76,7 @@ class PowerSim:
         self.relative_effect = relative_effect
         self.early_stopping = early_stopping
         self.early_stopping_precision = early_stopping_precision
+        self.parallel_strategy = parallel_strategy
 
         # Handle default for variants
         if variants is None:
@@ -248,6 +255,123 @@ class PowerSim:
                 f"target_comparisons {invalid} are not in defined comparisons {self.comparisons}",
             )
         return normalized
+
+    def _generate_simulation_data(
+        self,
+        baseline: float,
+        effect: list[float],
+        sample_size: list[int],
+        compliance: list[float],
+        standard_deviation: list[float],
+    ) -> dict:
+        """
+        Stage 1 (Hybrid): Generate simulation data (fast, numpy operations).
+        This is lightweight and benefits from threading (shared memory).
+
+        Returns
+        -------
+        dict
+            Dictionary with 'y' and 'x' arrays for statistical tests
+        """
+        y, x = self.__run_experiment(
+            baseline=baseline,
+            sample_size=sample_size,
+            effect=effect,
+            compliance=compliance,
+            standard_deviation=standard_deviation,
+        )
+        return {"y": y, "x": x}
+
+    def _compute_statistical_tests(
+        self,
+        sim_data: dict,
+        sample_size: list[int],
+        comparisons_to_compute: list[tuple[int, int]],
+    ) -> list[bool]:
+        """
+        Stage 2 (Hybrid): Run statistical tests on generated data (CPU-intensive).
+        This is computation-heavy and benefits from multiprocessing (true parallelism).
+
+        Parameters
+        ----------
+        sim_data : dict
+            Dictionary with 'y' and 'x' arrays from _generate_simulation_data
+        sample_size : list[int]
+            Sample sizes (for bounds checking)
+        comparisons_to_compute : list[tuple[int, int]]
+            Comparisons to compute
+
+        Returns
+        -------
+        list[bool]
+            List of significance results for each comparison
+        """
+        y = sim_data["y"]
+        x = sim_data["x"]
+
+        l_pvalues = []
+        for j, h in comparisons_to_compute:
+            # Skip comparison if either group has 0 sample size
+            if j >= len(sample_size) or h >= len(sample_size) or sample_size[j] == 0 or sample_size[h] == 0:
+                l_pvalues.append(1.0)
+                continue
+
+            # Run statistical test based on metric type
+            if self.metric == "count":
+                ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
+                tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
+                tx[np.isin(tx, j)] = 0
+                tx[np.isin(tx, h)] = 1
+
+                model = sm.Poisson(ty, sm.add_constant(tx))
+                pm = model.fit(disp=False)
+                pvalue = pm.pvalues[1]
+
+            elif self.metric == "proportion":
+                _, pvalue = sm.stats.proportions_ztest(
+                    [np.sum(y[np.isin(x, h)]), np.sum(y[np.isin(x, j)])],
+                    [len(y[np.isin(x, h)]), len(y[np.isin(x, j)])],
+                )
+
+            elif self.metric == "average":
+                _, pvalue = stats.ttest_ind(y[np.isin(x, h)], y[np.isin(x, j)], equal_var=False)
+
+            l_pvalues.append(pvalue)
+
+        # Apply correction and determine significance
+        pvalue_adjustment = {"two-tailed": 1, "greater": 0.5, "smaller": 0.5}
+        correction_methods = {
+            "bonferroni": self.bonferroni,
+            "holm": self.holm_bonferroni,
+            "hochberg": self.hochberg,
+            "sidak": self.sidak,
+            "fdr": self.lsu,
+        }
+
+        if self.correction in correction_methods:
+            if len(self.comparisons) == 1:
+                significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
+            elif len(l_pvalues) < len(self.comparisons):
+                adjusted_alpha = self.alpha / pvalue_adjustment[self.alternative]
+                if self.correction == "bonferroni":
+                    significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
+                elif self.correction == "sidak":
+                    sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
+                    significant = [p < sidak_alpha for p in l_pvalues]
+                else:
+                    # For other corrections, use full correction method
+                    correction_func = correction_methods[self.correction]
+                    significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
+            else:
+                correction_func = correction_methods[self.correction]
+                significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
+        elif self.correction is None or self.correction == "none":
+            # No correction
+            significant = [p < self.alpha / pvalue_adjustment[self.alternative] for p in l_pvalues]
+        else:
+            log_and_raise_error(self.logger, f"Correction method {self.correction} not recognized!")
+
+        return significant
 
     def _run_single_power_simulation(
         self,
@@ -444,6 +568,68 @@ class PowerSim:
 
         return observed_effect, pvalue, is_significant
 
+    def _run_retrodesign_test_on_data(
+        self,
+        sim_data: dict,
+        h: int,
+        j: int,
+    ) -> tuple[float, float, bool]:
+        """
+        Stage 2 (Hybrid): Run retrodesign test on generated simulation data.
+        Used for hybrid parallelization in retrodesign simulations.
+
+        Parameters
+        ----------
+        sim_data : dict
+            Dictionary with 'y' and 'x' arrays from _generate_simulation_data
+        h : int
+            Control group index
+        j : int
+            Treatment group index
+
+        Returns
+        -------
+        tuple[float, float, bool]
+            (observed_effect, pvalue, is_significant)
+        """
+        y = sim_data["y"]
+        x = sim_data["x"]
+
+        if self.metric == "count":
+            ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
+            tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
+            tx[np.isin(tx, j)] = 0
+            tx[np.isin(tx, h)] = 1
+
+            model = sm.Poisson(ty, sm.add_constant(tx))
+            pm = model.fit(disp=False)
+            pvalue = pm.pvalues[1]
+            observed_effect = pm.params[1]
+
+        elif self.metric == "proportion":
+            count_h = np.sum(y[np.isin(x, h)])
+            count_j = np.sum(y[np.isin(x, j)])
+            nobs_h = len(y[np.isin(x, h)])
+            nobs_j = len(y[np.isin(x, j)])
+
+            z, pvalue = sm.stats.proportions_ztest([count_h, count_j], [nobs_h, nobs_j])
+
+            p_h = count_h / nobs_h if nobs_h > 0 else 0
+            p_j = count_j / nobs_j if nobs_j > 0 else 0
+            observed_effect = p_j - p_h
+
+        elif self.metric == "average":
+            sample_h = y[np.isin(x, h)]
+            sample_j = y[np.isin(x, j)]
+
+            t_stat, pvalue = stats.ttest_ind(sample_j, sample_h, equal_var=False)
+            observed_effect = np.mean(sample_j) - np.mean(sample_h)
+
+        pvalue_threshold = {"two-tailed": self.alpha, "greater": self.alpha, "smaller": self.alpha}
+        is_significant = pvalue < pvalue_threshold.get(self.alternative, self.alpha)
+
+        return observed_effect, pvalue, is_significant
+
     def get_power(
         self,
         baseline: float = None,
@@ -523,20 +709,69 @@ class PowerSim:
         if use_parallel:
             from joblib import Parallel, delayed
 
-            self.logger.info(f"Running {self.nsim} power simulations in parallel...")
-
-            # Run all simulations in parallel
-            results = Parallel(n_jobs=-1, backend="loky")(
-                delayed(self._run_single_power_simulation)(
-                    baseline=baseline,
-                    effect=effect,
-                    sample_size=sample_size,
-                    compliance=compliance,
-                    standard_deviation=standard_deviation,
-                    comparisons_to_compute=comparisons_to_compute,
+            # Choose parallelization strategy
+            if self.parallel_strategy == "hybrid":
+                # HYBRID: Two-stage pipeline for maximum efficiency
+                # Stage 1: Generate all simulation data (threading - shares memory, fast)
+                # Stage 2: Run statistical tests (multiprocessing - true parallelism, CPU-intensive)
+                self.logger.info(
+                    f"Running {self.nsim} power simulations with hybrid parallelization "
+                    f"(threading for data generation + multiprocessing for tests)..."
                 )
-                for _ in range(self.nsim)
-            )
+
+                # Stage 1: Generate simulation datasets in parallel (threading)
+                self.logger.debug("Stage 1/2: Generating simulation data (threading)...")
+                sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
+                    delayed(self._generate_simulation_data)(
+                        baseline=baseline,
+                        effect=effect,
+                        sample_size=sample_size,
+                        compliance=compliance,
+                        standard_deviation=standard_deviation,
+                    )
+                    for _ in range(self.nsim)
+                )
+
+                # Stage 2: Run statistical tests in parallel (multiprocessing)
+                self.logger.debug("Stage 2/2: Computing statistical tests (multiprocessing)...")
+                results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
+                    delayed(self._compute_statistical_tests)(
+                        sim_data=sim_data,
+                        sample_size=sample_size,
+                        comparisons_to_compute=comparisons_to_compute,
+                    )
+                    for sim_data in sim_datasets
+                )
+
+            elif self.parallel_strategy == "threading":
+                # Pure threading approach (memory-efficient but GIL-limited)
+                self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
+                results = Parallel(n_jobs=-1, backend="threading")(
+                    delayed(self._run_single_power_simulation)(
+                        baseline=baseline,
+                        effect=effect,
+                        sample_size=sample_size,
+                        compliance=compliance,
+                        standard_deviation=standard_deviation,
+                        comparisons_to_compute=comparisons_to_compute,
+                    )
+                    for _ in range(self.nsim)
+                )
+
+            else:  # "loky" or default
+                # Pure multiprocessing approach (high memory but true parallelism)
+                self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
+                results = Parallel(n_jobs=-1, backend="loky")(
+                    delayed(self._run_single_power_simulation)(
+                        baseline=baseline,
+                        effect=effect,
+                        sample_size=sample_size,
+                        compliance=compliance,
+                        standard_deviation=standard_deviation,
+                        comparisons_to_compute=comparisons_to_compute,
+                    )
+                    for _ in range(self.nsim)
+                )
 
             # Aggregate results
             for significant in results:
@@ -1872,22 +2107,63 @@ class PowerSim:
                 if use_parallel:
                     from joblib import Parallel, delayed
 
-                    self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel...")
+                    # Use configured parallel strategy (default: hybrid)
+                    if self.parallel_strategy == "hybrid":
+                        self.logger.debug(f"Running {nsim_val} retrodesign simulations with hybrid parallelization...")
 
-                    # Run simulations in parallel
-                    simulation_results = Parallel(n_jobs=-1, backend="loky")(
-                        delayed(self._run_single_retrodesign_simulation)(
-                            baseline=baseline,
-                            sample_size=sample_size,
-                            true_effect=true_effect,
-                            compliance=compliance,
-                            standard_deviation=standard_deviation,
-                            comp_true_effect=comp_true_effect,
-                            h=h,
-                            j=j,
+                        # Stage 1: Generate simulation data (threading)
+                        sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
+                            delayed(self._generate_simulation_data)(
+                                baseline=baseline,
+                                effect=true_effect,
+                                sample_size=sample_size,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                            )
+                            for _ in range(nsim_val)
                         )
-                        for _ in range(nsim_val)
-                    )
+
+                        # Stage 2: Run tests with retrodesign-specific logic (multiprocessing)
+                        simulation_results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
+                            delayed(self._run_retrodesign_test_on_data)(
+                                sim_data=sim_data,
+                                h=h,
+                                j=j,
+                            )
+                            for sim_data in sim_datasets
+                        )
+                    elif self.parallel_strategy == "threading":
+                        self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel (threading)...")
+                        simulation_results = Parallel(n_jobs=-1, backend="threading")(
+                            delayed(self._run_single_retrodesign_simulation)(
+                                baseline=baseline,
+                                sample_size=sample_size,
+                                true_effect=true_effect,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comp_true_effect=comp_true_effect,
+                                h=h,
+                                j=j,
+                            )
+                            for _ in range(nsim_val)
+                        )
+                    else:  # "loky" or default
+                        self.logger.debug(
+                            f"Running {nsim_val} retrodesign simulations in parallel (multiprocessing)..."
+                        )
+                        simulation_results = Parallel(n_jobs=-1, backend="loky")(
+                            delayed(self._run_single_retrodesign_simulation)(
+                                baseline=baseline,
+                                sample_size=sample_size,
+                                true_effect=true_effect,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comp_true_effect=comp_true_effect,
+                                h=h,
+                                j=j,
+                            )
+                            for _ in range(nsim_val)
+                        )
 
                     # Aggregate results
                     significant_effects = []

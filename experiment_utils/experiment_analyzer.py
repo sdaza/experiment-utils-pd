@@ -98,9 +98,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         instead of recalculating on each bootstrap sample. Faster and reduces variance.
         By default False (recalculates weights on each sample).
     bootstrap_backend : str, optional
-        Parallelization backend for bootstrap: 'threading' (memory-efficient, shares data)
-        or 'loky' (process-based, better CPU isolation but higher memory overhead).
-        By default 'threading' (recommended for large datasets or many iterations).
+        Parallelization backend for bootstrap: 'threading' (memory-efficient, shares data),
+        'loky' (process-based, better CPU isolation but higher memory overhead),
+        or 'hybrid' (two-pass threading: separate data prep and model fitting phases).
+        By default 'threading'. The 'hybrid' strategy uses threading for both stages
+        (unlike PowerSim which uses threading+multiprocessing) because: (1) DataFrames
+        benefit from shared memory, (2) statsmodels releases the GIL, (3) avoids
+        expensive serialization. Use 'hybrid' for potentially better cache utilization.
     pvalue_adjustment : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -587,18 +591,28 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def impute_missing_values(
         self, data: pd.DataFrame, num_covariates: list[str] | None = None, bin_covariates: list[str] | None = None
     ) -> pd.DataFrame:  # noqa: E501
-        """ "
-        Impute missing values for numeric and binary covariates
         """
-        for cov in num_covariates:
-            if data[cov].isna().all():
-                log_and_raise_error(self._logger, f"Column {cov} has only missing values")
-            data[cov] = data[cov].fillna(data[cov].mean())
+        Impute missing values for numeric and binary covariates.
+        Optimized with vectorized operations for better performance.
+        """
+        # Vectorized imputation for numeric covariates
+        if num_covariates:
+            # Check for all-missing columns first
+            for cov in num_covariates:
+                if data[cov].isna().all():
+                    log_and_raise_error(self._logger, f"Column {cov} has only missing values")
 
-        for cov in bin_covariates:
-            if data[cov].isna().all():
-                log_and_raise_error(self._logger, f"Column {cov} has only missing values.")
-            data[cov] = data[cov].fillna(data[cov].mode()[0])
+            # Vectorized fillna with means computed once
+            means = data[num_covariates].mean()
+            data[num_covariates] = data[num_covariates].fillna(means)
+
+        # Vectorized imputation for binary covariates
+        if bin_covariates:
+            for cov in bin_covariates:
+                if data[cov].isna().all():
+                    log_and_raise_error(self._logger, f"Column {cov} has only missing values.")
+                # Mode requires per-column calculation
+                data[cov] = data[cov].fillna(data[cov].mode()[0])
 
         return data
 
@@ -676,6 +690,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def standardize_covariates(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
         """
         Standardize covariates in the data.
+        Optimized with vectorized operations for better performance.
 
         Parameters
         ----------
@@ -689,9 +704,22 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         pd.DataFrame
             Data with standardized covariates
         """
+        if not covariates:
+            return data
 
-        for covariate in covariates:
-            data[f"z_{covariate}"] = (data[covariate] - data[covariate].mean()) / data[covariate].std()
+        # Vectorized standardization: compute all means and stds at once
+        subset = data[covariates]
+        means = subset.mean()
+        stds = subset.std()
+        standardized = (subset - means) / stds
+
+        # Add z_ prefix to column names
+        standardized.columns = [f"z_{c}" for c in covariates]
+
+        # Assign standardized columns back to data
+        for col in standardized.columns:
+            data[col] = standardized[col]
+
         return data
 
     def calculate_smd(
