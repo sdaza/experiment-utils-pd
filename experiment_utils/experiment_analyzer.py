@@ -14,7 +14,7 @@ from statsmodels.stats.proportion import proportions_ztest
 from .bootstrap import BootstrapMixin
 from .estimators import Estimators
 from .retrodesign import RetrodesignMixin
-from .utils import get_logger, log_and_raise_error
+from .utils import get_logger, log_and_raise_error, generate_comparison_pairs, detect_categorical_covariates
 
 
 def _clean_category_name(cat):
@@ -505,6 +505,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         """
         Detect categorical covariates and return their unique categories.
 
+        This method wraps the shared detect_categorical_covariates function
+        from utils.py for use within ExperimentAnalyzer.
+
         Detection rules:
         - object/category dtype columns
         - numeric columns (int or float) with 2 to categorical_max_unique unique values,
@@ -512,26 +515,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         Returns dict: {covariate_name: [list_of_categories]}
         """
-        categorical_info = {}
-        for c in self._all_covariates:
-            is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
-
-            # treat numeric columns (int or float) as categorical if they have
-            # 2 to categorical_max_unique unique values
-            # exclude natural binary {0, 1} columns since those don't need dummy encoding
-            n_unique = data[c].nunique()
-            is_natural_binary = n_unique == 2 and set(data[c].dropna().unique()) <= {0, 1}
-            is_low_cardinality_numeric = (
-                pd.api.types.is_numeric_dtype(data[c])
-                and 2 <= n_unique <= self._categorical_max_unique
-                and not is_natural_binary
-            )
-
-            if is_object or is_low_cardinality_numeric:
-                categories = sorted(data[c].dropna().unique())
-                categorical_info[c] = categories
-
-        return categorical_info
+        return detect_categorical_covariates(
+            data=data,
+            covariates=self._all_covariates,
+            categorical_max_unique=self._categorical_max_unique,
+        )
 
     def __create_dummy_variables(
         self,
@@ -2182,8 +2170,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     categorical_covariates=categorical_info,
                     min_binary_count=min_binary_count,
                     threshold=threshold,
-                    treatment_value=treatment_val,
-                    control_value=control_val,
+                    treatment_comparisons=[(treatment_val, control_val)],
                     categorical_max_unique=self._categorical_max_unique,
                     logger=self._logger,
                 )
@@ -2191,6 +2178,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 if not balance_df.empty:
                     balance_df["experiment"] = [experiment_tuple] * len(balance_df)
                     balance_df = self.__transform_tuple_column(balance_df, "experiment", self._experiment_identifier)
+
+                    # Remove treatment_group and control_group columns since we track experiment instead
+                    balance_df = balance_df.drop(columns=["treatment_group", "control_group"], errors="ignore")
 
                     # Log balance summary
                     balance_mean = balance_df["balance_flag"].mean()
@@ -2369,10 +2359,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         """
         Generate comparison pairs for categorical treatment analysis.
 
+        This method wraps the shared generate_comparison_pairs function
+        from utils.py for use within ExperimentAnalyzer.
+
         Parameters
         ----------
         treatvalues : set
-            Set of unique treatment values in the data
+            Set of unique treatment values in the data (not used, kept for API compatibility)
         data : pd.DataFrame
             DataFrame containing the treatment column
 
@@ -2381,25 +2374,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         list[tuple]
             List of (treatment_val, control_val) tuples to compare
         """
-        import itertools
-
-        if self._treatment_comparisons is not None:
-            valid_pairs = []
-            for treatment_val, control_val in self._treatment_comparisons:
-                if treatment_val in treatvalues and control_val in treatvalues:
-                    valid_pairs.append((treatment_val, control_val))
-                else:
-                    self._logger.warning(
-                        f"Skipping comparison ({treatment_val}, {control_val}) - one or both groups not found in data"
-                    )
-            return valid_pairs
-
-        if treatvalues == {0, 1}:
-            return [(1, 0)]
-
-        sorted_values = sorted(list(treatvalues))
-        pairs = list(itertools.combinations(sorted_values, 2))
-        return [(b, a) for a, b in pairs]
+        # Use the shared function from utils.py for consistency
+        return generate_comparison_pairs(
+            data=data,
+            treatment_col=self._treatment_col,
+            treatment_comparisons=self._treatment_comparisons,
+            logger=self._logger,
+        )
 
     def __check_sample_ratio_mismatch(self, df: pd.DataFrame):
         """
