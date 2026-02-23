@@ -141,98 +141,195 @@ def _check_assignment_balance(df, assignment_col, covariates, variant1, variant2
     return pd.DataFrame(smd_results)
 
 
-def check_covariate_balance(
+def generate_comparison_pairs(
     data: pd.DataFrame,
     treatment_col: str,
-    covariates: list[str],
-    categorical_covariates: dict[str, list] | None = None,
-    min_binary_count: int = 5,
-    threshold: float = 0.1,
-    treatment_value: int | str = 1,
-    control_value: int | str = 0,
-    categorical_max_unique: int = 10,
-    weights_col: str = "weights",
+    treatment_comparisons: list[tuple] | None = None,
     logger: logging.Logger | None = None,
-) -> pd.DataFrame:
+) -> list[tuple]:
     """
-    Check covariate balance between treatment and control groups with full preprocessing.
+    Generate comparison pairs for treatment analysis.
 
-    This function performs comprehensive balance checking including:
-    - Categorical variable identification and dummy creation
-    - Covariate filtering (zero variance, minimum counts)
-    - Standardization
-    - SMD calculation with balance flags
+    This is a general-purpose function used by both check_covariate_balance
+    and ExperimentAnalyzer to determine which treatment groups to compare.
 
     Parameters
     ----------
     data : pd.DataFrame
-        DataFrame containing treatment and covariates
+        DataFrame containing treatment column
     treatment_col : str
         Name of treatment column
-    covariates : list[str]
-        List of covariate names to check
-    categorical_covariates : dict[str, list], optional
-        Dict mapping covariate names to their categories. If None, will auto-detect.
-    min_binary_count : int, optional
-        Minimum count for binary covariates (default 5)
-    threshold : float, optional
-        SMD threshold for balance flag (default 0.1)
-    treatment_value : int | str, optional
-        Value indicating treatment group (default 1)
-    control_value : int | str, optional
-        Value indicating control group (default 0)
-    categorical_max_unique : int, optional
-        Maximum unique values to consider a variable categorical (default 10)
-    weights_col : str, optional
-        Name of weights column (default "weights")
+    treatment_comparisons : list[tuple], optional
+        List of (treatment, control) tuples to compare. If None, auto-generate.
     logger : logging.Logger, optional
         Logger for warnings. If None, creates one.
 
     Returns
     -------
-    pd.DataFrame
-        Balance metrics with columns:
-        - covariate: str - covariate name
-        - mean_treated: float - weighted mean for treatment
-        - mean_control: float - weighted mean for control
-        - smd: float - standardized mean difference
-        - balance_flag: int - 1 if balanced, 0 if imbalanced
+    list[tuple]
+        List of (treatment_val, control_val) tuples to compare
 
     Examples
     --------
-    >>> balance = check_covariate_balance(
-    ...     data=df,
-    ...     treatment_col='treatment',
-    ...     covariates=['age', 'income', 'region'],
-    ...     threshold=0.1
+    >>> # Binary treatment - auto-generates (1, 0)
+    >>> pairs = generate_comparison_pairs(df, "treatment")
+    
+    >>> # Explicit comparisons for categorical treatment
+    >>> pairs = generate_comparison_pairs(
+    ...     df, "treatment",
+    ...     treatment_comparisons=[("variant_1", "control"), ("variant_2", "control")]
     ... )
+    """
+    import itertools
+
+    if logger is None:
+        logger = get_logger("ComparisonPairs")
+
+    treatment_values = set(data[treatment_col].unique())
+
+    if treatment_comparisons is not None:
+        # Validate provided comparisons
+        valid_pairs = []
+        for treatment_val, control_val in treatment_comparisons:
+            if treatment_val in treatment_values and control_val in treatment_values:
+                valid_pairs.append((treatment_val, control_val))
+            else:
+                logger.warning(
+                    f"Skipping comparison ({treatment_val}, {control_val}) - one or both groups not found in data. "
+                    f"Available values: {sorted(treatment_values)}"
+                )
+        return valid_pairs
+
+    # Auto-generate comparison pairs
+    if len(treatment_values) < 2:
+        logger.warning(
+            f"Cannot generate comparison pairs - only {len(treatment_values)} treatment group(s) found. "
+            f"Available values: {sorted(treatment_values)}"
+        )
+        return []
+
+    # Special case: binary treatment {0, 1}
+    if treatment_values == {0, 1}:
+        return [(1, 0)]
+
+    # General case: all pairwise combinations (higher value as treatment)
+    sorted_values = sorted(list(treatment_values))
+    pairs = list(itertools.combinations(sorted_values, 2))
+    return [(b, a) for a, b in pairs]
+
+
+def detect_categorical_covariates(
+    data: pd.DataFrame,
+    covariates: list[str],
+    categorical_max_unique: int = 10,
+) -> dict[str, list]:
+    """
+    Detect categorical covariates and return their unique categories.
+
+    This is a general-purpose function used by both check_covariate_balance
+    and ExperimentAnalyzer for consistent categorical variable detection.
+
+    Detection rules:
+    - Object or category dtype columns are always treated as categorical
+    - Numeric columns (int or float) with 2 to categorical_max_unique unique values
+      are treated as categorical, EXCEPT natural binary {0, 1} columns
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame containing covariates
+    covariates : list[str]
+        List of covariate names to check
+    categorical_max_unique : int, optional
+        Maximum unique values to consider a numeric variable categorical (default 10)
+
+    Returns
+    -------
+    dict[str, list]
+        Dictionary mapping covariate names to their sorted list of unique categories
+
+    Examples
+    --------
+    >>> categorical_info = detect_categorical_covariates(
+    ...     df, ["region", "tier", "age"], categorical_max_unique=10
+    ... )
+    >>> # Returns: {"region": ["North", "South", ...], "tier": [1, 2, 3]}
+    """
+    categorical_info = {}
+    
+    for cov in covariates:
+        if cov not in data.columns:
+            continue
+
+        is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(data[cov].dtype, pd.CategoricalDtype)
+        n_unique = data[cov].nunique()
+        is_natural_binary = n_unique == 2 and set(data[cov].dropna().unique()) <= {0, 1}
+        is_low_cardinality_numeric = (
+            pd.api.types.is_numeric_dtype(data[cov])
+            and 2 <= n_unique <= categorical_max_unique
+            and not is_natural_binary
+        )
+
+        if is_object or is_low_cardinality_numeric:
+            categories = sorted(data[cov].dropna().unique())
+            categorical_info[cov] = categories
+
+    return categorical_info
+
+
+def _compute_balance_for_pair(
+    data: pd.DataFrame,
+    treatment_col: str,
+    covariates: list[str],
+    categorical_covariates: dict[str, list] | None,
+    min_binary_count: int,
+    threshold: float,
+    treatment_value: int | str,
+    control_value: int | str,
+    categorical_max_unique: int,
+    weights_col: str,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """
+    Compute balance metrics for a single treatment vs control comparison.
+
+    This is the core balance checking logic extracted for reuse.
+    Data should already be filtered to only include the two groups being compared.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame filtered to contain only treatment and control groups
+    treatment_col : str
+        Name of treatment column
+    covariates : list[str]
+        List of covariate names to check
+    categorical_covariates : dict[str, list] | None
+        Dict mapping covariate names to their categories
+    min_binary_count : int
+        Minimum count for binary covariates
+    threshold : float
+        SMD threshold for balance flag
+    treatment_value : int | str
+        Value indicating treatment group in this comparison
+    control_value : int | str
+        Value indicating control group in this comparison
+    categorical_max_unique : int
+        Maximum unique values to consider a variable categorical
+    weights_col : str
+        Name of weights column
+    logger : logging.Logger
+        Logger for warnings
+
+    Returns
+    -------
+    pd.DataFrame
+        Balance metrics for this comparison
     """
     import re
 
-    if logger is None:
-        logger = get_logger("BalanceChecker")
-
     # Make a copy to avoid modifying original data
     data = data.copy()
-
-    # Filter to treatment and control groups
-    data = data[data[treatment_col].isin([treatment_value, control_value])].copy()
-
-    if data.empty:
-        logger.warning("No data found for specified treatment and control values")
-        return pd.DataFrame()
-
-    # Check if we have both treatment and control groups
-    n_treatment = (data[treatment_col] == treatment_value).sum()
-    n_control = (data[treatment_col] == control_value).sum()
-
-    if n_treatment == 0:
-        logger.warning(f"No treatment units ({treatment_value}) found. Cannot check balance.")
-        return pd.DataFrame()
-
-    if n_control == 0:
-        logger.warning(f"No control units ({control_value}) found. Cannot check balance.")
-        return pd.DataFrame()
 
     # Recode treatment to binary
     data[treatment_col] = (data[treatment_col] == treatment_value).astype(int)
@@ -243,23 +340,11 @@ def check_covariate_balance(
 
     # Identify categorical covariates if not provided
     if categorical_covariates is None:
-        categorical_covariates = {}
-        for cov in covariates:
-            if cov not in data.columns:
-                continue
-
-            is_object = pd.api.types.is_object_dtype(data[cov]) or isinstance(data[cov].dtype, pd.CategoricalDtype)
-            n_unique = data[cov].nunique()
-            is_natural_binary = n_unique == 2 and set(data[cov].dropna().unique()) <= {0, 1}
-            is_low_cardinality_numeric = (
-                pd.api.types.is_numeric_dtype(data[cov])
-                and 2 <= n_unique <= categorical_max_unique
-                and not is_natural_binary
-            )
-
-            if is_object or is_low_cardinality_numeric:
-                categories = sorted(data[cov].dropna().unique())
-                categorical_covariates[cov] = categories
+        categorical_covariates = detect_categorical_covariates(
+            data=data,
+            covariates=covariates,
+            categorical_max_unique=categorical_max_unique,
+        )
 
     # Separate numeric/binary from categorical
     categorical_cov_names = set(categorical_covariates.keys())
@@ -389,6 +474,167 @@ def check_covariate_balance(
         )
 
     return pd.DataFrame(smd_results)
+
+
+def check_covariate_balance(
+    data: pd.DataFrame,
+    treatment_col: str,
+    covariates: list[str],
+    categorical_covariates: dict[str, list] | None = None,
+    min_binary_count: int = 5,
+    threshold: float = 0.1,
+    treatment_comparisons: list[tuple] | None = None,
+    categorical_max_unique: int = 10,
+    weights_col: str = "weights",
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    """
+    Check covariate balance between treatment groups with full preprocessing.
+
+    This function performs comprehensive balance checking including:
+    - Categorical variable identification and dummy creation
+    - Covariate filtering (zero variance, minimum counts)
+    - Standardization
+    - SMD calculation with balance flags
+    - Support for multiple treatment comparisons
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame containing treatment and covariates
+    treatment_col : str
+        Name of treatment column
+    covariates : list[str]
+        List of covariate names to check
+    categorical_covariates : dict[str, list], optional
+        Dict mapping covariate names to their categories. If None, will auto-detect.
+    min_binary_count : int, optional
+        Minimum count for binary covariates (default 5)
+    threshold : float, optional
+        SMD threshold for balance flag (default 0.1)
+    treatment_comparisons : list[tuple], optional
+        List of (treatment_value, control_value) tuples specifying which groups to compare.
+        If None, automatically generates all pairwise comparisons (or [(1, 0)] for binary).
+        Example: [("variant_1", "control"), ("variant_2", "control")]
+    categorical_max_unique : int, optional
+        Maximum unique values to consider a variable categorical (default 10)
+    weights_col : str, optional
+        Name of weights column (default "weights")
+    logger : logging.Logger, optional
+        Logger for warnings. If None, creates one.
+
+    Returns
+    -------
+    pd.DataFrame
+        Balance metrics with columns:
+        - covariate: str - covariate name
+        - mean_treated: float - weighted mean for treatment group
+        - mean_control: float - weighted mean for control group
+        - smd: float - standardized mean difference
+        - balance_flag: int - 1 if balanced, 0 if imbalanced
+        - treatment_group: int | str - treatment group identifier
+        - control_group: int | str - control group identifier
+
+    Examples
+    --------
+    >>> # Explicit comparisons
+    >>> balance = check_covariate_balance(
+    ...     data=df,
+    ...     treatment_col='assignment',
+    ...     covariates=['age', 'income', 'region'],
+    ...     treatment_comparisons=[("variant_1", "control"), ("variant_2", "control")],
+    ...     threshold=0.1
+    ... )
+    
+    >>> # Auto-generate all pairwise comparisons
+    >>> balance = check_covariate_balance(
+    ...     data=df,
+    ...     treatment_col='treatment',
+    ...     covariates=['age', 'income', 'region'],
+    ...     threshold=0.1
+    ... )
+    """
+    if logger is None:
+        logger = get_logger("BalanceChecker")
+
+    # Make a copy to avoid modifying original data
+    data = data.copy()
+
+    # Generate comparison pairs
+    comparison_pairs = generate_comparison_pairs(data, treatment_col, treatment_comparisons, logger)
+
+    if not comparison_pairs:
+        logger.warning("No valid comparison pairs found")
+        # Return empty DataFrame with proper column structure
+        return pd.DataFrame(
+            columns=[
+                "covariate", "mean_treated", "mean_control", "smd",
+                "balance_flag", "treatment_group", "control_group"
+            ]
+        )
+
+    # Iterate through comparison pairs and compute balance for each
+    balance_results = []
+
+    for treatment_val, control_val in comparison_pairs:
+        logger.info(f"Checking balance: {treatment_val} vs {control_val}")
+
+        # Filter data to only include these two groups
+        comparison_data = data[data[treatment_col].isin([treatment_val, control_val])].copy()
+
+        if comparison_data.empty:
+            logger.warning(f"No data for comparison {treatment_val} vs {control_val}. Skipping.")
+            continue
+
+        # Check if we have both treatment and control groups
+        n_treatment = (comparison_data[treatment_col] == treatment_val).sum()
+        n_control = (comparison_data[treatment_col] == control_val).sum()
+
+        if n_treatment == 0:
+            logger.warning(f"No treatment units ({treatment_val}) found. Skipping.")
+            continue
+
+        if n_control == 0:
+            logger.warning(f"No control units ({control_val}) found. Skipping.")
+            continue
+
+        # Compute balance for this pair
+        balance_df = _compute_balance_for_pair(
+            data=comparison_data,
+            treatment_col=treatment_col,
+            covariates=covariates,
+            categorical_covariates=categorical_covariates,
+            min_binary_count=min_binary_count,
+            threshold=threshold,
+            treatment_value=treatment_val,
+            control_value=control_val,
+            categorical_max_unique=categorical_max_unique,
+            weights_col=weights_col,
+            logger=logger,
+        )
+
+        if not balance_df.empty:
+            # Add tracking columns
+            balance_df["treatment_group"] = treatment_val
+            balance_df["control_group"] = control_val
+
+            # Log balance summary
+            balance_mean = balance_df["balance_flag"].mean()
+            logger.info(f"Balance: {balance_mean:.2%}")
+
+            balance_results.append(balance_df)
+
+    # Concatenate all results
+    if not balance_results:
+        logger.warning("No balance results computed for any comparison")
+        return pd.DataFrame(
+            columns=[
+                "covariate", "mean_treated", "mean_control", "smd",
+                "balance_flag", "treatment_group", "control_group"
+            ]
+        )
+
+    return pd.concat(balance_results, ignore_index=True)
 
 
 def balanced_random_assignment(
