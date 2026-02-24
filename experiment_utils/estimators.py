@@ -1584,7 +1584,7 @@ class Estimators:
         data["propensity_score"] = np.minimum(self._max_ps_score, data["propensity_score"])
         data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
 
-        data = self.__calculate_stabilized_weights(data)
+        data = self._calculate_stabilized_weights(data)
         return data
 
     def ipw_xgboost(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
@@ -1613,7 +1613,7 @@ class Estimators:
         data["propensity_score"] = xgb_model.predict_proba(X)[:, 1]
         data["propensity_score"] = np.minimum(self._max_ps_score, data["propensity_score"])
         data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
-        data = self.__calculate_stabilized_weights(data)
+        data = self._calculate_stabilized_weights(data)
 
         return data
 
@@ -2198,7 +2198,7 @@ class Estimators:
 
         return output
 
-    def __calculate_stabilized_weights(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_stabilized_weights(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Calculate the stabilized weights for IPW.
 
@@ -2214,17 +2214,18 @@ class Estimators:
         """
         num_units = data.shape[0]
         p_treatment = sum(data[self._treatment_col]) / num_units
+        ps = data["propensity_score"]
+        T = data[self._treatment_col]
 
-        data["ips_stabilized_weight"] = data[self._treatment_col] / data["propensity_score"] * p_treatment + (
-            1 - data[self._treatment_col]
-        ) / (1 - data["propensity_score"]) * (1 - p_treatment)
+        data["ips_stabilized_weight"] = T / ps * p_treatment + (1 - T) / (1 - ps) * (1 - p_treatment)
 
-        data["tips_stabilized_weight"] = data[self._treatment_col] * p_treatment + (
-            1 - data[self._treatment_col]
-        ) * data["propensity_score"] / (1 - data["propensity_score"]) * (1 - p_treatment)
+        data["tips_stabilized_weight"] = T * p_treatment + (1 - T) * ps / (1 - ps) * (1 - p_treatment)
 
-        data["cips_stabilized_weight"] = data[self._treatment_col] * (1 - data["propensity_score"]) / data[
-            "propensity_score"
-        ] * p_treatment + (1 - data[self._treatment_col]) * (1 - p_treatment)
+        data["cips_stabilized_weight"] = T * (1 - ps) / ps * p_treatment + (1 - T) * (1 - p_treatment)
+
+        # Overlap weights (ATO) — Li, Morgan & Zaslavsky (2018).
+        # Treated: w = (1 - ps),  Control: w = ps.
+        # Naturally downweights units with extreme PS; no threshold needed.
+        data["overlap_weight"] = T * (1 - ps) + (1 - T) * ps
 
         return data

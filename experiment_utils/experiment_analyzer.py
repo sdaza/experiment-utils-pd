@@ -56,13 +56,28 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     exp_sample_ratio_col : str, optional
         Column name for the expected sample ratio, by default None
     target_ipw_effect : str, optional
-        Target IPW effect (ATT, ATE, ATC), by default "ATT"
+        Target IPW effect (ATT, ATE, ATC, ATO), by default "ATT".
+        ATO uses overlap weights (Li, Morgan & Zaslavsky 2018): treated units receive weight
+        (1 - ps), control units receive weight ps. Naturally downweights extreme-PS units
+        without requiring a trimming threshold. Only supported with PS-based balance methods.
     balance_method : str, optional
         Balance method ('ps-logistic', 'ps-xgboost', 'entropy'), by default 'ps-logistic'
     min_ps_score : float, optional
         Minimum propensity score, by default 0.05
     max_ps_score : float, optional
         Maximum propensity score, by default 0.95
+    trim_ps : bool, optional
+        Drop units with propensity scores outside [trim_ps_lower, trim_ps_upper] after PS
+        estimation and recompute weights on the trimmed sample. Only applied for PS-based
+        balance methods ('ps-logistic', 'ps-xgboost'). By default False.
+    trim_ps_lower : float, optional
+        Lower PS bound for trimming. Units with PS below this value are dropped. By default 0.1.
+    trim_ps_upper : float, optional
+        Upper PS bound for trimming. Units with PS above this value are dropped. By default 0.9.
+    trim_overlap_threshold : float | None, optional
+        If set, trimming is only applied when the overlap coefficient (KDE-based) is at or
+        above this value. Useful to skip trimming when overlap is already poor and many units
+        would be dropped. By default None (trimming always applied when trim_ps=True).
     polynomial_ipw : bool, optional
         Use polynomial and interaction features for IPW, by default False. It can be slow for large datasets.
     assess_overlap : bool, optional
@@ -189,6 +204,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
+        trim_ps: bool = False,
+        trim_ps_lower: float = 0.1,
+        trim_ps_upper: float = 0.9,
+        trim_overlap_threshold: float | None = None,
         polynomial_ipw: bool = False,
         instrument_col: str | None = None,
         alpha: float = 0.05,
@@ -247,6 +266,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._exp_sample_ratio_col = exp_sample_ratio_col
         self._balance_method = balance_method
         self._target_effect = target_effect
+        self._trim_ps = trim_ps
+        self._trim_ps_lower = trim_ps_lower
+        self._trim_ps_upper = trim_ps_upper
+        self._trim_overlap_threshold = trim_overlap_threshold
         self._assess_overlap = assess_overlap
         self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
@@ -286,7 +309,15 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "ATT": "tips_stabilized_weight",
             "ATE": "ips_stabilized_weight",
             "ATC": "cips_stabilized_weight",
+            "ATO": "overlap_weight",
         }  # noqa: E501
+
+        if target_effect == "ATO" and balance_method == "entropy":
+            log_and_raise_error(
+                self._logger,
+                "target_effect='ATO' (overlap weights) is not supported with balance_method='entropy'. "
+                "Use 'ps-logistic' or 'ps-xgboost'.",
+            )
         self._estimator = Estimators(
             treatment_col,
             instrument_col,
@@ -1220,11 +1251,54 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         balance_mean = balance["balance_flag"].mean()
                         self._logger.info(f"Balance: {balance_mean:.2%}")
 
+                n_trimmed = 0
+
                 if len(final_covariates) > 0 and adjustment in ("balance", "aipw"):
                     balance_func = get_balance_method(self._balance_method)
                     comparison_data = balance_func(
                         data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates]
                     )
+
+                    # PS trimming: drop units with extreme propensity scores and recompute weights.
+                    # Only applicable for PS-based balance methods (not entropy balancing).
+                    if (
+                        self._trim_ps
+                        and self._balance_method in ("ps-logistic", "ps-xgboost")
+                        and "propensity_score" in comparison_data.columns
+                    ):
+                        should_trim = True
+                        if self._trim_overlap_threshold is not None:
+                            treat_ps = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 1, "propensity_score"
+                            ].values
+                            ctrl_ps = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 0, "propensity_score"
+                            ].values
+                            if len(treat_ps) > 0 and len(ctrl_ps) > 0:
+                                oc = self.get_overlap_coefficient(treat_ps, ctrl_ps)
+                                self._logger.info(f"Overlap coefficient before trimming: {oc:.3f}")
+                                should_trim = oc >= self._trim_overlap_threshold
+                                if not should_trim:
+                                    self._logger.info(
+                                        f"Trimming skipped: overlap ({oc:.3f}) below threshold "
+                                        f"({self._trim_overlap_threshold})."
+                                    )
+                            else:
+                                should_trim = False
+
+                        if should_trim:
+                            n_before = len(comparison_data)
+                            mask = comparison_data["propensity_score"].between(self._trim_ps_lower, self._trim_ps_upper)
+                            comparison_data = comparison_data[mask].copy()
+                            n_trimmed = n_before - len(comparison_data)
+                            self._logger.info(
+                                f"PS trimming [{self._trim_ps_lower}, {self._trim_ps_upper}]: "
+                                f"dropped {n_trimmed} units ({n_trimmed / n_before:.1%}), "
+                                f"{len(comparison_data)} remain."
+                            )
+                            # Recompute weights on the trimmed sample (marginal treatment
+                            # probability changes when units are dropped).
+                            comparison_data = self._estimator._calculate_stabilized_weights(comparison_data)
 
                     adjusted_balance = self.calculate_smd(
                         data=comparison_data,
@@ -1588,6 +1662,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["sample_ratio"] = sample_ratio
                             output["srm_detected"] = srm_detected
                             output["srm_pvalue"] = srm_pvalue
+                            output["trimmed_units"] = n_trimmed
                             temp_results.append(output)
 
                         except Exception as e:
@@ -1675,6 +1750,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             result_columns.append("srm_detected")
         if srm_pvalue is not None and "srm_pvalue" not in result_columns:
             result_columns.append("srm_pvalue")
+        if self._trim_ps and "trimmed_units" not in result_columns:
+            result_columns.append("trimmed_units")
 
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
