@@ -969,6 +969,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - control_group: The control/reference group.
         - sample_ratio: The sample ratio of the treatment group to the control group.
         - adjustment: The type of adjustment applied.
+        - method: The balance method used (when adjustment is "balance" or "aipw").
+        - target_effect: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
+        - balance: The balance metric for the covariates (when applicable).
         - inference_method: "asymptotic" or "bootstrap"
         - model_type: Type of statistical model used ("ols", "logistic", "poisson", "negative_binomial", "cox")
         - effect_type: Type of effect reported in absolute_effect column.
@@ -978,7 +981,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
           - "log_hazard_ratio": Cox models (log HR, the coefficient)
           - "log_odds": Logistic without marginal effects (log odds, the coefficient)
           - "log_rate_ratio": Poisson/NegBin without marginal effects (log IRR, the coefficient)
-        - balance: The balance metric for the covariates (if applicable).
         - treatment_units: The number of units in the treatment group.
         - control_units: The number of units in the control group.
         - control_value: The mean value of the outcome variable in the control group.
@@ -1624,6 +1626,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
+                                output["target_effect"] = self._target_effect
                             if adjustment in ("balance", "aipw") and not adjusted_balance.empty:
                                 output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                             elif not balance.empty:  # Use initial balance if no adjustment or balance failed
@@ -1737,6 +1740,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             index_to_insert = result_columns.index("adjustment") + 1
             result_columns.insert(index_to_insert, "method")
             index_to_insert = result_columns.index("method") + 1
+            result_columns.insert(index_to_insert, "target_effect")
+            index_to_insert = result_columns.index("target_effect") + 1
             result_columns.insert(index_to_insert, "balance")
             result_columns.extend(
                 [
