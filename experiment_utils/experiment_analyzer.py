@@ -14,7 +14,7 @@ from statsmodels.stats.proportion import proportions_ztest
 from .bootstrap import BootstrapMixin
 from .estimators import Estimators
 from .retrodesign import RetrodesignMixin
-from .utils import get_logger, log_and_raise_error
+from .utils import detect_categorical_covariates, generate_comparison_pairs, get_logger, log_and_raise_error
 
 
 def _clean_category_name(cat):
@@ -35,15 +35,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Pandas Dataframe
     outcomes : List
         List of outcome variables
-    covariates : List
-        List of covariates. Can include:
+    balance_covariates : list[str], optional
+        Covariates used exclusively for balance checking (SMD tables). They are never
+        included in the regression formula. Can include:
         - Numeric columns (continuous)
         - Binary columns (0/1)
         - Categorical columns (object/category dtype or integers with low cardinality)
-          Categorical columns are automatically converted to dummy variables.
-          Reference category (most frequent) is excluded from regression models
-          but included in balance tables.
-          Use categorical_max_unique to control the threshold for treating integers as categorical.
+          Categorical columns are automatically dummy-encoded. The reference category
+          (most frequent) is excluded from regression but shown in balance tables.
+          Use ``categorical_max_unique`` to control the integer-cardinality threshold.
+        By default None.
+    covariates : list[str], optional
+        Deprecated alias for ``balance_covariates``. Use ``balance_covariates`` instead.
     treatment_col : str
         Column name for the treatment variable
     experiment_identifier : List
@@ -53,26 +56,42 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     exp_sample_ratio_col : str, optional
         Column name for the expected sample ratio, by default None
     target_ipw_effect : str, optional
-        Target IPW effect (ATT, ATE, ATC), by default "ATT"
+        Target IPW effect (ATT, ATE, ATC, ATO), by default "ATT".
+        ATO uses overlap weights (Li, Morgan & Zaslavsky 2018): treated units receive weight
+        (1 - ps), control units receive weight ps. Naturally downweights extreme-PS units
+        without requiring a trimming threshold. Only supported with PS-based balance methods.
     balance_method : str, optional
         Balance method ('ps-logistic', 'ps-xgboost', 'entropy'), by default 'ps-logistic'
     min_ps_score : float, optional
         Minimum propensity score, by default 0.05
     max_ps_score : float, optional
         Maximum propensity score, by default 0.95
+    trim_ps : bool, optional
+        Drop units with propensity scores outside [trim_ps_lower, trim_ps_upper] after PS
+        estimation and recompute weights on the trimmed sample. Only applied for PS-based
+        balance methods ('ps-logistic', 'ps-xgboost'). By default False.
+    trim_ps_lower : float, optional
+        Lower PS bound for trimming. Units with PS below this value are dropped. By default 0.1.
+    trim_ps_upper : float, optional
+        Upper PS bound for trimming. Units with PS above this value are dropped. By default 0.9.
+    trim_overlap_threshold : float | None, optional
+        If set, trimming is only applied when the overlap coefficient (KDE-based) is at or
+        above this value. Useful to skip trimming when overlap is already poor and many units
+        would be dropped. By default None (trimming always applied when trim_ps=True).
     polynomial_ipw : bool, optional
         Use polynomial and interaction features for IPW, by default False. It can be slow for large datasets.
     assess_overlap : bool, optional
         Assess overlap between treatment and control groups (slow) when using balance to adjust covariates, by default False
     overlap_plot: bool, optional
         Plot overlap between treatment and control groups, by default False
-    assess_overlap : bool, optional
     instrument_col : str, optional
         Column name for the instrument variable, by default None
     alpha : float, optional
         Significance level, by default 0.05
-    regression_covariates : List, optional
-        List of covariates to include in the final linear regression model, by default None
+    regression_covariates : list[str], optional
+        Covariates added as main effects to the regression formula. These columns are also
+        subject to the same balance checks as ``balance_covariates`` and do not need to be
+        listed in ``balance_covariates`` separately. By default None.
     unit_identifier : str, optional
         Column name for the unit/user identifier to connect weights to specific units, by default None
     bootstrap : bool, optional
@@ -93,6 +112,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         For IPW adjustment (adjustment='balance'), use fixed weights from original data
         instead of recalculating on each bootstrap sample. Faster and reduces variance.
         By default False (recalculates weights on each sample).
+    bootstrap_backend : str, optional
+        Parallelization backend for bootstrap: 'threading' (memory-efficient, shares data),
+        'loky' (process-based, better CPU isolation but higher memory overhead),
+        or 'hybrid' (two-pass threading: separate data prep and model fitting phases).
+        By default 'threading'. The 'hybrid' strategy uses threading for both stages
+        (unlike PowerSim which uses threading+multiprocessing) because: (1) DataFrames
+        benefit from shared memory, (2) statsmodels releases the GIL, (3) avoids
+        expensive serialization. Use 'hybrid' for potentially better cache utilization.
     pvalue_adjustment : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -138,6 +165,29 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Two ways to specify Cox models:
         1. Tuple notation (recommended): outcomes=[("time_col", "event_col")]
         2. Separate parameter: outcomes=["time_col"], event_col="event_col"
+    interaction_covariates : list[str], optional
+        Covariates added to OLS formulas as a CUPED-style treatment interaction:
+        ``z_{col} + treatment:z_{col}``. Each covariate is automatically centered and
+        standardized (mean=0, std=1) so that the ``treatment`` coefficient is the ATE at
+        the mean of the covariate — making it directly interpretable.
+
+        Primary use case is **CUPED** (Controlled-experiment Using Pre-Experiment Data,
+        Deng et al. 2013): pass the pre-experiment version of each outcome metric to
+        reduce variance and increase statistical power. This is equivalent to Lin (2013)'s
+        efficient regression estimator with per-group θ*.
+
+        These columns are also subject to balance checks and do not need to be listed
+        in ``balance_covariates`` separately. Must be numeric. By default None.
+
+        Important notes:
+        - Only applied for OLS models. For GLMs (logistic, Poisson, etc.) a warning is
+          logged and the interactions are skipped — interactions on a log/logit scale do
+          not produce the same variance reduction.
+        - The point estimate (``absolute_effect``) will differ from the naive
+          difference-in-means by a finite-sample correction θ* × (X̄_t − X̄_c). This is
+          expected: the adjusted estimate is unbiased with lower variance and tends to
+          shrink overestimated effects toward the true value.
+        - Stacks with ``regression_covariates`` (additive) and all ``adjustment`` modes.
     """  # noqa: E501
 
     def __init__(
@@ -146,6 +196,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         outcomes: list[str],
         treatment_col: str,
         experiment_identifier: list[str] | None = None,
+        balance_covariates: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
         exp_sample_ratio_col: str | None = None,
@@ -153,6 +204,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
+        trim_ps: bool = False,
+        trim_ps_lower: float = 0.1,
+        trim_ps_upper: float = 0.9,
+        trim_overlap_threshold: float | None = None,
         polynomial_ipw: bool = False,
         instrument_col: str | None = None,
         alpha: float = 0.05,
@@ -167,6 +222,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         bootstrap_seed: int | None = None,
         skip_bootstrap_for_survival: bool = False,
         bootstrap_fixed_weights: bool = False,
+        bootstrap_backend: str = "threading",
         treatment_comparisons: list[tuple] | None = None,
         pvalue_adjustment: str | None = None,
         categorical_max_unique: int = 2,
@@ -176,6 +232,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         min_binary_count: int = 10,
         store_fitted_models: bool = True,
         event_col: str | None = None,
+        interaction_covariates: list[str] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -198,18 +255,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 # regular outcome
                 self._outcomes.append(outcome)
 
-        self._covariates = self.__ensure_list(covariates)
+        if covariates is not None and balance_covariates is None:
+            self._logger.warning("`covariates` is deprecated; use `balance_covariates` instead.")
+            balance_covariates = covariates
+
+        self._balance_covariates = self.__ensure_list(balance_covariates)
         self._treatment_col = treatment_col
         self._experiment_identifier = self.__ensure_list(experiment_identifier)
         self._adjustment = adjustment
         self._exp_sample_ratio_col = exp_sample_ratio_col
         self._balance_method = balance_method
         self._target_effect = target_effect
+        self._trim_ps = trim_ps
+        self._trim_ps_lower = trim_ps_lower
+        self._trim_ps_upper = trim_ps_upper
+        self._trim_overlap_threshold = trim_overlap_threshold
         self._assess_overlap = assess_overlap
         self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
         self._unit_identifier = unit_identifier
+
         self._bootstrap = bootstrap
         self._bootstrap_iterations = bootstrap_iterations
         self._bootstrap_ci_method = bootstrap_ci_method
@@ -217,6 +283,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._bootstrap_seed = bootstrap_seed
         self._skip_bootstrap_for_survival = skip_bootstrap_for_survival
         self._bootstrap_fixed_weights = bootstrap_fixed_weights
+        self._bootstrap_backend = bootstrap_backend
         self._pvalue_adjustment = pvalue_adjustment
         self._treatment_comparisons = treatment_comparisons
         self._categorical_max_unique = categorical_max_unique
@@ -226,6 +293,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._min_binary_count = min_binary_count
         self._store_fitted_models = store_fitted_models
         self._event_col = event_col
+        self._interaction_covariates = self.__ensure_list(interaction_covariates)
+        self._all_covariates = list(dict.fromkeys(self._balance_covariates + self._regression_covariates))
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -235,11 +304,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._final_covariates = []
         self._fitted_models = {}
         self._bootstrap_distributions = {}  # Store bootstrap distributions for MCP adjustment
+        self._bootstrap_indices_cache = {}  # Cache bootstrap indices for reuse across outcomes/models
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
             "ATE": "ips_stabilized_weight",
             "ATC": "cips_stabilized_weight",
+            "ATO": "overlap_weight",
         }  # noqa: E501
+
+        if target_effect == "ATO" and balance_method == "entropy":
+            log_and_raise_error(
+                self._logger,
+                "target_effect='ATO' (overlap weights) is not supported with balance_method='entropy'. "
+                "Use 'ps-logistic' or 'ps-xgboost'.",
+            )
         self._estimator = Estimators(
             treatment_col,
             instrument_col,
@@ -255,16 +333,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if self._data.empty:
             log_and_raise_error(self._logger, "Dataframe is empty!")
 
-        if (len(self._covariates) == 0) & (len(self._regression_covariates) > 0):
-            self._covariates = self._regression_covariates
-
-        string_cols = [c for c in self._covariates if pd.api.types.is_string_dtype(self._data[c])]
+        string_cols = [c for c in self._all_covariates if pd.api.types.is_string_dtype(self._data[c])]
         if string_cols:
             self._logger.info(f"Detected categorical covariates (will create dummies): {string_cols}")
-
-        if len(self._regression_covariates) > 0:
-            if not set(self._regression_covariates).issubset(set(self._covariates)):
-                log_and_raise_error(self._logger, "Regression covariates should be a subset of covariates")
 
         if len(self._experiment_identifier) == 0:
             self._data["experiment_id"] = 1
@@ -276,12 +347,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             + [self._treatment_col]
             + self._outcomes
             + list(self._outcome_event_cols.values())  # Event columns from tuple notation
-            + self._covariates
+            + self._all_covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
             + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
             + ([self._unit_identifier] if self._unit_identifier is not None else [])
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
+            + (self._interaction_covariates if self._interaction_covariates else [])
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -290,7 +362,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             log_and_raise_error(
                 self._logger, f"The following required columns are missing from the dataframe: {missing_columns}"
             )  # noqa: E501
-        if len(self._covariates) == 0:
+
+        no_covariates = len(self._all_covariates) == 0 and not self._interaction_covariates
+        if no_covariates:
             self._logger.warning("No covariates specified, balance can't be assessed!")
 
         if self._outcome_models is not None:
@@ -420,7 +494,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if self._compute_marginal_effects is True:
             self._compute_marginal_effects = "overall"
 
-        self._data = self._data[required_columns]
+        if self._interaction_covariates:
+            missing_int = [c for c in self._interaction_covariates if c not in self._data.columns]
+            if missing_int:
+                self._logger.warning(
+                    f"interaction_covariates columns not found in data and will be skipped: {missing_int}"
+                )
+                self._interaction_covariates = [c for c in self._interaction_covariates if c in self._data.columns]
+            non_numeric_int = [
+                c
+                for c in self._interaction_covariates
+                if c in self._data.columns and not pd.api.types.is_numeric_dtype(self._data[c])
+            ]
+            if non_numeric_int:
+                log_and_raise_error(
+                    self._logger,
+                    f"interaction_covariates must be numeric columns. Non-numeric found: {non_numeric_int}",
+                )
+
+        self._data = self._data[list(dict.fromkeys(required_columns))]
 
     def __get_binary_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
         """Get binary covariates, optionally excluding categorical columns that were converted to dummies.
@@ -432,12 +524,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         binary_covariates = []
         if exclude_categoricals is None:
             exclude_categoricals = set()
-        if self._covariates is not None:
-            for c in self._covariates:
-                if c in exclude_categoricals:
-                    continue  # Skip categorical columns that are now dummies
-                if data[c].nunique() == 2 and set(data[c].dropna().unique()) <= {0, 1}:
-                    binary_covariates.append(c)
+        for c in self._all_covariates:
+            if c in exclude_categoricals:
+                continue  # Skip categorical columns that are now dummies
+            if data[c].nunique() == 2 and set(data[c].dropna().unique()) <= {0, 1}:
+                binary_covariates.append(c)
         return binary_covariates
 
     def __get_numeric_covariates(self, data: pd.DataFrame, exclude_categoricals: set[str] = None) -> list[str]:
@@ -445,17 +536,19 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         numeric_covariates = []
         if exclude_categoricals is None:
             exclude_categoricals = set()
-        if self._covariates is not None:
-            for c in self._covariates:
-                if c in exclude_categoricals:
-                    continue  # Skip categorical columns that are now dummies
-                if data[c].nunique() > 2:
-                    numeric_covariates.append(c)
+        for c in self._all_covariates:
+            if c in exclude_categoricals:
+                continue  # Skip categorical columns that are now dummies
+            if data[c].nunique() > 2:
+                numeric_covariates.append(c)
         return numeric_covariates
 
     def __get_categorical_covariates(self, data: pd.DataFrame) -> dict[str, list]:
         """
         Detect categorical covariates and return their unique categories.
+
+        This method wraps the shared detect_categorical_covariates function
+        from utils.py for use within ExperimentAnalyzer.
 
         Detection rules:
         - object/category dtype columns
@@ -464,27 +557,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         Returns dict: {covariate_name: [list_of_categories]}
         """
-        categorical_info = {}
-        if self._covariates is not None:
-            for c in self._covariates:
-                is_object = pd.api.types.is_object_dtype(data[c]) or isinstance(data[c].dtype, pd.CategoricalDtype)
-
-                # treat numeric columns (int or float) as categorical if they have
-                # 2 to categorical_max_unique unique values
-                # exclude natural binary {0, 1} columns since those don't need dummy encoding
-                n_unique = data[c].nunique()
-                is_natural_binary = n_unique == 2 and set(data[c].dropna().unique()) <= {0, 1}
-                is_low_cardinality_numeric = (
-                    pd.api.types.is_numeric_dtype(data[c])
-                    and 2 <= n_unique <= self._categorical_max_unique
-                    and not is_natural_binary
-                )
-
-                if is_object or is_low_cardinality_numeric:
-                    categories = sorted(data[c].dropna().unique())
-                    categorical_info[c] = categories
-
-        return categorical_info
+        return detect_categorical_covariates(
+            data=data,
+            covariates=self._all_covariates,
+            categorical_max_unique=self._categorical_max_unique,
+        )
 
     def __create_dummy_variables(
         self,
@@ -545,18 +622,28 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def impute_missing_values(
         self, data: pd.DataFrame, num_covariates: list[str] | None = None, bin_covariates: list[str] | None = None
     ) -> pd.DataFrame:  # noqa: E501
-        """ "
-        Impute missing values for numeric and binary covariates
         """
-        for cov in num_covariates:
-            if data[cov].isna().all():
-                log_and_raise_error(self._logger, f"Column {cov} has only missing values")
-            data[cov] = data[cov].fillna(data[cov].mean())
+        Impute missing values for numeric and binary covariates.
+        Optimized with vectorized operations for better performance.
+        """
+        # Vectorized imputation for numeric covariates
+        if num_covariates:
+            # Check for all-missing columns first
+            for cov in num_covariates:
+                if data[cov].isna().all():
+                    log_and_raise_error(self._logger, f"Column {cov} has only missing values")
 
-        for cov in bin_covariates:
-            if data[cov].isna().all():
-                log_and_raise_error(self._logger, f"Column {cov} has only missing values.")
-            data[cov] = data[cov].fillna(data[cov].mode()[0])
+            # Vectorized fillna with means computed once
+            means = data[num_covariates].mean()
+            data[num_covariates] = data[num_covariates].fillna(means)
+
+        # Vectorized imputation for binary covariates
+        if bin_covariates:
+            for cov in bin_covariates:
+                if data[cov].isna().all():
+                    log_and_raise_error(self._logger, f"Column {cov} has only missing values.")
+                # Mode requires per-column calculation
+                data[cov] = data[cov].fillna(data[cov].mode()[0])
 
         return data
 
@@ -595,8 +682,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             rows_dropped += treatment_missing
             missing_info.append(f"treatment: {treatment_missing} rows")
 
-        if self._covariates:
-            for cov in self._covariates:
+        all_covs = list(dict.fromkeys(self._all_covariates + self._interaction_covariates))
+        if all_covs:
+            for cov in all_covs:
                 if cov not in data.columns:
                     continue
 
@@ -633,6 +721,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def standardize_covariates(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
         """
         Standardize covariates in the data.
+        Optimized with vectorized operations for better performance.
 
         Parameters
         ----------
@@ -646,9 +735,22 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         pd.DataFrame
             Data with standardized covariates
         """
+        if not covariates:
+            return data
 
-        for covariate in covariates:
-            data[f"z_{covariate}"] = (data[covariate] - data[covariate].mean()) / data[covariate].std()
+        # Vectorized standardization: compute all means and stds at once
+        subset = data[covariates]
+        means = subset.mean()
+        stds = subset.std()
+        standardized = (subset - means) / stds
+
+        # Add z_ prefix to column names
+        standardized.columns = [f"z_{c}" for c in covariates]
+
+        # Assign standardized columns back to data
+        for col in standardized.columns:
+            data[col] = standardized[col]
+
         return data
 
     def calculate_smd(
@@ -867,6 +969,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - control_group: The control/reference group.
         - sample_ratio: The sample ratio of the treatment group to the control group.
         - adjustment: The type of adjustment applied.
+        - method: The balance method used (when adjustment is "balance" or "aipw").
+        - target_effect: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
+        - balance: The balance metric for the covariates (when applicable).
         - inference_method: "asymptotic" or "bootstrap"
         - model_type: Type of statistical model used ("ols", "logistic", "poisson", "negative_binomial", "cox")
         - effect_type: Type of effect reported in absolute_effect column.
@@ -876,7 +981,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
           - "log_hazard_ratio": Cox models (log HR, the coefficient)
           - "log_odds": Logistic without marginal effects (log odds, the coefficient)
           - "log_rate_ratio": Poisson/NegBin without marginal effects (log IRR, the coefficient)
-        - balance: The balance metric for the covariates (if applicable).
         - treatment_units: The number of units in the treatment group.
         - control_units: The number of units in the control group.
         - control_value: The mean value of the outcome variable in the control group.
@@ -1076,7 +1180,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     if removed_single_group:
                         self._logger.warning(f"  - Single group only (dummy): {sorted(removed_single_group)}")
 
-                if len(final_covariates) == 0 & len(self._covariates if self._covariates is not None else []) > 0:
+                # Valid interaction covariates for balance display (non-zero variance in this comparison)
+                active_int_covs_for_balance = [
+                    c
+                    for c in self._interaction_covariates
+                    if c in comparison_data.columns and comparison_data[c].std(ddof=0) != 0
+                ]
+                # balance_final_covariates extends final_covariates with interaction covariates for SMD only
+                balance_final_covariates = list(dict.fromkeys(final_covariates + active_int_covs_for_balance))
+
+                has_any_covariates = bool(self._all_covariates or self._interaction_covariates)
+                if len(balance_final_covariates) == 0 and has_any_covariates:
                     self._logger.warning(
                         f"No valid covariates for comparison {treatment_val} vs {control_val}, "
                         f"balance can't be assessed!"
@@ -1085,7 +1199,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 balance = pd.DataFrame()
                 adjusted_balance = pd.DataFrame()
 
-                if len(final_covariates) > 0 or categorical_info:
+                if len(balance_final_covariates) > 0 or categorical_info:
                     comparison_data["weights"] = 1
 
                     if categorical_info:
@@ -1116,7 +1230,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                             if treated_sum > 0 and control_sum > 0:
                                                 balance_covariates.append(dummy_col)
 
-                        for cov in final_covariates:
+                        for cov in balance_final_covariates:
                             if cov not in balance_covariates:
                                 balance_covariates.append(cov)
 
@@ -1129,8 +1243,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         if len(final_covariates) > 0:
                             comparison_data = self.standardize_covariates(comparison_data, final_covariates)
                     else:
-                        comparison_data = self.standardize_covariates(comparison_data, final_covariates)
-                        balance = self.calculate_smd(data=comparison_data, covariates=final_covariates)
+                        comparison_data = self.standardize_covariates(comparison_data, balance_final_covariates)
+                        balance = self.calculate_smd(data=comparison_data, covariates=balance_final_covariates)
 
                     if not balance.empty:
                         balance["experiment"] = [experiment_tuple] * balance.shape[0]
@@ -1139,11 +1253,54 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         balance_mean = balance["balance_flag"].mean()
                         self._logger.info(f"Balance: {balance_mean:.2%}")
 
+                n_trimmed = 0
+
                 if len(final_covariates) > 0 and adjustment in ("balance", "aipw"):
                     balance_func = get_balance_method(self._balance_method)
                     comparison_data = balance_func(
                         data=comparison_data, covariates=[f"z_{cov}" for cov in final_covariates]
                     )
+
+                    # PS trimming: drop units with extreme propensity scores and recompute weights.
+                    # Only applicable for PS-based balance methods (not entropy balancing).
+                    if (
+                        self._trim_ps
+                        and self._balance_method in ("ps-logistic", "ps-xgboost")
+                        and "propensity_score" in comparison_data.columns
+                    ):
+                        should_trim = True
+                        if self._trim_overlap_threshold is not None:
+                            treat_ps = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 1, "propensity_score"
+                            ].values
+                            ctrl_ps = comparison_data.loc[
+                                comparison_data[self._treatment_col] == 0, "propensity_score"
+                            ].values
+                            if len(treat_ps) > 0 and len(ctrl_ps) > 0:
+                                oc = self.get_overlap_coefficient(treat_ps, ctrl_ps)
+                                self._logger.info(f"Overlap coefficient before trimming: {oc:.3f}")
+                                should_trim = oc >= self._trim_overlap_threshold
+                                if not should_trim:
+                                    self._logger.info(
+                                        f"Trimming skipped: overlap ({oc:.3f}) below threshold "
+                                        f"({self._trim_overlap_threshold})."
+                                    )
+                            else:
+                                should_trim = False
+
+                        if should_trim:
+                            n_before = len(comparison_data)
+                            mask = comparison_data["propensity_score"].between(self._trim_ps_lower, self._trim_ps_upper)
+                            comparison_data = comparison_data[mask].copy()
+                            n_trimmed = n_before - len(comparison_data)
+                            self._logger.info(
+                                f"PS trimming [{self._trim_ps_lower}, {self._trim_ps_upper}]: "
+                                f"dropped {n_trimmed} units ({n_trimmed / n_before:.1%}), "
+                                f"{len(comparison_data)} remain."
+                            )
+                            # Recompute weights on the trimmed sample (marginal treatment
+                            # probability changes when units are dropped).
+                            comparison_data = self._estimator._calculate_stabilized_weights(comparison_data)
 
                     adjusted_balance = self.calculate_smd(
                         data=comparison_data,
@@ -1249,6 +1406,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     relevant_covariates = set(self._final_covariates) & set(self._regression_covariates)
 
                 adjustment_labels = {"balance": "balance", "IV": "IV", "aipw": "aipw"}
+                has_interactions = bool(self._interaction_covariates)
 
                 if adjustment == "aipw":
                     adjustment_label = "aipw"
@@ -1260,6 +1418,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     adjustment_label = "regression"
                 else:
                     adjustment_label = "no adjustment"
+
+                if has_interactions:
+                    if adjustment_label == "no adjustment":
+                        adjustment_label = "regression"
+                    adjustment_label += "+interactions"
 
                 for outcome in self._outcomes:
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
@@ -1332,6 +1495,22 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         f"Weight column '{weight_col}' has zero variance for comparison {treatment_val} vs {control_val}. Results might be unreliable."  # noqa: E501
                                     )
                                 estimator_params["weight_column"] = weight_col
+
+                            active_int_covs = None
+                            if self._interaction_covariates and model_type == "ols":
+                                for col in self._interaction_covariates:
+                                    if col in comparison_data.columns and f"z_{col}" not in comparison_data.columns:
+                                        comparison_data = self.standardize_covariates(comparison_data, [col])
+                                active_int_covs = [
+                                    c for c in self._interaction_covariates if f"z_{c}" in comparison_data.columns
+                                ]
+                                if active_int_covs:
+                                    estimator_params["interaction_covariates"] = active_int_covs
+                            elif self._interaction_covariates and model_type != "ols":
+                                self._logger.warning(
+                                    f"interaction_covariates ignored for outcome '{outcome}' "
+                                    f"with model_type='{model_type}' — only supported for OLS."
+                                )
 
                             output = estimator_func(**estimator_params)
 
@@ -1410,6 +1589,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         min_binary_count=min_binary_count,
                                         model_type=model_type,
                                         compute_marginal_effects=me_setting,
+                                        interaction_covariates=active_int_covs,
                                     )
                                     bootstrap_results = self._calculate_bootstrap_inference(
                                         bootstrap_abs_effects,
@@ -1446,6 +1626,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
+                                output["target_effect"] = self._target_effect
                             if adjustment in ("balance", "aipw") and not adjusted_balance.empty:
                                 output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                             elif not balance.empty:  # Use initial balance if no adjustment or balance failed
@@ -1484,6 +1665,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["sample_ratio"] = sample_ratio
                             output["srm_detected"] = srm_detected
                             output["srm_pvalue"] = srm_pvalue
+                            output["trimmed_units"] = n_trimmed
                             temp_results.append(output)
 
                         except Exception as e:
@@ -1558,6 +1740,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             index_to_insert = result_columns.index("adjustment") + 1
             result_columns.insert(index_to_insert, "method")
             index_to_insert = result_columns.index("method") + 1
+            result_columns.insert(index_to_insert, "target_effect")
+            index_to_insert = result_columns.index("target_effect") + 1
             result_columns.insert(index_to_insert, "balance")
             result_columns.extend(
                 [
@@ -1571,6 +1755,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             result_columns.append("srm_detected")
         if srm_pvalue is not None and "srm_pvalue" not in result_columns:
             result_columns.append("srm_pvalue")
+        if self._trim_ps and "trimmed_units" not in result_columns:
+            result_columns.append("trimmed_units")
 
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
@@ -1940,7 +2126,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if isinstance(self._balance, pd.DataFrame) and not self._balance.empty:
             return self._balance
         else:
-            if self._covariates:
+            if self._all_covariates or self._interaction_covariates:
                 self._logger.warning(
                     "No balance information available! "
                     "If you have covariates, use check_balance() or run get_effects() first."
@@ -1957,7 +2143,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if isinstance(self._adjusted_balance, pd.DataFrame) and not self._adjusted_balance.empty:
             return self._adjusted_balance
         else:
-            if self._covariates:
+            if self._all_covariates or self._interaction_covariates:
                 self._logger.warning(
                     "No adjusted balance information available! "
                     "Run get_effects() with covariate adjustment to get adjusted balance."
@@ -2037,7 +2223,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if min_binary_count is None:
             min_binary_count = self._min_binary_count
 
-        if self._covariates is None or len(self._covariates) == 0:
+        no_covariates = not self._all_covariates and not self._interaction_covariates
+        if no_covariates:
             self._logger.warning("No covariates specified, balance cannot be assessed!")
             return None
 
@@ -2092,15 +2279,15 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     continue
 
                 # Check balance using standalone function
+                balance_covs = list(dict.fromkeys(self._all_covariates + self._interaction_covariates))
                 balance_df = check_covariate_balance(
                     data=comparison_data,
                     treatment_col=self._treatment_col,
-                    covariates=self._covariates,
+                    covariates=balance_covs,
                     categorical_covariates=categorical_info,
                     min_binary_count=min_binary_count,
                     threshold=threshold,
-                    treatment_value=treatment_val,
-                    control_value=control_val,
+                    treatment_comparisons=[(treatment_val, control_val)],
                     categorical_max_unique=self._categorical_max_unique,
                     logger=self._logger,
                 )
@@ -2108,6 +2295,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 if not balance_df.empty:
                     balance_df["experiment"] = [experiment_tuple] * len(balance_df)
                     balance_df = self.__transform_tuple_column(balance_df, "experiment", self._experiment_identifier)
+
+                    # Remove treatment_group and control_group columns since we track experiment instead
+                    balance_df = balance_df.drop(columns=["treatment_group", "control_group"], errors="ignore")
 
                     # Log balance summary
                     balance_mean = balance_df["balance_flag"].mean()
@@ -2286,10 +2476,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         """
         Generate comparison pairs for categorical treatment analysis.
 
+        This method wraps the shared generate_comparison_pairs function
+        from utils.py for use within ExperimentAnalyzer.
+
         Parameters
         ----------
         treatvalues : set
-            Set of unique treatment values in the data
+            Set of unique treatment values in the data (not used, kept for API compatibility)
         data : pd.DataFrame
             DataFrame containing the treatment column
 
@@ -2298,25 +2491,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         list[tuple]
             List of (treatment_val, control_val) tuples to compare
         """
-        import itertools
-
-        if self._treatment_comparisons is not None:
-            valid_pairs = []
-            for treatment_val, control_val in self._treatment_comparisons:
-                if treatment_val in treatvalues and control_val in treatvalues:
-                    valid_pairs.append((treatment_val, control_val))
-                else:
-                    self._logger.warning(
-                        f"Skipping comparison ({treatment_val}, {control_val}) - one or both groups not found in data"
-                    )
-            return valid_pairs
-
-        if treatvalues == {0, 1}:
-            return [(1, 0)]
-
-        sorted_values = sorted(list(treatvalues))
-        pairs = list(itertools.combinations(sorted_values, 2))
-        return [(b, a) for a, b in pairs]
+        # Use the shared function from utils.py for consistency
+        return generate_comparison_pairs(
+            data=data,
+            treatment_col=self._treatment_col,
+            treatment_comparisons=self._treatment_comparisons,
+            logger=self._logger,
+        )
 
     def __check_sample_ratio_mismatch(self, df: pd.DataFrame):
         """

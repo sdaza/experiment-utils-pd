@@ -78,6 +78,12 @@ class TestStandaloneBalanceChecker:
         assert "mean_control" in balance_df.columns
         assert "smd" in balance_df.columns
         assert "balance_flag" in balance_df.columns
+        assert "treatment_group" in balance_df.columns
+        assert "control_group" in balance_df.columns
+
+        # For binary {0, 1} treatment, should auto-generate (1, 0) comparison
+        assert balance_df["treatment_group"].unique()[0] == 1
+        assert balance_df["control_group"].unique()[0] == 0
 
         # Should have 3 covariates
         assert len(balance_df) == 3
@@ -117,6 +123,8 @@ class TestStandaloneBalanceChecker:
         )
 
         assert not balance_df.empty
+        assert "treatment_group" in balance_df.columns
+        assert "control_group" in balance_df.columns
 
         # Age and income should be imbalanced
         age_balance = balance_df[balance_df["covariate"] == "age"]
@@ -187,7 +195,19 @@ class TestStandaloneBalanceChecker:
             threshold=0.1,
         )
 
-        assert balance_df.empty
+        # Should have proper column structure even when empty
+        assert balance_df.empty or len(balance_df) == 0
+        expected_cols = [
+            "covariate",
+            "mean_treated",
+            "mean_control",
+            "smd",
+            "balance_flag",
+            "treatment_group",
+            "control_group",
+        ]
+        for col in expected_cols:
+            assert col in balance_df.columns
 
     def test_custom_threshold(self, sample_data_with_covariates):
         """Test that custom thresholds affect balance flags"""
@@ -227,6 +247,149 @@ class TestStandaloneBalanceChecker:
         # Should have region dummies
         region_dummies = [c for c in balance_df["covariate"] if "region_" in c]
         assert len(region_dummies) > 0
+
+    def test_explicit_treatment_comparisons(self):
+        """Test explicit specification of treatment comparisons"""
+        np.random.seed(42)
+        df = pd.DataFrame(
+            {
+                "treatment": np.random.choice(["control", "variant_1", "variant_2"], 300),
+                "outcome": np.random.randn(300),
+                "age": np.random.normal(35, 10, 300),
+                "income": np.random.normal(50000, 15000, 300),
+            }
+        )
+
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["age", "income"],
+            treatment_comparisons=[("variant_1", "control"), ("variant_2", "control")],
+            threshold=0.1,
+        )
+
+        assert not balance_df.empty
+        assert "treatment_group" in balance_df.columns
+        assert "control_group" in balance_df.columns
+
+        # Should have exactly 2 comparisons
+        unique_comparisons = balance_df[["treatment_group", "control_group"]].drop_duplicates()
+        assert len(unique_comparisons) == 2
+
+        # Check the specific comparisons exist
+        assert ("variant_1", "control") in unique_comparisons.to_records(index=False).tolist()
+        assert ("variant_2", "control") in unique_comparisons.to_records(index=False).tolist()
+
+        # Should have 2 covariates * 2 comparisons = 4 rows
+        assert len(balance_df) == 4
+
+    def test_auto_generate_pairwise_comparisons(self):
+        """Test automatic generation of all pairwise comparisons"""
+        np.random.seed(42)
+        df = pd.DataFrame(
+            {
+                "treatment": np.random.choice(["control", "variant_1", "variant_2"], 300),
+                "outcome": np.random.randn(300),
+                "age": np.random.normal(35, 10, 300),
+            }
+        )
+
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["age"],
+            threshold=0.1,
+        )
+
+        assert not balance_df.empty
+        assert "treatment_group" in balance_df.columns
+        assert "control_group" in balance_df.columns
+
+        # Should auto-generate all pairwise comparisons
+        # For 3 groups: (variant_2, variant_1), (variant_2, control), (variant_1, control)
+        unique_comparisons = balance_df[["treatment_group", "control_group"]].drop_duplicates()
+        assert len(unique_comparisons) == 3
+
+    def test_binary_treatment_auto_detection(self):
+        """Test that binary {0, 1} treatment auto-generates (1, 0) comparison"""
+        np.random.seed(42)
+        df = pd.DataFrame(
+            {
+                "treatment": np.random.choice([0, 1], 200),
+                "age": np.random.normal(35, 10, 200),
+            }
+        )
+
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["age"],
+            threshold=0.1,
+        )
+
+        assert not balance_df.empty
+        assert len(balance_df) == 1  # Only one covariate, one comparison
+
+        # Should auto-detect binary and use (1, 0)
+        assert balance_df["treatment_group"].values[0] == 1
+        assert balance_df["control_group"].values[0] == 0
+
+    def test_invalid_treatment_comparison(self):
+        """Test that invalid treatment comparisons are skipped with warning"""
+        np.random.seed(42)
+        df = pd.DataFrame(
+            {
+                "treatment": np.random.choice(["control", "variant_1"], 200),
+                "age": np.random.normal(35, 10, 200),
+            }
+        )
+
+        # Specify a comparison with non-existent treatment group
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["age"],
+            treatment_comparisons=[("variant_1", "control"), ("variant_2", "control")],  # variant_2 doesn't exist
+            threshold=0.1,
+        )
+
+        assert not balance_df.empty
+
+        # Should only have the valid comparison
+        unique_comparisons = balance_df[["treatment_group", "control_group"]].drop_duplicates()
+        assert len(unique_comparisons) == 1
+        assert unique_comparisons.iloc[0]["treatment_group"] == "variant_1"
+        assert unique_comparisons.iloc[0]["control_group"] == "control"
+
+    def test_single_treatment_group(self):
+        """Test that single treatment group returns empty DataFrame"""
+        df = pd.DataFrame(
+            {
+                "treatment": ["control"] * 100,  # Only one group
+                "age": np.random.normal(35, 10, 100),
+            }
+        )
+
+        balance_df = check_covariate_balance(
+            data=df,
+            treatment_col="treatment",
+            covariates=["age"],
+            threshold=0.1,
+        )
+
+        # Should return empty DataFrame with proper structure
+        assert balance_df.empty or len(balance_df) == 0
+        expected_cols = [
+            "covariate",
+            "mean_treated",
+            "mean_control",
+            "smd",
+            "balance_flag",
+            "treatment_group",
+            "control_group",
+        ]
+        for col in expected_cols:
+            assert col in balance_df.columns
 
 
 class TestExperimentAnalyzerBalanceMethod:
