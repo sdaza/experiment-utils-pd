@@ -13,6 +13,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Survival Analysis**: Cox proportional hazards with IPW and regression adjustment
 - **Covariate Balance**: Check and visualize balance between treatment groups
 - **Marginal Effects**: Average marginal effects for GLMs (probability change, count change)
+- **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
@@ -269,6 +270,7 @@ print(weights_df.head())
 - `ATT`: Average Treatment Effect on Treated (most common)
 - `ATE`: Average Treatment Effect (entire population)
 - `ATC`: Average Treatment Effect on Control
+- `ATO`: Average Treatment Effect for the Overlap population (overlap weights — see below)
 
 **Option 2: Regression Adjustment**
 
@@ -341,6 +343,68 @@ print(analyzer.results[["outcome", "absolute_effect", "standard_error", "pvalue"
 AIPW works by fitting separate outcome models for treated and control groups, predicting potential outcomes for all units, and combining them with IPW via the augmented influence function. Standard errors are derived from the influence function, making them robust without requiring bootstrap.
 
 > **Note**: AIPW is not supported for Cox survival models due to the complexity of survival-specific doubly robust methods. For Cox models, use IPW + Regression instead.
+
+**Option 6: Overlap Weighting (ATO)**
+
+Overlap weights (Li, Morgan & Zaslavsky 2018) naturally downweight units with extreme propensity scores — treated units receive weight `(1 - ps)` and control units receive weight `ps`. Units near `ps = 0.5` (the region of maximum overlap) receive the highest weight. No trimming threshold is required.
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    balance_covariates=["age", "income"],
+    adjustment="balance",
+    balance_method="ps-logistic",  # or "ps-xgboost"
+    target_effect="ATO",           # overlap weights
+)
+
+analyzer.get_effects()
+```
+
+> **Note**: ATO is only supported with `balance_method="ps-logistic"` or `"ps-xgboost"`. It is not compatible with `"entropy"`.
+
+**Option 7: Propensity Score Trimming**
+
+Trimming drops units with propensity scores outside `[trim_ps_lower, trim_ps_upper]` and recomputes weights on the remaining sample. This is useful as a robustness check when overlap is already reasonable but you want to restrict to the region where PS estimation is reliable.
+
+```python
+# Always trim to [0.1, 0.9]
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    balance_covariates=["age", "income"],
+    adjustment="balance",
+    trim_ps=True,
+    trim_ps_lower=0.1,  # default
+    trim_ps_upper=0.9,  # default
+)
+
+# Trim only when overlap is good (overlap coefficient >= threshold)
+analyzer = ExperimentAnalyzer(
+    ...
+    trim_ps=True,
+    trim_overlap_threshold=0.8,  # skip trimming if overlap < 0.8
+    assess_overlap=True,
+)
+
+analyzer.get_effects()
+
+# trimmed_units column shows how many units were dropped
+print(analyzer.results[["outcome", "absolute_effect", "trimmed_units"]])
+```
+
+**Choosing between overlap weights and trimming:**
+
+| | Overlap weights (`ATO`) | Trimming |
+|---|---|---|
+| Mechanism | Continuously downweights extreme-PS units | Drops units outside threshold |
+| Threshold required | No | Yes (`trim_ps_lower`, `trim_ps_upper`) |
+| Changes `n` | No | Yes |
+| Estimand | ATO (overlap population) | ATT/ATE/ATC on trimmed sample |
+| When overlap is poor | Handles gracefully | May drop many units |
+| Use as robustness check | Yes | Yes |
 
 ### Outcome Models
 
@@ -1162,6 +1226,8 @@ print(balance[balance["covariate"].str.contains("region")])
 | CUPED | `None` | `interaction_covariates=["pre_x"]` | Variance reduction with pre-experiment data |
 | IPW | `"balance"` | `balance_covariates=["x1","x2"]` | Many covariates, non-linear confounding |
 | IPW + Regression | `"balance"` | both `balance_covariates` and `regression_covariates` | Extra robustness, survival models |
+| Overlap weights (ATO) | `"balance"` + `target_effect="ATO"` | `balance_covariates=["x1","x2"]` | Poor or moderate overlap, no threshold needed |
+| Trimming | `"balance"` + `trim_ps=True` | `balance_covariates=["x1","x2"]` | Robustness check, restrict to overlap region |
 | AIPW (doubly robust) | `"aipw"` | `balance_covariates=["x1","x2"]` | Best protection against misspecification |
 | IV | `"IV"` | `balance_covariates` optional | Non-compliance, endogenous treatment (requires `instrument_col`) |
 

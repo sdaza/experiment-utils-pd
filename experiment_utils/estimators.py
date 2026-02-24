@@ -2200,17 +2200,25 @@ class Estimators:
 
     def _calculate_stabilized_weights(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate the stabilized weights for IPW.
+        Calculate IPW weights for all supported estimands.
+
+        Computes four weight columns from the ``propensity_score`` column:
+
+        - ``ips_stabilized_weight``  — ATE weights: stabilized 1/ps for treated, 1/(1-ps) for control
+        - ``tips_stabilized_weight`` — ATT weights: 1 for treated, ps/(1-ps) for control (stabilized)
+        - ``cips_stabilized_weight`` — ATC weights: (1-ps)/ps for treated, 1 for control (stabilized)
+        - ``overlap_weight``         — ATO weights (Li, Morgan & Zaslavsky 2018): (1-ps) for treated,
+          ps for control. Naturally downweights extreme-PS units; no trimming threshold needed.
 
         Parameters
         ----------
         data : pd.DataFrame
-            Data with the estimated propensity scores
+            Data with the estimated ``propensity_score`` column.
 
         Returns
         -------
         pd.DataFrame
-            Data with the calculated stabilized weights
+            Data with the four weight columns added.
         """
         num_units = data.shape[0]
         p_treatment = sum(data[self._treatment_col]) / num_units
