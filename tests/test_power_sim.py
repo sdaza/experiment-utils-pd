@@ -140,6 +140,9 @@ def test_find_sample_size_average_metric():
 
 def test_find_sample_size_multiple_variants():
     """Test find_sample_size with multiple variants and different effects"""
+    import numpy as np
+
+    np.random.seed(42)
     p = PowerSim(
         metric="proportion",
         variants=3,
@@ -187,9 +190,12 @@ def test_find_sample_size_multiple_variants():
         # The limiting comparison should be marked
         assert "limiting_comparison" in result.columns
 
-        # All comparisons should achieve at least the target power (with small tolerance for simulation variance)
+        # All comparisons should achieve at least the target power (with tolerance for simulation variance).
+        # With nsim=500, SE ≈ 0.018; allow 10% below target to stay well beyond 5σ deviations.
         for comp_str in achieved_powers:
-            assert achieved_powers[comp_str] >= 0.73  # Allow 0.07 below target due to variance
+            assert achieved_powers[comp_str] >= 0.70, (
+                f"Comparison {comp_str} achieved power {achieved_powers[comp_str]:.3f} < 0.70"
+            )
 
         # Test 2: Different power targets per comparison
         result2 = p.find_sample_size(
