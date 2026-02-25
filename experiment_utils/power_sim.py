@@ -640,6 +640,7 @@ class PowerSim:
         standard_deviation: float | list[float] = None,
         target_comparisons: list[tuple[int, int]] = None,
         use_early_stopping: bool = None,
+        show_progress: bool = True,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate power using simulation.
@@ -751,6 +752,7 @@ class PowerSim:
                         desc="Simulations",
                         unit="sim",
                         leave=False,
+                        disable=not show_progress,
                     )
                 )
 
@@ -774,6 +776,7 @@ class PowerSim:
                         desc="Simulations",
                         unit="sim",
                         leave=False,
+                        disable=not show_progress,
                     )
                 )
 
@@ -797,6 +800,7 @@ class PowerSim:
                         desc="Simulations",
                         unit="sim",
                         leave=False,
+                        disable=not show_progress,
                     )
                 )
 
@@ -814,7 +818,7 @@ class PowerSim:
             min_sims = 50  # Minimum simulations before considering early stopping
 
             # iterate over simulations
-            for _i in tqdm(range(self.nsim), desc="Simulations", unit="sim", leave=False):
+            for _i in tqdm(range(self.nsim), desc="Simulations", unit="sim", leave=False, disable=not show_progress):
                 significant = self._run_single_power_simulation(
                     baseline=baseline,
                     effect=effect,
@@ -1052,6 +1056,8 @@ class PowerSim:
         threads: int = 3,
         plot: bool = False,
         correction: str = None,
+        facet_by: str = "effect",
+        hue: str = "comparison",
     ) -> pd.DataFrame:  # noqa: E501
         """
         Return Pandas DataFrame with parameter combinations and statistical power.
@@ -1084,11 +1090,17 @@ class PowerSim:
         threads : int
             Number of threads for parallelization.
         plot : bool
-            Whether to plot the results.
+            Whether to plot the results after the grid is computed.
         correction : str, optional
             Multiple comparison correction method. If provided, overrides the instance
             correction for this call. Options: 'bonferroni', 'holm', 'hochberg',
             'sidak', 'fdr', 'none' (or None to use the instance default).
+        facet_by : str
+            Column whose unique values each get their own plot when ``plot=True``
+            (default ``"effect"``). Set to ``"comparison"`` for one plot per comparison.
+        hue : str
+            Column used to colour lines within each plot when ``plot=True``
+            (default ``"comparison"``). Set to ``"effect"`` when ``facet_by="comparison"``.
         """
 
         original_correction = None
@@ -1171,8 +1183,11 @@ class PowerSim:
                 "relative_effect",
             ],
         ]
+        import functools
+
+        _get_power_silent = functools.partial(self.get_power, show_progress=False)
         pool = ThreadPool(processes=threads)
-        results = pool.starmap(self.get_power, parameters)
+        results = pool.starmap(_get_power_silent, parameters)
         pool.close()
         pool.join()
 
@@ -1196,12 +1211,27 @@ class PowerSim:
         grid.sample_size = grid.sample_size.map(str)
         grid.effect = grid.effect.map(str)
         if plot:
-            self.plot_power(grid)
+            self.plot_power(grid, facet_by=facet_by, hue=hue)
         return grid
 
-    def plot_power(self, data: pd.DataFrame) -> None:
+    def plot_power(
+        self,
+        data: pd.DataFrame,
+        facet_by: str = "effect",
+        hue: str = "comparison",
+    ) -> None:
         """
-        Plot statistical power by scenario
+        Plot statistical power by scenario.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Output of :meth:`grid_sim_power`.
+        facet_by : str
+            Column whose unique values each get their own plot (default ``"effect"``).
+            Use ``"comparison"`` to produce one plot per comparison with effects as hue.
+        hue : str
+            Column used to colour lines within each plot (default ``"comparison"``).
         """
 
         value_vars = [str((i, j)) for i, j in self.comparisons]
@@ -1227,24 +1257,25 @@ class PowerSim:
         temp = pd.melt(data, id_vars=cols, var_name="comparison", value_name="power", value_vars=value_vars)
 
         d_relative_effect = {True: "relative", False: "absolute"}
-        effects = list(temp.effect.unique())
-        for i in effects:
-            plot = sns.lineplot(
+
+        for facet_val in temp[facet_by].unique():
+            ax = sns.lineplot(
                 x="sample_size",
                 y="power",
-                hue="comparison",
+                hue=hue,
                 errorbar=None,
-                data=temp[temp["effect"] == i],
+                data=temp[temp[facet_by] == facet_val],
                 legend="full",
-            )  # noqa: E501
+            )
             plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=len(temp.sample_size.unique()) - 1, colors="gray")
             plt.title(
-                f"Simulated power estimation for {self.metric}s, {d_relative_effect[self.relative_effect]} effects {str(i)}\n (sims per scenario:{self.nsim})"  # noqa: E501
-            )  # noqa: E501
-            plt.legend(bbox_to_anchor=(1.05, 1), title="comparison", loc="upper left")
+                f"Simulated power — {self.metric}s, {d_relative_effect[self.relative_effect]} effects\n"
+                f"{facet_by}={facet_val}  (sims per scenario: {self.nsim})"
+            )
+            plt.legend(bbox_to_anchor=(1.05, 1), title=hue, loc="upper left")
             plt.xlabel("\n sample size")
             plt.ylabel("power\n")
-            plt.setp(plot.get_xticklabels(), rotation=45)
+            plt.setp(ax.get_xticklabels(), rotation=45)
             plt.show()
 
     def __expand_grid(self, dictionary: dict[str, list[float | int]]) -> pd.DataFrame:
