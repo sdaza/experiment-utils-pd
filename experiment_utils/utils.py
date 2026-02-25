@@ -671,9 +671,13 @@ def balanced_random_assignment(
     seed : int, optional
         Random seed for reproducibility (default is 42)
     allocation_ratio : float or dict, optional
-        If float: proportion allocated to 'test' (remaining goes to 'control')
-        If dict: mapping of variant names to their allocation ratios (must sum to 1.0)
-        Default is 0.5 (50/50 split between test and control)
+        If float: proportion allocated to the first variant (remaining goes to the
+        second). Works for both the default binary case (test/control) and any
+        two-element ``variants`` list (e.g. ``variants=[1, 0]``, ``allocation_ratio=0.667``
+        gives 66.7 % to label ``1`` and 33.3 % to label ``0``).
+        If dict: mapping of variant names to their allocation ratios (must sum to 1.0).
+        Required when ``variants`` has more than 2 elements.
+        Default is 0.5 (50/50 split).
     variants : list, optional
         List of variant names. If provided, allocation_ratio should be a dict or
         units will be split equally among variants. If None, uses ['control', 'test']
@@ -782,13 +786,21 @@ def balanced_random_assignment(
                     allocated += n_variant
                 assignment.extend([variants[-1]] * (n - allocated))
             else:
-                n_per_variant = n // len(variants)
-                remainder = n % len(variants)
-
-                assignment = []
-                for i, variant in enumerate(variants):
-                    n_variant = n_per_variant + (1 if i < remainder else 0)
-                    assignment.extend([variant] * n_variant)
+                # Float allocation_ratio with explicit variants list.
+                if len(variants) == 2:
+                    # Ratio applies to the first variant; remainder goes to the second.
+                    # e.g. variants=[1, 0], allocation_ratio=0.667 → 66.7% label-1, 33.3% label-0
+                    n_first = int(n * allocation_ratio)
+                    assignment = [variants[0]] * n_first + [variants[1]] * (n - n_first)
+                else:
+                    # For 3+ variants a float ratio is ambiguous; fall back to equal
+                    # allocation.  Use a dict to specify custom per-variant ratios.
+                    n_per_variant = n // len(variants)
+                    remainder = n % len(variants)
+                    assignment = []
+                    for i, variant in enumerate(variants):
+                        n_variant = n_per_variant + (1 if i < remainder else 0)
+                        assignment.extend([variant] * n_variant)
 
         np.random.shuffle(assignment)
         assignments.append(pd.Series(assignment, index=group_df.index))
