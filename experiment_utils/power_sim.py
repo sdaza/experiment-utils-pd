@@ -1214,8 +1214,11 @@ class PowerSim:
         results.columns = [str((i, j)) for i, j in self.comparisons]
 
         grid = pd.concat([grid, results], axis=1)
-        grid.sample_size = grid.sample_size.map(str)
-        grid.effect = grid.effect.map(str)
+        # Keep sample_size and effect as their original types for correct numeric
+        # axis ordering in plots; map to str only when the value is a list
+        # (custom per-group allocation) so it can be stored in the DataFrame cell.
+        grid.sample_size = grid.sample_size.map(lambda v: str(v) if isinstance(v, list) else v)
+        grid.effect = grid.effect.map(lambda v: str(v) if isinstance(v, list) else v)
         if plot:
             self.plot_power(grid, facet_by=facet_by, hue=hue)
         return grid
@@ -1262,10 +1265,16 @@ class PowerSim:
 
         temp = pd.melt(data, id_vars=cols, var_name="comparison", value_name="power", value_vars=value_vars)
 
+        # Sort by numeric sample_size so lines are drawn left-to-right correctly.
+        try:
+            temp = temp.sort_values("sample_size")
+        except TypeError:
+            pass  # mixed types (e.g. per-group lists as strings) — leave as-is
+
         d_relative_effect = {True: "relative", False: "absolute"}
         effect_label = d_relative_effect[self.relative_effect]
 
-        facet_values = [None] if facet_by is None else temp[facet_by].unique()
+        facet_values = [None] if facet_by is None else sorted(temp[facet_by].unique(), key=str)
 
         for facet_val in facet_values:
             subset = temp if facet_by is None else temp[temp[facet_by] == facet_val]
@@ -1277,7 +1286,13 @@ class PowerSim:
                 data=subset,
                 legend="full",
             )
-            plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=len(temp.sample_size.unique()) - 1, colors="gray")
+            plt.hlines(
+                y=0.8,
+                linestyles="dashed",
+                xmin=subset["sample_size"].min(),
+                xmax=subset["sample_size"].max(),
+                colors="gray",
+            )
             title_suffix = "" if facet_by is None else f"\n{facet_by}={facet_val}"
             plt.title(
                 f"Simulated power — {self.metric}s, {effect_label} effects"
@@ -1287,6 +1302,7 @@ class PowerSim:
             plt.xlabel("\n sample size")
             plt.ylabel("power\n")
             plt.setp(ax.get_xticklabels(), rotation=45)
+            plt.tight_layout()
             plt.show()
 
     def __expand_grid(self, dictionary: dict[str, list[float | int]]) -> pd.DataFrame:
