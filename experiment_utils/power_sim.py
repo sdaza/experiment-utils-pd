@@ -11,7 +11,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from multiprocess.pool import ThreadPool
 from scipy import stats
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .utils import get_logger, log_and_raise_error
 
@@ -360,9 +360,9 @@ class PowerSim:
                     sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
                     significant = [p < sidak_alpha for p in l_pvalues]
                 else:
-                    # For other corrections, use full correction method
-                    correction_func = correction_methods[self.correction]
-                    significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
+                    # Sequential methods (Holm, Hochberg, FDR) need all p-values to rank them;
+                    # with a subset use Bonferroni (full family size) as a conservative fallback.
+                    significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
             else:
                 correction_func = correction_methods[self.correction]
                 significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
@@ -1696,6 +1696,10 @@ class PowerSim:
         # For each target comparison, find the required sample size
         for group1, group2 in tqdm(target_comparisons, desc="Finding sample size", unit="comp"):
             comp_target_power = power_dict[(group1, group2)]
+            # Index into self.comparisons so we extract the right row when get_power
+            # returns results for ALL comparisons (required for sequential corrections
+            # like Holm to be applied across the full family of tests).
+            comp_result_idx = self.comparisons.index((group1, group2))
 
             # Get analytical estimate for better starting point
             baseline_val = baseline
@@ -1739,9 +1743,8 @@ class PowerSim:
                         sample_size=sample_sizes,
                         compliance=compliance,
                         standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
                     )
-                    current_power = power_result.iloc[0]["power"]
+                    current_power = power_result.iloc[comp_result_idx]["power"]
                 except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
                     if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
                         log_and_raise_error(
@@ -1773,9 +1776,8 @@ class PowerSim:
                         sample_size=sample_sizes,
                         compliance=compliance,
                         standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
                     )
-                    min_power = power_result.iloc[0]["power"]
+                    min_power = power_result.iloc[comp_result_idx]["power"]
 
                     if min_power >= comp_target_power - tolerance:
                         # Solution is at or below min_sample_size
@@ -1798,9 +1800,8 @@ class PowerSim:
                                     sample_size=sample_sizes,
                                     compliance=compliance,
                                     standard_deviation=standard_deviation,
-                                    target_comparisons=[(group1, group2)],
                                 )
-                                current_power = power_result.iloc[0]["power"]
+                                current_power = power_result.iloc[comp_result_idx]["power"]
                             except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
                                 if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
                                     log_and_raise_error(
@@ -1834,10 +1835,9 @@ class PowerSim:
                         sample_size=sample_sizes,
                         compliance=compliance,
                         standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
                         use_early_stopping=False,  # Accurate calculation for reporting
                     )
-                    best_power = power_result.iloc[0]["power"]
+                    best_power = power_result.iloc[comp_result_idx]["power"]
             else:
                 # Refine with binary search
                 while high - low > step_size // 2:
@@ -1851,9 +1851,8 @@ class PowerSim:
                             sample_size=sample_sizes,
                             compliance=compliance,
                             standard_deviation=standard_deviation,
-                            target_comparisons=[(group1, group2)],
                         )
-                        current_power = power_result.iloc[0]["power"]
+                        current_power = power_result.iloc[comp_result_idx]["power"]
                     except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
                         if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
                             log_and_raise_error(
