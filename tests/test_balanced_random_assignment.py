@@ -212,6 +212,222 @@ def test_stratification_different_from_unstratified(base_df):
 
 
 # ---------------------------------------------------------------------------
+# Integer 0/1 treatment labels
+# ---------------------------------------------------------------------------
+
+
+def test_binary_integer_labels_50_50(base_df):
+    """variants=[0, 1] works and produces correct counts."""
+    a = balanced_random_assignment(
+        base_df, seed=42, variants=[0, 1], allocation_ratio={0: 0.5, 1: 0.5}, check_balance=False
+    )
+    assert set(a.unique()) == {0, 1}
+    assert a.value_counts()[0] == 500
+    assert a.value_counts()[1] == 500
+
+
+def test_binary_integer_labels_allocation_ratio_float(base_df):
+    """With variants=[0, 1] and a scalar allocation_ratio, label 0 gets (1-ratio) and 1 gets ratio."""
+    # scalar allocation_ratio applies to the first variant ('test' semantics do not apply here)
+    # — pass as dict to be explicit about which label gets which share
+    a = balanced_random_assignment(
+        base_df, seed=42, variants=[0, 1], allocation_ratio={0: 0.3, 1: 0.7}, check_balance=False
+    )
+    counts = a.value_counts()
+    assert counts[0] == 300
+    assert counts[1] == 700
+
+
+def test_integer_labels_cover_all_rows(base_df):
+    a = balanced_random_assignment(
+        base_df, seed=42, variants=[0, 1], allocation_ratio={0: 0.5, 1: 0.5}, check_balance=False
+    )
+    assert len(a) == len(base_df)
+    assert set(a.unique()) == {0, 1}
+
+
+def test_integer_labels_shuffle_applied(base_df):
+    """0s and 1s should be interleaved, not all 0s first."""
+    a = balanced_random_assignment(
+        base_df, seed=42, variants=[0, 1], allocation_ratio={0: 0.5, 1: 0.5}, check_balance=False
+    )
+    first_half = a.iloc[:500]
+    assert not (first_half == 0).all()
+    assert not (first_half == 1).all()
+
+
+def test_integer_labels_stratified(base_df):
+    """Stratification works correctly with integer labels."""
+    a = balanced_random_assignment(
+        base_df,
+        seed=42,
+        variants=[0, 1],
+        allocation_ratio={0: 0.5, 1: 0.5},
+        balance_covariates=["segment"],
+        check_balance=False,
+    )
+    df_check = base_df.copy()
+    df_check["assignment"] = a
+    for _seg, group in df_check.groupby("segment"):
+        counts = group["assignment"].value_counts()
+        total = len(group)
+        assert counts.get(0, 0) + counts.get(1, 0) == total
+        assert abs(counts.get(0, 0) - counts.get(1, 0)) <= 1
+
+
+def test_integer_labels_reproducible(base_df):
+    a1 = balanced_random_assignment(
+        base_df, seed=7, variants=[0, 1], allocation_ratio={0: 0.5, 1: 0.5}, check_balance=False
+    )
+    a2 = balanced_random_assignment(
+        base_df, seed=7, variants=[0, 1], allocation_ratio={0: 0.5, 1: 0.5}, check_balance=False
+    )
+    pd.testing.assert_series_equal(a1, a2)
+
+
+# ---------------------------------------------------------------------------
+# Float variant labels
+# ---------------------------------------------------------------------------
+
+
+def test_float_variant_labels(base_df):
+    """Float labels (e.g. 0.0 / 1.0) are stored and returned correctly."""
+    a = balanced_random_assignment(
+        base_df,
+        seed=42,
+        variants=[0.0, 1.0],
+        allocation_ratio={0.0: 0.5, 1.0: 0.5},
+        check_balance=False,
+    )
+    assert set(a.unique()) == {0.0, 1.0}
+    assert a.value_counts()[0.0] == 500
+    assert a.value_counts()[1.0] == 500
+
+
+def test_float_labels_unequal_allocation(base_df):
+    a = balanced_random_assignment(
+        base_df,
+        seed=42,
+        variants=[0.0, 1.0],
+        allocation_ratio={0.0: 0.7, 1.0: 0.3},
+        check_balance=False,
+    )
+    counts = a.value_counts()
+    assert counts[0.0] == 700
+    assert counts[1.0] == 300
+
+
+# ---------------------------------------------------------------------------
+# Treatment-only subset (assigning within a filtered DataFrame)
+# ---------------------------------------------------------------------------
+
+
+def test_treatment_only_subset():
+    """Assigning only among units already selected for treatment is supported."""
+    np.random.seed(0)
+    n = 600
+    df_all = pd.DataFrame({"user_id": range(n), "group": np.random.choice(["eligible", "ineligible"], n)})
+    df_treatment_pool = df_all[df_all["group"] == "eligible"].copy()
+
+    a = balanced_random_assignment(
+        df_treatment_pool,
+        seed=42,
+        variants=[0, 1],
+        allocation_ratio={0: 0.5, 1: 0.5},
+        check_balance=False,
+    )
+    # Assignment only covers the eligible subset
+    assert len(a) == len(df_treatment_pool)
+    assert set(a.index) == set(df_treatment_pool.index)
+    # Counts are balanced within the subset
+    assert abs(a.value_counts()[0] - a.value_counts()[1]) <= 1
+
+
+def test_treatment_only_index_alignment():
+    """Index of result aligns with the input subset, not the original full DataFrame."""
+    df_full = pd.DataFrame({"x": range(100)})
+    df_sub = df_full.iloc[20:70]  # 50 rows, index 20..69
+
+    a = balanced_random_assignment(
+        df_sub,
+        seed=42,
+        variants=[0, 1],
+        allocation_ratio={0: 0.5, 1: 0.5},
+        check_balance=False,
+    )
+    pd.testing.assert_index_equal(a.index, df_sub.index)
+    assert len(a) == 50
+
+
+# ---------------------------------------------------------------------------
+# Float allocation_ratio with explicit variant labels
+# ---------------------------------------------------------------------------
+
+
+def test_float_ratio_with_integer_variants(base_df):
+    """variants=[1, 0] + float allocation_ratio: first label gets the ratio."""
+    a = balanced_random_assignment(base_df, seed=42, variants=[1, 0], allocation_ratio=0.667, check_balance=False)
+    counts = a.value_counts()
+    assert counts[1] == int(1000 * 0.667)  # 667
+    assert counts[0] == 1000 - int(1000 * 0.667)  # 333
+
+
+def test_float_ratio_with_string_variants(base_df):
+    """variants=['treatment', 'control'] + float: 'treatment' gets the ratio."""
+    a = balanced_random_assignment(
+        base_df, seed=42, variants=["treatment", "control"], allocation_ratio=0.6, check_balance=False
+    )
+    counts = a.value_counts()
+    assert counts["treatment"] == 600
+    assert counts["control"] == 400
+
+
+def test_float_ratio_variants_reversed_label_order(base_df):
+    """Passing variants=[0, 1] vs [1, 0] with same ratio should flip which label is majority."""
+    a_1_first = balanced_random_assignment(base_df, seed=42, variants=[1, 0], allocation_ratio=0.7, check_balance=False)
+    a_0_first = balanced_random_assignment(base_df, seed=42, variants=[0, 1], allocation_ratio=0.7, check_balance=False)
+    assert a_1_first.value_counts()[1] == 700  # 1 is majority
+    assert a_0_first.value_counts()[0] == 700  # 0 is majority
+
+
+def test_float_ratio_three_variants_equal_fallback(base_df):
+    """Float allocation_ratio with 3+ variants falls back to equal allocation."""
+    a = balanced_random_assignment(
+        base_df,
+        seed=42,
+        variants=["control", "v1", "v2"],
+        allocation_ratio=0.5,  # ambiguous for 3 variants → equal split
+        check_balance=False,
+    )
+    counts = a.value_counts()
+    assert counts.sum() == 1000
+    # Each variant gets ~333 units (equal allocation)
+    for v in ["control", "v1", "v2"]:
+        assert abs(counts[v] - 333) <= 1
+
+
+def test_float_ratio_with_stratification(base_df):
+    """Float ratio + integer labels works correctly within strata."""
+    a = balanced_random_assignment(
+        base_df,
+        seed=42,
+        variants=[1, 0],
+        allocation_ratio=0.667,
+        balance_covariates=["segment"],
+        check_balance=False,
+    )
+    df_check = base_df.copy()
+    df_check["assignment"] = a
+    for _seg, group in df_check.groupby("segment"):
+        counts = group["assignment"].value_counts()
+        total = len(group)
+        expected_treatment = int(total * 0.667)
+        assert counts.get(1, 0) == expected_treatment, (
+            f"Segment {_seg}: expected {expected_treatment} treated, got {counts.get(1, 0)}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
 
