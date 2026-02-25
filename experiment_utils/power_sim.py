@@ -1075,9 +1075,11 @@ class PowerSim:
             Effect size scenarios.  Use a list of lists for multi-variant effects,
             e.g. ``[[0.01, 0.03], [0.03, 0.05]]`` for two scenarios with two variants.
         sample_sizes : int, list of int, or list of lists
-            Sample size scenarios.  A flat list such as ``[1000, 2000, 5000]`` creates
-            one equal-allocation scenario per entry.  Use a list of lists for
-            per-group allocations, e.g. ``[[1000, 500], [2000, 1000]]``.
+            Sample size scenarios, **per group**.  A scalar or flat list such as
+            ``[1000, 2000, 5000]`` assigns that many units to *each* group (control
+            and every variant), so ``5000`` means 5 000 in control *and* 5 000 in
+            each variant (total N = 5 000 × (variants + 1)).  Use a list of lists to
+            set per-group sizes explicitly, e.g. ``[[1000, 500], [2000, 1000]]``.
         compliances : float, list of float, or list of lists
             Compliance scenarios.
         standard_deviations : float, list of float, or list of lists
@@ -1276,6 +1278,9 @@ class PowerSim:
 
         facet_values = [None] if facet_by is None else sorted(temp[facet_by].unique(), key=str)
 
+        # All unique sample sizes across the full grid (sorted numerically).
+        all_sizes = sorted(temp["sample_size"].unique())
+
         for facet_val in facet_values:
             subset = temp if facet_by is None else temp[temp[facet_by] == facet_val]
             ax = sns.lineplot(
@@ -1289,19 +1294,22 @@ class PowerSim:
             plt.hlines(
                 y=0.8,
                 linestyles="dashed",
-                xmin=subset["sample_size"].min(),
-                xmax=subset["sample_size"].max(),
+                xmin=min(all_sizes),
+                xmax=max(all_sizes),
                 colors="gray",
             )
+            # Force every sample-size value to appear as a tick label.
+            ax.set_xticks(all_sizes)
+            ax.set_xticklabels([str(s) for s in all_sizes], rotation=45, ha="right")
+
             title_suffix = "" if facet_by is None else f"\n{facet_by}={facet_val}"
             plt.title(
                 f"Simulated power — {self.metric}s, {effect_label} effects"
                 f"  (sims per scenario: {self.nsim}){title_suffix}"
             )
             plt.legend(bbox_to_anchor=(1.05, 1), title=hue, loc="upper left")
-            plt.xlabel("\n sample size")
+            plt.xlabel("\n sample size (per group)")
             plt.ylabel("power\n")
-            plt.setp(ax.get_xticklabels(), rotation=45)
             plt.tight_layout()
             plt.show()
 
