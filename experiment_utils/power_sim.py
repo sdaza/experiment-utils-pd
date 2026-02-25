@@ -1048,8 +1048,10 @@ class PowerSim:
         sample_sizes: int | list = None,
         compliances: float | list = None,
         standard_deviations: float | list = None,
+        allocation_ratio: list[float] = None,
         threads: int = 3,
         plot: bool = False,
+        correction: str = None,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Return Pandas DataFrame with parameter combinations and statistical power.
@@ -1074,11 +1076,25 @@ class PowerSim:
             Compliance scenarios.
         standard_deviations : float, list of float, or list of lists
             Standard deviation scenarios.
+        allocation_ratio : list of float, optional
+            Proportion of total sample assigned to each group (control + variants).
+            Must sum to 1.0 and have length equal to variants + 1.
+            Defaults to equal allocation. Example: ``[0.5, 0.25, 0.25]`` gives the
+            control group twice as many units as each variant.
         threads : int
             Number of threads for parallelization.
         plot : bool
             Whether to plot the results.
+        correction : str, optional
+            Multiple comparison correction method. If provided, overrides the instance
+            correction for this call. Options: 'bonferroni', 'holm', 'hochberg',
+            'sidak', 'fdr', 'none' (or None to use the instance default).
         """
+
+        original_correction = None
+        if correction is not None:
+            original_correction = self.correction
+            self.correction = correction
 
         baseline_rates = self._as_scenario_list(baseline_rates)
         effects = self._as_scenario_list(effects)
@@ -1094,10 +1110,32 @@ class PowerSim:
         else:
             standard_deviations = self._as_scenario_list(standard_deviations)
 
+        # Validate allocation_ratio
+        num_groups = self.variants + 1
+        if allocation_ratio is not None:
+            if len(allocation_ratio) != num_groups:
+                log_and_raise_error(
+                    self.logger,
+                    f"allocation_ratio length ({len(allocation_ratio)}) must equal variants + 1 ({num_groups})",
+                )
+            if abs(sum(allocation_ratio) - 1.0) > 1e-6:
+                log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
+        else:
+            allocation_ratio = [1.0 / num_groups] * num_groups
+
+        # When allocation_ratio is unequal, convert each scalar total sample size into
+        # a per-group list so get_power receives the right sizes directly.
+        def _apply_allocation(total):
+            if isinstance(total, (int, float)):
+                return [int(total * r) for r in allocation_ratio]
+            return total  # already a per-group list
+
+        sample_sizes_allocated = [_apply_allocation(s) for s in sample_sizes]
+
         pdict = {
             "baseline": baseline_rates,
             "effect": effects,
-            "sample_size": sample_sizes,
+            "sample_size": sample_sizes_allocated,
             "compliance": compliances,
             "standard_deviation": standard_deviations,
         }
@@ -1111,6 +1149,8 @@ class PowerSim:
         grid["metric"] = self.metric
         grid["variants"] = self.variants
         grid["comparisons"] = str(self.comparisons)
+        grid["correction"] = self.correction
+        grid["allocation_ratio"] = str(allocation_ratio)
         grid["relative_effect"] = self.relative_effect
         grid = grid.loc[
             :,
@@ -1122,6 +1162,8 @@ class PowerSim:
                 "standard_deviation",
                 "variants",
                 "comparisons",
+                "correction",
+                "allocation_ratio",
                 "nsim",
                 "alpha",
                 "alternative",
@@ -1133,6 +1175,9 @@ class PowerSim:
         results = pool.starmap(self.get_power, parameters)
         pool.close()
         pool.join()
+
+        if original_correction is not None:
+            self.correction = original_correction
 
         results = pd.concat(results)
 
@@ -1161,7 +1206,7 @@ class PowerSim:
 
         value_vars = [str((i, j)) for i, j in self.comparisons]
 
-        cols = [
+        base_cols = [
             "baseline",
             "effect",
             "sample_size",
@@ -1169,12 +1214,15 @@ class PowerSim:
             "standard_deviation",
             "variants",
             "comparisons",
+            "correction",
+            "allocation_ratio",
             "nsim",
             "alpha",
             "alternative",
             "metric",
             "relative_effect",
         ]
+        cols = [c for c in base_cols if c in data.columns]
 
         temp = pd.melt(data, id_vars=cols, var_name="comparison", value_name="power", value_vars=value_vars)
 
