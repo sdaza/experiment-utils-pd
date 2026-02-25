@@ -672,7 +672,7 @@ class PowerSim:
         # Set default values for mutable arguments
         if baseline is None:
             baseline = 1.0
-        elif isinstance(baseline, (list, tuple)):
+        elif isinstance(baseline, list | tuple):
             baseline = float(baseline[0])
         if effect is None:
             effect = [0.10]
@@ -1039,7 +1039,7 @@ class PowerSim:
             return None
         if not isinstance(values, list):
             return [values]
-        return [v[0] if isinstance(v, (list, tuple)) and len(v) == 1 else v for v in values]
+        return [v[0] if isinstance(v, list | tuple) and len(v) == 1 else v for v in values]
 
     def grid_sim_power(
         self,
@@ -1126,7 +1126,7 @@ class PowerSim:
         # When allocation_ratio is unequal, convert each scalar total sample size into
         # a per-group list so get_power receives the right sizes directly.
         def _apply_allocation(total):
-            if isinstance(total, (int, float)):
+            if isinstance(total, int | float):
                 return [int(total * r) for r in allocation_ratio]
             return total  # already a per-group list
 
