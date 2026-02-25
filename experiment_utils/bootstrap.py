@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 
 class BootstrapMixin:
@@ -616,21 +617,28 @@ class BootstrapMixin:
                 # Note: Using threading instead of multiprocessing because statsmodels releases GIL
                 # and we avoid expensive DataFrame serialization
                 self._logger.debug("Stage 2: Fitting models with threading...")
-                results = Parallel(n_jobs=-1, backend="threading")(
-                    delayed(self._fit_bootstrap_model)(
-                        prepared_data=boot_data,
-                        outcome=outcome,
-                        model_func=model_func,
-                        boot_relevant_covariates=boot_relevant_covariates,
-                        weight_col=weight_col,
-                        model_type=model_type,
-                        compute_marginal_effects=compute_marginal_effects,
-                        cluster_col=self._cluster_col,
-                        event_col=event_col,
-                        interaction_covariates=interaction_covariates,
+                valid_samples = [(d, c, w, e) for d, c, w, e in prepared_samples if e is None]
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                            delayed(self._fit_bootstrap_model)(
+                                prepared_data=boot_data,
+                                outcome=outcome,
+                                model_func=model_func,
+                                boot_relevant_covariates=boot_relevant_covariates,
+                                weight_col=weight_col,
+                                model_type=model_type,
+                                compute_marginal_effects=compute_marginal_effects,
+                                cluster_col=self._cluster_col,
+                                event_col=event_col,
+                                interaction_covariates=interaction_covariates,
+                            )
+                            for boot_data, boot_relevant_covariates, weight_col, _ in valid_samples
+                        ),
+                        total=len(valid_samples),
+                        desc=f"Bootstrap [{outcome}]",
+                        unit="iter",
                     )
-                    for boot_data, boot_relevant_covariates, weight_col, prep_error in prepared_samples
-                    if prep_error is None  # Only fit models on successfully prepared samples
                 )
 
                 # Collect errors from Stage 1
@@ -673,24 +681,31 @@ class BootstrapMixin:
                 )
 
                 # Use configured backend (threading or loky)
-                results = Parallel(n_jobs=-1, backend=self._bootstrap_backend, prefer="threads")(
-                    delayed(self._bootstrap_single_iteration)(
-                        data=data,
-                        outcome=outcome,
-                        adjustment=adjustment,
-                        model_func=model_func,
-                        relevant_covariates=relevant_covariates,
-                        numeric_covariates=numeric_covariates,
-                        binary_covariates=binary_covariates,
-                        min_binary_count=min_binary_count,
-                        model_type=model_type,
-                        compute_marginal_effects=compute_marginal_effects,
-                        iteration=i,
-                        event_col_for_resample=event_col_for_resample,
-                        interaction_covariates=interaction_covariates,
-                        bootstrap_indices=bootstrap_indices_list[i],
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend=self._bootstrap_backend, prefer="threads", return_as="generator")(
+                            delayed(self._bootstrap_single_iteration)(
+                                data=data,
+                                outcome=outcome,
+                                adjustment=adjustment,
+                                model_func=model_func,
+                                relevant_covariates=relevant_covariates,
+                                numeric_covariates=numeric_covariates,
+                                binary_covariates=binary_covariates,
+                                min_binary_count=min_binary_count,
+                                model_type=model_type,
+                                compute_marginal_effects=compute_marginal_effects,
+                                iteration=i,
+                                event_col_for_resample=event_col_for_resample,
+                                interaction_covariates=interaction_covariates,
+                                bootstrap_indices=bootstrap_indices_list[i],
+                            )
+                            for i in range(self._bootstrap_iterations)
+                        ),
+                        total=self._bootstrap_iterations,
+                        desc=f"Bootstrap [{outcome}]",
+                        unit="iter",
                     )
-                    for i in range(self._bootstrap_iterations)
                 )
 
                 bootstrap_abs_effects = []
@@ -721,7 +736,7 @@ class BootstrapMixin:
             bootstrap_rel_effects = []
             error_counts = {}
 
-            for i in range(self._bootstrap_iterations):
+            for i in tqdm(range(self._bootstrap_iterations), desc=f"Bootstrap [{outcome}]", unit="iter"):
                 abs_eff, rel_eff, error_info = self._bootstrap_single_iteration(
                     data=data,
                     outcome=outcome,

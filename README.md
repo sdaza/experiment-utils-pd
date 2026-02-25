@@ -248,7 +248,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
     balance_method="ps-logistic",  # Logistic regression for propensity scores
-    target_effect="ATT",  # Average Treatment Effect on Treated
+    estimand="ATT",  # Average Treatment Effect on Treated
 )
 
 analyzer.get_effects()
@@ -314,7 +314,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
     regression_covariates=["age", "income"],
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -331,7 +331,7 @@ analyzer = ExperimentAnalyzer(
     outcomes=["revenue"],
     balance_covariates=["age", "income", "is_member"],
     adjustment="aipw",
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -356,7 +356,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income"],
     adjustment="balance",
     balance_method="ps-logistic",  # or "ps-xgboost"
-    target_effect="ATO",           # overlap weights
+    estimand="ATO",                # overlap weights
 )
 
 analyzer.get_effects()
@@ -531,7 +531,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "comorbidity_score"],
     adjustment="balance",
     regression_covariates=["age", "comorbidity_score"],
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -817,7 +817,7 @@ analyzer.get_effects()
 retro = analyzer.calculate_retrodesign(true_effect=0.02)
 
 print(retro[["outcome", "power", "type_s_error", "type_m_error",
-             "relative_bias", "trimmed_effect"]])
+             "relative_bias", "trimmed_abs_effect"]])
 ```
 
 **Metrics explained:**
@@ -825,7 +825,7 @@ print(retro[["outcome", "power", "type_s_error", "type_m_error",
 - `type_s_error`: Probability of wrong sign when significant (if underpowered)
 - `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
 - `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
-- `trimmed_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
+- `trimmed_abs_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
 
 
 
@@ -1226,7 +1226,7 @@ print(balance[balance["covariate"].str.contains("region")])
 | CUPED | `None` | `interaction_covariates=["pre_x"]` | Variance reduction with pre-experiment data |
 | IPW | `"balance"` | `balance_covariates=["x1","x2"]` | Many covariates, non-linear confounding |
 | IPW + Regression | `"balance"` | both `balance_covariates` and `regression_covariates` | Extra robustness, survival models |
-| Overlap weights (ATO) | `"balance"` + `target_effect="ATO"` | `balance_covariates=["x1","x2"]` | Poor or moderate overlap, no threshold needed |
+| Overlap weights (ATO) | `"balance"` + `estimand="ATO"` | `balance_covariates=["x1","x2"]` | Poor or moderate overlap, no threshold needed |
 | Trimming | `"balance"` + `trim_ps=True` | `balance_covariates=["x1","x2"]` | Robustness check, restrict to overlap region |
 | AIPW (doubly robust) | `"aipw"` | `balance_covariates=["x1","x2"]` | Best protection against misspecification |
 | IV | `"IV"` | `balance_covariates` optional | Non-compliance, endogenous treatment (requires `instrument_col`) |
