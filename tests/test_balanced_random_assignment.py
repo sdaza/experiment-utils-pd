@@ -173,8 +173,8 @@ def test_stratification_within_strata_binary(base_df):
     for _seg, group in df_check.groupby("segment"):
         counts = group["assignment"].value_counts()
         total = len(group)
-        # Each stratum should have exactly floor(n*0.5) test and remainder control
-        expected_test = int(total * 0.5)
+        # Each stratum should have exactly round(n*0.5) test and remainder control
+        expected_test = round(total * 0.5)
         assert counts.get("test", 0) == expected_test, (
             f"Segment {_seg}: expected {expected_test} test, got {counts.get('test', 0)}"
         )
@@ -196,8 +196,8 @@ def test_stratification_multi_variant_within_strata(base_df):
     for _seg, group in df_check.groupby("segment"):
         total = len(group)
         counts = group["assignment"].value_counts()
-        assert counts.get("control", 0) == int(total * 0.5)
-        assert counts.get("variant_a", 0) == int(total * 0.3)
+        assert counts.get("control", 0) == round(total * 0.5)
+        assert counts.get("variant_a", 0) == round(total * 0.3)
         # variant_b gets the remainder
         assert counts.get("control", 0) + counts.get("variant_a", 0) + counts.get("variant_b", 0) == total
 
@@ -421,7 +421,7 @@ def test_float_ratio_with_stratification(base_df):
     for _seg, group in df_check.groupby("segment"):
         counts = group["assignment"].value_counts()
         total = len(group)
-        expected_treatment = int(total * 0.667)
+        expected_treatment = round(total * 0.667)
         assert counts.get(1, 0) == expected_treatment, (
             f"Segment {_seg}: expected {expected_treatment} treated, got {counts.get(1, 0)}"
         )
