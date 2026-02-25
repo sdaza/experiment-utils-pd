@@ -87,7 +87,7 @@ def test_no_covariates(sample_data):
 
 
 def test_sample_ratio_check(sample_data):
-    """Test get_effects sample ratio check"""
+    """Test get_effects sample ratio check using a column name"""
     outcomes = "conversion"
     treatment_col = "treatment"
     experiment_identifier = "experiment"
@@ -107,6 +107,27 @@ def test_sample_ratio_check(sample_data):
         assert True
     except Exception as e:
         pytest.fail(f" raised an exception: {e}")
+
+
+def test_sample_ratio_check_float_constant(sample_data):
+    """Test get_effects sample ratio check using a float constant"""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        exp_sample_ratio_col=0.5,
+    )
+
+    try:
+        analyzer.get_effects()
+        results = analyzer.results
+        assert results is not None
+        assert "srm_detected" in results.columns
+        assert "srm_pvalue" in results.columns
+        assert "sample_ratio" in results.columns
+    except Exception as e:
+        pytest.fail(f"raised an exception: {e}")
 
 
 def test_no_experiment_identifier(sample_data):
@@ -185,7 +206,7 @@ def test_balance_adjustment(sample_data):
         covariates=covariates,
         adjustment="balance",
         balance_method="ps-logistic",
-        target_effect="ATT",
+        estimand="ATT",
     )
 
     try:

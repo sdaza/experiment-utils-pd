@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
+from tqdm import tqdm
 
 from .utils import log_and_raise_error
 
@@ -271,7 +272,7 @@ class RetrodesignMixin:
             - type_s_error: Probability of wrong sign when significant
             - type_m_error: Expected exaggeration ratio using absolute values
             - relative_bias: Expected bias ratio preserving signs
-            - trimmed_effect: Bias-corrected effect estimate (absolute_effect / relative_bias).
+            - trimmed_abs_effect: Bias-corrected effect estimate (absolute_effect / relative_bias).
               Deflates the observed effect by the sign-preserving exaggeration factor to
               approximate the true effect. NaN when relative_bias is unavailable or zero.
             - retrodesign_method: Method used ("powersim" or "simulation")
@@ -326,7 +327,7 @@ class RetrodesignMixin:
             return pd.DataFrame()
 
         # drop existing retrodesign columns if they exist (from previous calls)
-        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias", "trimmed_effect"]
+        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias", "trimmed_abs_effect"]
         existing_retro_cols = [col for col in retro_cols if col in df_filtered.columns]
         if existing_retro_cols:
             df_filtered = df_filtered.drop(columns=existing_retro_cols)
@@ -419,7 +420,7 @@ class RetrodesignMixin:
                         )
 
         results = []
-        for _idx, row in df_filtered.iterrows():
+        for _idx, row in tqdm(df_filtered.iterrows(), total=len(df_filtered), desc="Retrodesign", unit="outcome"):
             te = row["true_effect"]
             model_type = row.get("model_type", "ols")
             effect_type = row.get("effect_type", "mean_difference")
@@ -500,11 +501,11 @@ class RetrodesignMixin:
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
 
-        # trimmed_effect: observed effect deflated by relative_bias to approximate the true effect.
+        # trimmed_abs_effect: observed effect deflated by relative_bias to approximate the true effect.
         # relative_bias = E[estimated / true] among significant estimates, so dividing the
         # observed effect by it yields a sign-preserving, bias-corrected estimate.
         rb = df_filtered["relative_bias"]
-        df_filtered["trimmed_effect"] = df_filtered["absolute_effect"].where(
+        df_filtered["trimmed_abs_effect"] = df_filtered["absolute_effect"].where(
             rb.isna() | (rb == 0), df_filtered["absolute_effect"] / rb
         )
 
@@ -568,7 +569,7 @@ class RetrodesignMixin:
         n_wrong_sign = 0
         n_successful = 0
 
-        for _ in range(nsim):
+        for _ in tqdm(range(nsim), desc=f"Simulating [{outcome}]", unit="sim", leave=False):
             if fitted_model is not None:
                 sim_data = self._generate_sim_data_from_model(
                     fitted_model=fitted_model,

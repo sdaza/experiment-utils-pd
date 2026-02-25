@@ -11,6 +11,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from multiprocess.pool import ThreadPool
 from scipy import stats
+from tqdm import tqdm
 
 from .utils import get_logger, log_and_raise_error
 
@@ -2107,11 +2108,13 @@ class PowerSim:
                 if use_parallel:
                     from joblib import Parallel, delayed
 
+                    _desc = f"Simulations [{h} vs {j}]"
+
                     # Use configured parallel strategy (default: hybrid)
                     if self.parallel_strategy == "hybrid":
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations with hybrid parallelization...")
 
-                        # Stage 1: Generate simulation data (threading)
+                        # Stage 1: Generate simulation data (threading) — fast, no progress bar needed
                         sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
                             delayed(self._generate_simulation_data)(
                                 baseline=baseline,
@@ -2124,45 +2127,66 @@ class PowerSim:
                         )
 
                         # Stage 2: Run tests with retrodesign-specific logic (multiprocessing)
-                        simulation_results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
-                            delayed(self._run_retrodesign_test_on_data)(
-                                sim_data=sim_data,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
+                                    delayed(self._run_retrodesign_test_on_data)(
+                                        sim_data=sim_data,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for sim_data in sim_datasets
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for sim_data in sim_datasets
                         )
                     elif self.parallel_strategy == "threading":
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel (threading)...")
-                        simulation_results = Parallel(n_jobs=-1, backend="threading")(
-                            delayed(self._run_single_retrodesign_simulation)(
-                                baseline=baseline,
-                                sample_size=sample_size,
-                                true_effect=true_effect,
-                                compliance=compliance,
-                                standard_deviation=standard_deviation,
-                                comp_true_effect=comp_true_effect,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                                    delayed(self._run_single_retrodesign_simulation)(
+                                        baseline=baseline,
+                                        sample_size=sample_size,
+                                        true_effect=true_effect,
+                                        compliance=compliance,
+                                        standard_deviation=standard_deviation,
+                                        comp_true_effect=comp_true_effect,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for _ in range(nsim_val)
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for _ in range(nsim_val)
                         )
                     else:  # "loky" or default
                         self.logger.debug(
                             f"Running {nsim_val} retrodesign simulations in parallel (multiprocessing)..."
                         )
-                        simulation_results = Parallel(n_jobs=-1, backend="loky")(
-                            delayed(self._run_single_retrodesign_simulation)(
-                                baseline=baseline,
-                                sample_size=sample_size,
-                                true_effect=true_effect,
-                                compliance=compliance,
-                                standard_deviation=standard_deviation,
-                                comp_true_effect=comp_true_effect,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="loky", return_as="generator")(
+                                    delayed(self._run_single_retrodesign_simulation)(
+                                        baseline=baseline,
+                                        sample_size=sample_size,
+                                        true_effect=true_effect,
+                                        compliance=compliance,
+                                        standard_deviation=standard_deviation,
+                                        comp_true_effect=comp_true_effect,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for _ in range(nsim_val)
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for _ in range(nsim_val)
                         )
 
                     # Aggregate results
@@ -2188,7 +2212,7 @@ class PowerSim:
                     sign_errors = 0
                     significant_count = 0
 
-                    for _ in range(nsim_val):
+                    for _ in tqdm(range(nsim_val), desc=f"Simulations [{h} vs {j}]", unit="sim"):
                         observed_effect, pvalue, is_significant = self._run_single_retrodesign_simulation(
                             baseline=baseline,
                             sample_size=sample_size,

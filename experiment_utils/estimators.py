@@ -393,7 +393,7 @@ class Estimators:
 
         coefficient = results.params[self._treatment_col]
         intercept = results.params["Intercept"]
-        relative_effect = coefficient / abs(intercept) if intercept != 0 else 0
+        relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
 
@@ -409,7 +409,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, abs(intercept), standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)

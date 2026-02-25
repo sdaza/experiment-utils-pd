@@ -53,10 +53,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         List of columns to identify an experiment
     adjustment : str, optional
         Covariate adjustment method ('balance', 'IV'), by default None
-    exp_sample_ratio_col : str, optional
-        Column name for the expected sample ratio, by default None
-    target_ipw_effect : str, optional
-        Target IPW effect (ATT, ATE, ATC, ATO), by default "ATT".
+    exp_sample_ratio_col : str or float, optional
+        Expected sample ratio for the SRM test. Either a column name containing
+        per-row expected ratios, or a single float constant (e.g. 0.5), by default None
+    estimand : str, optional
+        Target estimand (ATT, ATE, ATC, ATO), by default "ATT".
         ATO uses overlap weights (Li, Morgan & Zaslavsky 2018): treated units receive weight
         (1 - ps), control units receive weight ps. Naturally downweights extreme-PS units
         without requiring a trimming threshold. Only supported with PS-based balance methods.
@@ -199,8 +200,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         balance_covariates: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
-        exp_sample_ratio_col: str | None = None,
-        target_effect: str = "ATT",
+        exp_sample_ratio_col: str | float | None = None,
+        estimand: str = "ATT",
         balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
@@ -265,7 +266,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._adjustment = adjustment
         self._exp_sample_ratio_col = exp_sample_ratio_col
         self._balance_method = balance_method
-        self._target_effect = target_effect
+        self._target_effect = estimand
         self._trim_ps = trim_ps
         self._trim_ps_lower = trim_ps_lower
         self._trim_ps_upper = trim_ps_upper
@@ -312,16 +313,16 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "ATO": "overlap_weight",
         }  # noqa: E501
 
-        if target_effect == "ATO" and balance_method == "entropy":
+        if estimand == "ATO" and balance_method == "entropy":
             log_and_raise_error(
                 self._logger,
-                "target_effect='ATO' (overlap weights) is not supported with balance_method='entropy'. "
+                "estimand='ATO' (overlap weights) is not supported with balance_method='entropy'. "
                 "Use 'ps-logistic' or 'ps-xgboost'.",
             )
         self._estimator = Estimators(
             treatment_col,
             instrument_col,
-            target_effect,
+            estimand,
             self._target_weights,
             alpha,
             min_ps_score,
@@ -349,7 +350,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             + list(self._outcome_event_cols.values())  # Event columns from tuple notation
             + self._all_covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
-            + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
+            + ([self._exp_sample_ratio_col] if isinstance(self._exp_sample_ratio_col, str) else [])
             + ([self._unit_identifier] if self._unit_identifier is not None else [])
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
@@ -970,7 +971,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - sample_ratio: The sample ratio of the treatment group to the control group.
         - adjustment: The type of adjustment applied.
         - method: The balance method used (when adjustment is "balance" or "aipw").
-        - target_effect: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
+        - estimand: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
         - balance: The balance metric for the covariates (when applicable).
         - inference_method: "asymptotic" or "bootstrap"
         - model_type: Type of statistical model used ("ols", "logistic", "poisson", "negative_binomial", "cox")
@@ -1626,7 +1627,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
-                                output["target_effect"] = self._target_effect
+                                output["estimand"] = self._target_effect
                             if adjustment in ("balance", "aipw") and not adjusted_balance.empty:
                                 output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                             elif not balance.empty:  # Use initial balance if no adjustment or balance failed
@@ -1740,8 +1741,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             index_to_insert = result_columns.index("adjustment") + 1
             result_columns.insert(index_to_insert, "method")
             index_to_insert = result_columns.index("method") + 1
-            result_columns.insert(index_to_insert, "target_effect")
-            index_to_insert = result_columns.index("target_effect") + 1
+            result_columns.insert(index_to_insert, "estimand")
+            index_to_insert = result_columns.index("estimand") + 1
             result_columns.insert(index_to_insert, "balance")
             result_columns.extend(
                 [
@@ -2518,13 +2519,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             sample_ratio = None
 
         if self._exp_sample_ratio_col is not None:
-            unique_expected_ratio = df[self._exp_sample_ratio_col].unique()
+            if isinstance(self._exp_sample_ratio_col, float):
+                expected_ratio = self._exp_sample_ratio_col
+            else:
+                unique_expected_ratio = df[self._exp_sample_ratio_col].unique()
+                if len(unique_expected_ratio) > 1:
+                    log_and_raise_error(
+                        self._logger, "Multiple unique values by experiment found in expected ratio column!"
+                    )
+                expected_ratio = unique_expected_ratio[0]
 
-            if len(unique_expected_ratio) > 1:
-                log_and_raise_error(
-                    self._logger, "Multiple unique values by experiment found in expected ratio column!"
-                )  # noqa: E501
-            if not (0 < unique_expected_ratio < 1):
+            if not (0 < expected_ratio < 1):
                 log_and_raise_error(self._logger, "Expected ratio is not between 0 and 1!")
 
             try:
@@ -2532,7 +2537,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 srm_pvalue = None
 
                 z_stat, p_value = proportions_ztest(
-                    count=observed_count, nobs=n_total, value=unique_expected_ratio[0], alternative="two-sided"
+                    count=observed_count, nobs=n_total, value=expected_ratio, alternative="two-sided"
                 )
                 srm_pvalue = p_value
 
@@ -2540,7 +2545,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     srm_detected = True
                     self._logger.info(
                         f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio."  # noqa: E501
-                    )  # noqa: E501
+                    )
 
                 return sample_ratio, srm_detected, srm_pvalue
 
