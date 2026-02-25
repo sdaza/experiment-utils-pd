@@ -1244,6 +1244,7 @@ class PowerSim:
         hue : str
             Column used to colour lines within each plot (default ``"effect"``).
         """
+        from matplotlib.lines import Line2D
 
         value_vars = [str((i, j)) for i, j in self.comparisons]
 
@@ -1273,47 +1274,86 @@ class PowerSim:
         except TypeError:
             pass  # mixed types (e.g. per-group lists as strings) — leave as-is
 
-        d_relative_effect = {True: "relative", False: "absolute"}
-        effect_label = d_relative_effect[self.relative_effect]
-
         facet_values = [None] if facet_by is None else sorted(temp[facet_by].unique(), key=str)
 
-        # Sorted unique sizes (numeric) used for ordering and the reference line.
+        # Sorted unique sizes (numeric); converted to strings for categorical axis.
         all_sizes = sorted(temp["sample_size"].unique())
-        # String labels in sorted order — used as categorical x so every value
-        # appears and matplotlib's auto-ticker cannot drop any of them.
         size_labels = [str(s) for s in all_sizes]
+
+        # Metadata for title
+        baselines = sorted(data["baseline"].unique())
+        baseline_str = ", ".join(str(b) for b in baselines)
+
+        # Legend title: capitalise the column name
+        legend_title = hue.replace("_", " ").title()
+
+        def _fmt_hue(val):
+            """Format hue label: prefix effects with '+', keep others as-is."""
+            if hue == "effect":
+                try:
+                    return f"+{float(val):.3f}"
+                except (ValueError, TypeError):
+                    pass
+            return str(val)
 
         for facet_val in facet_values:
             subset = temp if facet_by is None else temp[temp[facet_by] == facet_val]
 
-            # Convert to string AFTER numeric sort so category order is preserved.
             plot_data = subset.copy()
             plot_data["sample_size"] = plot_data["sample_size"].astype(str)
 
-            ax = sns.lineplot(
+            # Build formatted hue column and sorted order for the legend.
+            hue_col = f"__{hue}_fmt"
+            plot_data[hue_col] = plot_data[hue].apply(_fmt_hue)
+            try:
+                hue_order_raw = sorted(subset[hue].unique(), key=float)
+            except (TypeError, ValueError):
+                hue_order_raw = sorted(subset[hue].unique(), key=str)
+            hue_order = [_fmt_hue(v) for v in hue_order_raw]
+
+            fig, ax = plt.subplots()
+            sns.lineplot(
                 x="sample_size",
                 y="power",
-                hue=hue,
+                hue=hue_col,
+                hue_order=hue_order,
+                marker="o",
                 errorbar=None,
                 data=plot_data,
                 legend="full",
+                ax=ax,
             )
-            # Keep tick order consistent with numeric sort.
+
+            # Dashed 80% reference line.
+            ax.axhline(y=0.8, linestyle="--", color="gray", linewidth=1)
+
+            # Force all sample-size labels on x-axis.
             ax.set_xticks(range(len(size_labels)))
             ax.set_xticklabels(size_labels, rotation=45, ha="right")
 
-            n_ticks = len(size_labels)
-            plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=n_ticks - 1, colors="gray")
-
-            title_suffix = "" if facet_by is None else f"\n{facet_by}={facet_val}"
-            plt.title(
-                f"Simulated power — {self.metric}s, {effect_label} effects"
-                f"  (sims per scenario: {self.nsim}){title_suffix}"
+            # Append threshold entry to the legend.
+            handles, labels = ax.get_legend_handles_labels()
+            handles.append(Line2D([0], [0], color="gray", linestyle="--", linewidth=1))
+            labels.append("80% threshold")
+            ax.legend(
+                handles=handles,
+                labels=labels,
+                title=legend_title,
+                bbox_to_anchor=(1.05, 1),
+                loc="upper left",
             )
-            plt.legend(bbox_to_anchor=(1.05, 1), title=hue, loc="upper left")
-            plt.xlabel("\n sample size (per group)")
-            plt.ylabel("power\n")
+
+            # Title
+            title_suffix = "" if facet_by is None else f"  [{facet_by}={facet_val}]"
+            ax.set_title(
+                f"Power by Sample Size and Effect Size{title_suffix}\n"
+                f"(baseline = {baseline_str},  α = {self.alpha},  {self.alternative})"
+            )
+
+            ax.set_xlabel("Sample size (per group)")
+            ax.set_ylabel("Power")
+            ax.set_ylim(0, 1.05)
+            ax.grid(axis="y", linestyle="--", alpha=0.4)
             plt.tight_layout()
             plt.show()
 
