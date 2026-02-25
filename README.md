@@ -266,11 +266,12 @@ print(weights_df.head())
 - `ps-xgboost`: Propensity score via XGBoost (flexible, non-linear)
 - `entropy`: Entropy balancing (exact moment matching)
 
-**Target effects:**
-- `ATT`: Average Treatment Effect on Treated (most common)
-- `ATE`: Average Treatment Effect (entire population)
-- `ATC`: Average Treatment Effect on Control
-- `ATO`: Average Treatment Effect for the Overlap population (overlap weights — see below)
+Target effects:
+
+    ATT: Average Treatment Effect on Treated (most common)
+    ATE: Average Treatment Effect (entire population)
+    ATC: Average Treatment Effect on Control
+    ATO: Average Treatment Effect for the Overlap population (overlap weights — see below)
 
 **Option 2: Regression Adjustment**
 

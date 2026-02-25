@@ -98,7 +98,7 @@ def test_sample_ratio_check(sample_data):
         outcomes=outcomes,
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
-        exp_sample_ratio_col=expected_ratio_col,
+        exp_sample_ratio=expected_ratio_col,
     )
 
     try:
@@ -116,7 +116,7 @@ def test_sample_ratio_check_float_constant(sample_data):
         outcomes="conversion",
         treatment_col="treatment",
         experiment_identifier="experiment",
-        exp_sample_ratio_col=0.5,
+        exp_sample_ratio=0.5,
     )
 
     try:

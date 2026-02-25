@@ -53,7 +53,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         List of columns to identify an experiment
     adjustment : str, optional
         Covariate adjustment method ('balance', 'IV'), by default None
-    exp_sample_ratio_col : str or float, optional
+    exp_sample_ratio : str or float, optional
         Expected sample ratio for the SRM test. Either a column name containing
         per-row expected ratios, or a single float constant (e.g. 0.5), by default None
     estimand : str, optional
@@ -200,7 +200,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         balance_covariates: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
-        exp_sample_ratio_col: str | float | None = None,
+        exp_sample_ratio: str | float | None = None,
         estimand: str = "ATT",
         balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
@@ -264,7 +264,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._treatment_col = treatment_col
         self._experiment_identifier = self.__ensure_list(experiment_identifier)
         self._adjustment = adjustment
-        self._exp_sample_ratio_col = exp_sample_ratio_col
+        self._exp_sample_ratio_col = exp_sample_ratio
         self._balance_method = balance_method
         self._target_effect = estimand
         self._trim_ps = trim_ps
