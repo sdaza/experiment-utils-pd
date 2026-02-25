@@ -1278,29 +1278,33 @@ class PowerSim:
 
         facet_values = [None] if facet_by is None else sorted(temp[facet_by].unique(), key=str)
 
-        # All unique sample sizes across the full grid (sorted numerically).
+        # Sorted unique sizes (numeric) used for ordering and the reference line.
         all_sizes = sorted(temp["sample_size"].unique())
+        # String labels in sorted order — used as categorical x so every value
+        # appears and matplotlib's auto-ticker cannot drop any of them.
+        size_labels = [str(s) for s in all_sizes]
 
         for facet_val in facet_values:
             subset = temp if facet_by is None else temp[temp[facet_by] == facet_val]
+
+            # Convert to string AFTER numeric sort so category order is preserved.
+            plot_data = subset.copy()
+            plot_data["sample_size"] = plot_data["sample_size"].astype(str)
+
             ax = sns.lineplot(
                 x="sample_size",
                 y="power",
                 hue=hue,
                 errorbar=None,
-                data=subset,
+                data=plot_data,
                 legend="full",
             )
-            plt.hlines(
-                y=0.8,
-                linestyles="dashed",
-                xmin=min(all_sizes),
-                xmax=max(all_sizes),
-                colors="gray",
-            )
-            # Force every sample-size value to appear as a tick label.
-            ax.set_xticks(all_sizes)
-            ax.set_xticklabels([str(s) for s in all_sizes], rotation=45, ha="right")
+            # Keep tick order consistent with numeric sort.
+            ax.set_xticks(range(len(size_labels)))
+            ax.set_xticklabels(size_labels, rotation=45, ha="right")
+
+            n_ticks = len(size_labels)
+            plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=n_ticks - 1, colors="gray")
 
             title_suffix = "" if facet_by is None else f"\n{facet_by}={facet_val}"
             plt.title(
