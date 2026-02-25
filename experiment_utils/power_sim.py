@@ -1056,8 +1056,8 @@ class PowerSim:
         threads: int = 3,
         plot: bool = False,
         correction: str = None,
-        facet_by: str = "effect",
-        hue: str = "comparison",
+        facet_by: str | None = "comparison",
+        hue: str = "effect",
     ) -> pd.DataFrame:  # noqa: E501
         """
         Return Pandas DataFrame with parameter combinations and statistical power.
@@ -1095,12 +1095,12 @@ class PowerSim:
             Multiple comparison correction method. If provided, overrides the instance
             correction for this call. Options: 'bonferroni', 'holm', 'hochberg',
             'sidak', 'fdr', 'none' (or None to use the instance default).
-        facet_by : str
+        facet_by : str or None
             Column whose unique values each get their own plot when ``plot=True``
-            (default ``"effect"``). Set to ``"comparison"`` for one plot per comparison.
+            (default ``"comparison"``).  Pass ``None`` to produce a single combined plot.
         hue : str
             Column used to colour lines within each plot when ``plot=True``
-            (default ``"comparison"``). Set to ``"effect"`` when ``facet_by="comparison"``.
+            (default ``"effect"``).
         """
 
         original_correction = None
@@ -1124,7 +1124,8 @@ class PowerSim:
 
         # Validate allocation_ratio
         num_groups = self.variants + 1
-        if allocation_ratio is not None:
+        custom_allocation = allocation_ratio is not None
+        if custom_allocation:
             if len(allocation_ratio) != num_groups:
                 log_and_raise_error(
                     self.logger,
@@ -1132,26 +1133,31 @@ class PowerSim:
                 )
             if abs(sum(allocation_ratio) - 1.0) > 1e-6:
                 log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
+            # Split scalar totals into per-group lists only for custom allocations.
+            # get_power already expands a scalar total uniformly, so for equal
+            # allocation we keep the original values (cleaner x-axis labels).
+            sample_sizes_for_power = [
+                [int(s * r) for r in allocation_ratio] if isinstance(s, int | float) else s for s in sample_sizes
+            ]
         else:
             allocation_ratio = [1.0 / num_groups] * num_groups
+            sample_sizes_for_power = sample_sizes
 
-        # When allocation_ratio is unequal, convert each scalar total sample size into
-        # a per-group list so get_power receives the right sizes directly.
-        def _apply_allocation(total):
-            if isinstance(total, int | float):
-                return [int(total * r) for r in allocation_ratio]
-            return total  # already a per-group list
-
-        sample_sizes_allocated = [_apply_allocation(s) for s in sample_sizes]
-
+        # Build the grid using the values passed to get_power, then restore the
+        # original (display-friendly) sample sizes for the output DataFrame.
         pdict = {
             "baseline": baseline_rates,
             "effect": effects,
-            "sample_size": sample_sizes_allocated,
+            "sample_size": sample_sizes_for_power,
             "compliance": compliances,
             "standard_deviation": standard_deviations,
         }
         grid = self.__expand_grid(pdict)
+
+        if custom_allocation:
+            # Replace per-group lists with original totals so labels stay readable.
+            display_pdict = {**pdict, "sample_size": sample_sizes}
+            grid["sample_size"] = self.__expand_grid(display_pdict)["sample_size"]
 
         parameters = list(grid.itertuples(index=False, name=None))
 
@@ -1217,8 +1223,8 @@ class PowerSim:
     def plot_power(
         self,
         data: pd.DataFrame,
-        facet_by: str = "effect",
-        hue: str = "comparison",
+        facet_by: str | None = "comparison",
+        hue: str = "effect",
     ) -> None:
         """
         Plot statistical power by scenario.
@@ -1227,11 +1233,11 @@ class PowerSim:
         ----------
         data : pd.DataFrame
             Output of :meth:`grid_sim_power`.
-        facet_by : str
-            Column whose unique values each get their own plot (default ``"effect"``).
-            Use ``"comparison"`` to produce one plot per comparison with effects as hue.
+        facet_by : str or None
+            Column whose unique values each get their own plot
+            (default ``"comparison"``).  Pass ``None`` for a single combined plot.
         hue : str
-            Column used to colour lines within each plot (default ``"comparison"``).
+            Column used to colour lines within each plot (default ``"effect"``).
         """
 
         value_vars = [str((i, j)) for i, j in self.comparisons]
@@ -1257,20 +1263,25 @@ class PowerSim:
         temp = pd.melt(data, id_vars=cols, var_name="comparison", value_name="power", value_vars=value_vars)
 
         d_relative_effect = {True: "relative", False: "absolute"}
+        effect_label = d_relative_effect[self.relative_effect]
 
-        for facet_val in temp[facet_by].unique():
+        facet_values = [None] if facet_by is None else temp[facet_by].unique()
+
+        for facet_val in facet_values:
+            subset = temp if facet_by is None else temp[temp[facet_by] == facet_val]
             ax = sns.lineplot(
                 x="sample_size",
                 y="power",
                 hue=hue,
                 errorbar=None,
-                data=temp[temp[facet_by] == facet_val],
+                data=subset,
                 legend="full",
             )
             plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=len(temp.sample_size.unique()) - 1, colors="gray")
+            title_suffix = "" if facet_by is None else f"\n{facet_by}={facet_val}"
             plt.title(
-                f"Simulated power — {self.metric}s, {d_relative_effect[self.relative_effect]} effects\n"
-                f"{facet_by}={facet_val}  (sims per scenario: {self.nsim})"
+                f"Simulated power — {self.metric}s, {effect_label} effects"
+                f"  (sims per scenario: {self.nsim}){title_suffix}"
             )
             plt.legend(bbox_to_anchor=(1.05, 1), title=hue, loc="upper left")
             plt.xlabel("\n sample size")
