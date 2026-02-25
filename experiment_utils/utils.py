@@ -766,7 +766,11 @@ def balanced_random_assignment(
         if variants is None:
             if isinstance(allocation_ratio, dict):
                 raise ValueError("When variants is None, allocation_ratio must be a float")
-            n_test = int(n * allocation_ratio)
+            # Use round() instead of int() to avoid systematic under-allocation when
+            # many small strata are used: int() always floors, so every stratum gives
+            # slightly fewer treated units than the target ratio. round() distributes
+            # the rounding error evenly (up/down) so errors cancel across strata.
+            n_test = round(n * allocation_ratio)
             n_control = n - n_test
             assignment = ["test"] * n_test + ["control"] * n_control
         else:
@@ -781,7 +785,7 @@ def balanced_random_assignment(
                 assignment = []
                 allocated = 0
                 for _, variant in enumerate(variants[:-1]):
-                    n_variant = int(n * allocation_ratio[variant])
+                    n_variant = round(n * allocation_ratio[variant])
                     assignment.extend([variant] * n_variant)
                     allocated += n_variant
                 assignment.extend([variants[-1]] * (n - allocated))
@@ -790,7 +794,7 @@ def balanced_random_assignment(
                 if len(variants) == 2:
                     # Ratio applies to the first variant; remainder goes to the second.
                     # e.g. variants=[1, 0], allocation_ratio=0.667 → 66.7% label-1, 33.3% label-0
-                    n_first = int(n * allocation_ratio)
+                    n_first = round(n * allocation_ratio)
                     assignment = [variants[0]] * n_first + [variants[1]] * (n - n_first)
                 else:
                     # For 3+ variants a float ratio is ambiguous; fall back to equal
