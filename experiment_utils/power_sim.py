@@ -11,7 +11,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from multiprocess.pool import ThreadPool
 from scipy import stats
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from .utils import get_logger, log_and_raise_error
 
@@ -735,43 +735,67 @@ class PowerSim:
 
                 # Stage 2: Run statistical tests in parallel (multiprocessing)
                 self.logger.debug("Stage 2/2: Computing statistical tests (multiprocessing)...")
-                results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
-                    delayed(self._compute_statistical_tests)(
-                        sim_data=sim_data,
-                        sample_size=sample_size,
-                        comparisons_to_compute=comparisons_to_compute,
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
+                            delayed(self._compute_statistical_tests)(
+                                sim_data=sim_data,
+                                sample_size=sample_size,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for sim_data in sim_datasets
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
                     )
-                    for sim_data in sim_datasets
                 )
 
             elif self.parallel_strategy == "threading":
                 # Pure threading approach (memory-efficient but GIL-limited)
                 self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
-                results = Parallel(n_jobs=-1, backend="threading")(
-                    delayed(self._run_single_power_simulation)(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_size,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        comparisons_to_compute=comparisons_to_compute,
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                            delayed(self._run_single_power_simulation)(
+                                baseline=baseline,
+                                effect=effect,
+                                sample_size=sample_size,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for _ in range(self.nsim)
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
                     )
-                    for _ in range(self.nsim)
                 )
 
             else:  # "loky" or default
                 # Pure multiprocessing approach (high memory but true parallelism)
                 self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
-                results = Parallel(n_jobs=-1, backend="loky")(
-                    delayed(self._run_single_power_simulation)(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_size,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        comparisons_to_compute=comparisons_to_compute,
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="loky", return_as="generator")(
+                            delayed(self._run_single_power_simulation)(
+                                baseline=baseline,
+                                effect=effect,
+                                sample_size=sample_size,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for _ in range(self.nsim)
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
                     )
-                    for _ in range(self.nsim)
                 )
 
             # Aggregate results
@@ -788,7 +812,7 @@ class PowerSim:
             min_sims = 50  # Minimum simulations before considering early stopping
 
             # iterate over simulations
-            for _i in range(self.nsim):
+            for _i in tqdm(range(self.nsim), desc="Simulations", unit="sim", leave=False):
                 significant = self._run_single_power_simulation(
                     baseline=baseline,
                     effect=effect,
@@ -1670,7 +1694,7 @@ class PowerSim:
             return None
 
         # For each target comparison, find the required sample size
-        for group1, group2 in target_comparisons:
+        for group1, group2 in tqdm(target_comparisons, desc="Finding sample size", unit="comp"):
             comp_target_power = power_dict[(group1, group2)]
 
             # Get analytical estimate for better starting point
