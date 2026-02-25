@@ -672,6 +672,8 @@ class PowerSim:
         # Set default values for mutable arguments
         if baseline is None:
             baseline = 1.0
+        elif isinstance(baseline, (list, tuple)):
+            baseline = float(baseline[0])
         if effect is None:
             effect = [0.10]
         elif isinstance(effect, int | float):
@@ -1022,41 +1024,76 @@ class PowerSim:
         power_df = power_df[["comparisons", "power"]]
         return power_df
 
+    @staticmethod
+    def _as_scenario_list(values):
+        """Convert a grid parameter to a flat list of per-scenario values.
+
+        Handles:
+        - scalar              → [scalar]
+        - [scalar, ...]       → [scalar, ...] (each element is one scenario)
+        - [[v1,v2], [v3,v4]]  → [[v1,v2], [v3,v4]] (each sub-list is one scenario)
+        Single-element inner lists are unwrapped so ``[[0.33]]`` becomes ``[0.33]``
+        and ``[[1000], [2000]]`` becomes ``[1000, 2000]``.
+        """
+        if values is None:
+            return None
+        if not isinstance(values, list):
+            return [values]
+        return [v[0] if isinstance(v, (list, tuple)) and len(v) == 1 else v for v in values]
+
     def grid_sim_power(
         self,
-        baseline_rates: list[float] = None,
-        effects: list[float] = None,
-        sample_sizes: list[int] = None,  # noqa: E501
-        compliances: list[list[float]] = None,
-        standard_deviations: list[list[float]] = None,
+        baseline_rates: float | list = None,
+        effects: float | list = None,
+        sample_sizes: int | list = None,
+        compliances: float | list = None,
+        standard_deviations: float | list = None,
         threads: int = 3,
         plot: bool = False,
     ) -> pd.DataFrame:  # noqa: E501
         """
-        Return Pandas DataFrame with parameter combinations and statistical power
+        Return Pandas DataFrame with parameter combinations and statistical power.
+
+        Each parameter can be provided as a scalar, a flat list of scenario values,
+        or a list of lists (one sub-list per scenario).  Single-element inner lists
+        are unwrapped automatically, so both ``[[0.33]]`` and ``[0.33]`` are valid
+        for a single baseline scenario.
 
         Parameters
         ----------
-        baseline_rates : list of float
-            List of baseline rate scenarios to sweep over (e.g., [0.10, 0.20]).
-        effects : list
-            List with effect sizes.
-        sample_sizes : list
-            List with sample for control and variants.
-        compliances : list
-            List with compliance values.
-        standard_deviations : list
-            List of standard deviations of control and variants.
+        baseline_rates : float or list of float
+            Baseline rate scenarios (e.g., ``0.10`` or ``[0.10, 0.20]``).
+        effects : float, list of float, or list of lists
+            Effect size scenarios.  Use a list of lists for multi-variant effects,
+            e.g. ``[[0.01, 0.03], [0.03, 0.05]]`` for two scenarios with two variants.
+        sample_sizes : int, list of int, or list of lists
+            Sample size scenarios.  A flat list such as ``[1000, 2000, 5000]`` creates
+            one equal-allocation scenario per entry.  Use a list of lists for
+            per-group allocations, e.g. ``[[1000, 500], [2000, 1000]]``.
+        compliances : float, list of float, or list of lists
+            Compliance scenarios.
+        standard_deviations : float, list of float, or list of lists
+            Standard deviation scenarios.
         threads : int
             Number of threads for parallelization.
         plot : bool
             Whether to plot the results.
         """
 
+        baseline_rates = self._as_scenario_list(baseline_rates)
+        effects = self._as_scenario_list(effects)
+        sample_sizes = self._as_scenario_list(sample_sizes)
+
         if compliances is None:
-            compliances = [[1]]
+            compliances = [1]
+        else:
+            compliances = self._as_scenario_list(compliances)
+
         if standard_deviations is None:
-            standard_deviations = [[1]]
+            standard_deviations = [1]
+        else:
+            standard_deviations = self._as_scenario_list(standard_deviations)
+
         pdict = {
             "baseline": baseline_rates,
             "effect": effects,
