@@ -2006,8 +2006,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         sort_by_magnitude: bool = True,
         group_by: str | list[str] | None = None,
         y: str = "experiment",
-        panel_titles: str | dict | None = None,
-        color_by: str | None = None,
+        panel_titles: str | list | dict | None = None,
+        row_labels: dict | None = None,
         show_labels: bool = False,
     ) -> "plt.Figure | dict | None":
         """
@@ -2037,7 +2037,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         show_zero_line : bool, optional
             Vertical reference line at zero (default True).
         sort_by_magnitude : bool, optional
-            Sort rows within each panel by ``|effect|`` descending (default ``True``).
+            Sort rows within each panel by effect value descending (default ``True``).
         group_by : str or list[str], optional
             Column(s) to split into separate figures — one figure per unique value.
             Row labels are built from ``experiment_identifier`` minus these columns.
@@ -2046,13 +2046,31 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             What to place on the y-axis rows.
             ``"experiment"`` (default) — rows = experiments, panels = outcomes.
             ``"outcome"`` — rows = outcomes, panels = experiment labels.
-        color_by : str, optional
-            Column name to use for color grouping instead of significance.
-            Each unique value gets its own color; dots for the same row are
-            offset vertically. Useful for showing multiple variants side-by-side
-            (e.g. ``color_by="treatment_group"``).
+        panel_titles : str or list or dict, optional
+            Override the auto-generated panel (subplot) titles.
+
+            - ``None`` (default) — use the panel value as the title.
+            - ``str`` — same string for every panel (``""`` hides all).
+            - ``list`` — titles in panel order, e.g. ``["Revenue ($)", "CVR"]``.
+            - ``dict`` — map each panel value to a display string.
+
+            What counts as a "panel value" depends on *y*:
+
+            - ``y="experiment"`` (default): one panel per **outcome**, so
+              keys are outcome names, e.g.
+              ``{"revenue": "Revenue ($)", "converted": "Conversion rate"}``.
+            - ``y="outcome"``: one panel per **experiment label**, so keys
+              are the ``experiment_identifier`` column values joined with
+              ``" | "``, e.g. ``{"US | email": "US — Email campaign"}``.
+        row_labels : dict, optional
+            Rename individual y-axis row labels.  Keys are the auto-generated
+            labels (``experiment_identifier`` column values joined with ``" | "``);
+            values are the display strings to show instead.
+            e.g. ``{"US | email": "Email (US)", "EU | push": "Push (EU)"}``.
+            Rows not present in the dict keep their auto-generated label.
         show_labels : bool, optional
-            Annotate each dot with its effect value (default ``False``).
+            Annotate each dot with its effect value (and ``*`` when significant).
+            Default ``False``.
 
         Returns
         -------
@@ -2088,7 +2106,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             group_by=group_by,
             y=y,
             panel_titles=panel_titles,
-            color_by=color_by,
+            row_labels=row_labels,
             show_labels=show_labels,
         )
 
