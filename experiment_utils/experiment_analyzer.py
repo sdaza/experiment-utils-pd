@@ -2007,6 +2007,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         group_by: str | list[str] | None = None,
         y: str = "experiment",
         panel_titles: str | dict | None = None,
+        color_by: str | None = None,
+        show_labels: bool = False,
     ) -> "plt.Figure | dict | None":
         """
         Cleveland dot plot of treatment effects across experiments.
@@ -2044,6 +2046,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             What to place on the y-axis rows.
             ``"experiment"`` (default) — rows = experiments, panels = outcomes.
             ``"outcome"`` — rows = outcomes, panels = experiment labels.
+        color_by : str, optional
+            Column name to use for color grouping instead of significance.
+            Each unique value gets its own color; dots for the same row are
+            offset vertically. Useful for showing multiple variants side-by-side
+            (e.g. ``color_by="treatment_group"``).
+        show_labels : bool, optional
+            Annotate each dot with its effect value (default ``False``).
 
         Returns
         -------
@@ -2079,6 +2088,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             group_by=group_by,
             y=y,
             panel_titles=panel_titles,
+            color_by=color_by,
+            show_labels=show_labels,
         )
 
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
