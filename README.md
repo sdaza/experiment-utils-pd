@@ -16,6 +16,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
+- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
@@ -43,6 +44,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
     - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
+    - [Visualizing Effects](#visualizing-effects)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
@@ -82,11 +84,12 @@ pip install git+https://github.com/sdaza/experiment-utils-pd.git
 
 ## Quick Start
 
-All main classes are available directly from the package:
+All main classes and standalone functions are available directly from the package:
 
 ```python
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
+from experiment_utils import plot_effects, plot_power
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -798,6 +801,92 @@ A simpler alternative that weights by treatment group size (useful for quick sum
 aggregated = analyzer.aggregate_effects(grouping_cols=["outcome"])
 print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 ```
+
+### Visualizing Effects
+
+`plot_effects` produces a Cleveland dot plot — one panel per outcome, one row per experiment — with confidence intervals and optional meta-analysis pooling.  It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+
+**Basic usage (via analyzer)**
+
+```python
+analyzer.get_effects()
+
+# All outcomes, rows sorted by |effect| (default)
+fig = analyzer.plot_effects(title="Treatment Effects")
+fig.savefig("effects.png", bbox_inches="tight")
+```
+
+**Standalone usage**
+
+```python
+from experiment_utils import plot_effects
+
+fig = plot_effects(
+    results=analyzer.results,
+    experiment_identifier="experiment",
+    alpha=0.05,
+    title="Treatment Effects",
+)
+```
+
+**Add a pooled meta-analysis row**
+
+```python
+# Auto-compute pooled estimate
+fig = analyzer.plot_effects(
+    outcomes="revenue",
+    meta_analysis=True,
+    title="Revenue — with Pooled Estimate",
+)
+
+# Pass a pre-computed combine_effects() DataFrame
+pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+fig = analyzer.plot_effects(meta_analysis=pooled)
+```
+
+**Group by a column — one figure per group**
+
+When `experiment_identifier` contains multiple columns (e.g. `["country", "type"]`), `group_by` splits into separate figures. Row labels are built from the remaining identifier columns automatically.
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted"],
+    experiment_identifier=["country", "type"],
+)
+analyzer.get_effects()
+
+# One figure per country; rows = type
+figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
+for country, fig in figs.items():
+    fig.savefig(f"effects_{country}.png", bbox_inches="tight")
+
+# One figure per experiment type; rows = country
+figs = analyzer.plot_effects(group_by="type")
+```
+
+`group_by` returns a `dict[str, Figure]`; without it a single `Figure` is returned.
+
+**Relative effects**
+
+```python
+fig = analyzer.plot_effects(effect="relative", meta_analysis=True)
+```
+
+**Key parameters**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `outcomes` | `None` | Outcome(s) to include; `None` = all |
+| `effect` | `"absolute"` | `"absolute"` or `"relative"` |
+| `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
+| `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
+| `group_by` | `None` | Column(s) to split into separate figures |
+| `comparison` | `None` | `(treatment, control)` tuple to filter to one comparison |
+| `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
+| `show_zero_line` | `True` | Vertical reference line at zero |
+| `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis
 

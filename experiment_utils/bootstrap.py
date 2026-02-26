@@ -366,6 +366,8 @@ class BootstrapMixin:
             (absolute_effect, relative_effect, error_info)
         """
         try:
+            import inspect
+
             estimator_params = {
                 "data": prepared_data,
                 "outcome_variable": outcome,
@@ -389,6 +391,9 @@ class BootstrapMixin:
 
             if interaction_covariates and model_type == "ols":
                 estimator_params["interaction_covariates"] = interaction_covariates
+
+            if "verbose" in inspect.signature(model_func).parameters:
+                estimator_params["verbose"] = False
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)

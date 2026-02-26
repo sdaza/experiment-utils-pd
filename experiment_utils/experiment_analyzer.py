@@ -1994,6 +1994,85 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         final_columns = existing_columns + remaining_columns
         return aggregate_results[final_columns]
 
+    def plot_effects(
+        self,
+        outcomes: list[str] | str | None = None,
+        effect: str = "absolute",
+        meta_analysis: bool | pd.DataFrame | None = None,
+        comparison: tuple | None = None,
+        figsize: tuple | None = None,
+        title: str | None = None,
+        show_zero_line: bool = True,
+        sort_by_magnitude: bool = True,
+        group_by: str | list[str] | None = None,
+    ) -> "plt.Figure | dict | None":
+        """
+        Cleveland dot plot of treatment effects across experiments.
+
+        Each outcome gets its own panel.  Experiments are shown as rows with
+        a dot at the point estimate and a bracketed confidence interval.
+        An optional pooled (meta-analysis) row is appended at the bottom.
+
+        Parameters
+        ----------
+        outcomes : str or list[str], optional
+            Outcomes to include.  If None all outcomes in results are shown.
+        effect : {"absolute", "relative"}, optional
+            Which effect metric to display (default "absolute").
+        meta_analysis : bool or pd.DataFrame, optional
+            - True  → compute pooled estimate via ``combine_effects()``
+            - pd.DataFrame → use a pre-computed ``combine_effects()`` result
+            - None (default) → no pooled row
+        comparison : tuple, optional
+            ``(treatment_group, control_group)`` to restrict the plot to one
+            specific comparison.
+        figsize : tuple, optional
+            ``(width, height)`` in inches.  Auto-sized when None.
+        title : str, optional
+            Figure-level suptitle.
+        show_zero_line : bool, optional
+            Vertical reference line at zero (default True).
+        sort_by_magnitude : bool, optional
+            Sort rows within each panel by ``|effect|`` descending (default ``True``).
+        group_by : str or list[str], optional
+            Column(s) to split into separate figures — one figure per unique value.
+            Row labels are built from ``experiment_identifier`` minus these columns.
+            Returns a ``dict`` keyed by group value instead of a single figure.
+
+        Returns
+        -------
+        matplotlib.figure.Figure, dict, or None
+        """
+        from .plotting import plot_effects as _plot_effects
+
+        if self._results is None or self._results.empty:
+            self._logger.warning("No results available. Run get_effects() first.")
+            return None
+
+        meta_df = None
+        if meta_analysis is True:
+            meta_df = self.combine_effects(grouping_cols=["outcome"])
+            meta_df["_label"] = "Pooled"
+        elif isinstance(meta_analysis, pd.DataFrame):
+            meta_df = meta_analysis.copy()
+            if "_label" not in meta_df.columns:
+                meta_df["_label"] = "Pooled"
+
+        return _plot_effects(
+            results=self._results,
+            experiment_identifier=self._experiment_identifier,
+            alpha=self._alpha,
+            outcomes=outcomes,
+            effect=effect,
+            meta_df=meta_df,
+            comparison=comparison,
+            figsize=figsize,
+            title=title,
+            show_zero_line=show_zero_line,
+            sort_by_magnitude=sort_by_magnitude,
+            group_by=group_by,
+        )
+
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
         group["gweight"] = group["treatment_units"].astype(int)
         absolute_effect = np.sum(group["absolute_effect"] * group["gweight"]) / np.sum(group["gweight"])
