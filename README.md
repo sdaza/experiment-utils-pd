@@ -804,16 +804,52 @@ print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 
 ### Visualizing Effects
 
-`plot_effects` produces a Cleveland dot plot — one panel per outcome, one row per experiment — with confidence intervals and optional meta-analysis pooling.  It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+`plot_effects` produces a Cleveland dot plot with confidence intervals and optional meta-analysis pooling. It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
 
-**Basic usage (via analyzer)**
+The two axis roles are controlled by `y`:
+
+| `y` | Rows (y-axis) | Panels (subplots) |
+|---|---|---|
+| `"experiment"` *(default)* | Experiment labels | Outcomes |
+| `"outcome"` | Outcomes | Experiment labels |
+
+**Basic usage — multiple experiments, outcomes as panels (default)**
 
 ```python
 analyzer.get_effects()
 
-# All outcomes, rows sorted by |effect| (default)
 fig = analyzer.plot_effects(title="Treatment Effects")
 fig.savefig("effects.png", bbox_inches="tight")
+```
+
+**Single experiment, multiple outcomes on the y-axis**
+
+When you have one experiment and several outcomes, flip the axes with `y="outcome"` and customise the panel subtitle with `panel_titles`:
+
+```python
+fig = analyzer.plot_effects(
+    y="outcome",
+    title="My Experiment",
+    panel_titles="Treatment vs Control",   # single string → same for all panels
+)
+```
+
+**Multiple experiments, outcomes on the y-axis**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted", "orders"],
+    experiment_identifier=["country", "type"],
+)
+analyzer.get_effects()
+
+# One panel per experiment group; rows = outcomes
+fig = analyzer.plot_effects(
+    y="outcome",
+    panel_titles={"US | email": "US — Email", "EU | push": "EU — Push"},  # dict overrides
+)
 ```
 
 **Standalone usage**
@@ -844,19 +880,11 @@ pooled = analyzer.combine_effects(grouping_cols=["outcome"])
 fig = analyzer.plot_effects(meta_analysis=pooled)
 ```
 
-**Group by a column — one figure per group**
+**Split into one figure per group**
 
-When `experiment_identifier` contains multiple columns (e.g. `["country", "type"]`), `group_by` splits into separate figures. Row labels are built from the remaining identifier columns automatically.
+When `experiment_identifier` contains multiple columns (e.g. `["country", "type"]`), `group_by` produces one figure per unique value. Row labels are built from the remaining identifier columns automatically.
 
 ```python
-analyzer = ExperimentAnalyzer(
-    data=df,
-    treatment_col="treatment",
-    outcomes=["revenue", "converted"],
-    experiment_identifier=["country", "type"],
-)
-analyzer.get_effects()
-
 # One figure per country; rows = type
 figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
 for country, fig in figs.items():
@@ -866,7 +894,7 @@ for country, fig in figs.items():
 figs = analyzer.plot_effects(group_by="type")
 ```
 
-`group_by` returns a `dict[str, Figure]`; without it a single `Figure` is returned.
+`group_by` returns `dict[str, Figure]`; without it a single `Figure` is returned.
 
 **Relative effects**
 
@@ -874,10 +902,24 @@ figs = analyzer.plot_effects(group_by="type")
 fig = analyzer.plot_effects(effect="relative", meta_analysis=True)
 ```
 
+**Multiple comparison adjustments**
+
+If `adjust_pvalues()` has been called before plotting, the plot automatically uses the adjusted significance column (`stat_significance_mcp`) and updates the legend label accordingly:
+
+```python
+analyzer.get_effects()
+analyzer.adjust_pvalues(method="holm")
+
+# Legend shows "Significant (holm, α=0.05)" and coloring uses adjusted p-values
+fig = analyzer.plot_effects()
+```
+
 **Key parameters**
 
 | Parameter | Default | Description |
 |---|---|---|
+| `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
+| `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
 | `effect` | `"absolute"` | `"absolute"` or `"relative"` |
 | `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |

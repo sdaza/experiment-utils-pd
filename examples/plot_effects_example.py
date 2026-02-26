@@ -116,8 +116,58 @@ fig4 = analyzer.plot_effects(
 fig4.savefig("examples/plot_effects_meta.png", bbox_inches="tight", dpi=150)
 plt.close(fig4)
 
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 5 — y="outcome": outcomes on the y-axis, experiments as panels
+#           useful when there are many outcomes and few experiments
+# ─────────────────────────────────────────────────────────────────────────────
+fig5 = analyzer.plot_effects(
+    y="outcome",
+    title="Effects by Experiment",
+)
+fig5.savefig("examples/plot_effects_y_outcome.png", bbox_inches="tight", dpi=150)
+plt.close(fig5)
+
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 6 — single experiment with multiple outcomes (most common y="outcome" use)
+#           panel_titles overrides the auto subplot title
+# ─────────────────────────────────────────────────────────────────────────────
+np.random.seed(99)
+n_single = 1200
+t_single = np.random.binomial(1, 0.5, n_single)
+df_single = pd.DataFrame(
+    {
+        "experiment": "email_campaign",
+        "treatment": t_single,
+        "revenue": np.random.normal(50, 20, n_single) + 5.5 * t_single,
+        "converted": np.random.binomial(1, np.clip(0.12 + 0.04 * t_single, 0, 1), n_single),
+        "orders": np.random.poisson(2 + t_single, n_single),
+        "sessions": np.random.normal(3, 1, n_single) + 0.3 * t_single,
+    }
+)
+
+analyzer_single = ExperimentAnalyzer(
+    data=df_single,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted", "orders", "sessions"],
+    experiment_identifier="experiment",
+    pvalue_adjustment=None,
+)
+analyzer_single.get_effects()
+
+fig6 = analyzer_single.plot_effects(
+    y="outcome",
+    title="Email Campaign Results",
+    panel_titles="Treatment vs Control",
+)
+fig6.savefig("examples/plot_effects_single_exp.png", bbox_inches="tight", dpi=150)
+plt.close(fig6)
+
 print("\nAll plots saved to examples/")
 print("  plot_effects_basic.png")
 print("  plot_effects_country_us.png  /  plot_effects_country_eu.png")
 print("  plot_effects_type_email.png  /  plot_effects_type_push.png  /  plot_effects_type_in_app.png")
 print("  plot_effects_meta.png")
+print("  plot_effects_y_outcome.png")
+print("  plot_effects_single_exp.png")

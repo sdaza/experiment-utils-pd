@@ -40,31 +40,46 @@ def _render_effects_figure(
     title: str | None,
     show_zero_line: bool,
     sort_by_magnitude: bool,
+    panel_col: str = "outcome",
+    row_col: str = "_label",
+    panel_titles: str | dict | None = None,
 ) -> plt.Figure:
-    """Build and return a single effects figure for *data* (already labelled)."""
+    """Build and return a single effects figure for *data* (already labelled).
+
+    Parameters
+    ----------
+    panel_col : str
+        Column whose unique values become separate subplots (default ``"outcome"``).
+    row_col : str
+        Column whose values become y-axis rows within each subplot
+        (default ``"_label"``).
+    """
     # Use MCP-adjusted significance when available
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
     mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
     sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
 
-    n_outcomes = len(unique_outcomes)
-    max_rows = max(data[data["outcome"] == o]["_label"].nunique() for o in unique_outcomes)
-    if meta_df is not None:
+    unique_panels = list(data[panel_col].unique())
+    n_panels = len(unique_panels)
+    max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
+    if meta_df is not None and panel_col == "outcome":
         max_rows += 1
     if figsize is None:
-        fig_h = max(4.5, 0.65 * max_rows + 2.4)
-        fig_w = max(5.5, 6.0 * n_outcomes)
+        fig_h = max(3.5, 0.65 * max_rows + 2.4)
+        # Cap per-panel width so many-panel layouts stay readable
+        panel_w = max(3.2, min(5.5, 14.0 / n_panels))
+        fig_w = max(5.5, panel_w * n_panels)
         figsize = (fig_w, fig_h)
 
-    fig, axes = plt.subplots(1, n_outcomes, figsize=figsize, squeeze=False)
+    fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
 
-    for ax, outcome in zip(axes.flatten(), unique_outcomes, strict=False):
-        od = data[data["outcome"] == outcome].copy()
+    for ax, panel_val in zip(axes.flatten(), unique_panels, strict=False):
+        od = data[data[panel_col] == panel_val].copy()
 
         if sort_by_magnitude:
             od = od.reindex(od[eff_col].abs().sort_values(ascending=False).index)
 
-        labels = list(od["_label"])
+        labels = list(od[row_col])
         effs = list(od[eff_col])
         los = list(od[lo_col])
         his = list(od[hi_col])
@@ -72,7 +87,8 @@ def _render_effects_figure(
 
         has_meta = False
         meta_label = None
-        if meta_df is not None:
+        if meta_df is not None and panel_col == "outcome":
+            outcome = panel_val
             mo = meta_df[meta_df["outcome"] == outcome] if "outcome" in meta_df.columns else meta_df
             if not mo.empty:
                 has_meta = True
@@ -132,7 +148,13 @@ def _render_effects_figure(
             ax.spines[spine].set_visible(False)
         ax.spines["bottom"].set_color(_CLR_SPINE)
         ax.spines["bottom"].set_linewidth(0.8)
-        ax.set_title(outcome, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
+        if isinstance(panel_titles, dict):
+            ptitle = panel_titles.get(panel_val, str(panel_val))
+        elif isinstance(panel_titles, str):
+            ptitle = panel_titles
+        else:
+            ptitle = str(panel_val)
+        ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
         ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5, prune="both"))
 
     legend_items = [
@@ -186,6 +208,8 @@ def plot_effects(
     show_zero_line: bool = True,
     sort_by_magnitude: bool = True,
     group_by: str | list[str] | None = None,
+    y: str = "experiment",
+    panel_titles: str | dict | None = None,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     """
     Cleveland dot plot of treatment effects across experiments.
@@ -226,6 +250,19 @@ def plot_effects(
         Column(s) to split into separate figures — one figure per unique value.
         Row labels are built from ``experiment_identifier`` minus these columns.
         Returns a ``dict`` keyed by the group value instead of a single figure.
+    y : {"experiment", "outcome"}, optional
+        What to place on the y-axis (rows).
+
+        - ``"experiment"`` (default) — rows = experiment labels, panels = outcomes.
+        - ``"outcome"`` — rows = outcomes, panels = experiment labels.
+
+    panel_titles : str or dict, optional
+        Override the auto-generated panel (subplot) titles.
+
+        - ``str`` — use the same string for every panel.
+        - ``dict`` — map each panel value to a custom string,
+          e.g. ``{"exp_A": "Experiment A", "exp_B": "Experiment B"}``.
+        - ``None`` (default) — use the panel value as the title.
 
     Returns
     -------
@@ -308,6 +345,14 @@ def plot_effects(
         return df
 
     # ── render: grouped or single ─────────────────────────────────────
+    # Resolve panel / row axes based on y parameter
+    if y == "outcome":
+        panel_col = "_label"
+        row_col = "outcome"
+    else:
+        panel_col = "outcome"
+        row_col = "_label"
+
     render_kw = dict(
         unique_outcomes=unique_outcomes,
         eff_col=eff_col,
@@ -319,6 +364,9 @@ def plot_effects(
         figsize=figsize,
         show_zero_line=show_zero_line,
         sort_by_magnitude=sort_by_magnitude,
+        panel_col=panel_col,
+        row_col=row_col,
+        panel_titles=panel_titles,
     )
 
     if group_cols:
