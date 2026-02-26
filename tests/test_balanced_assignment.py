@@ -71,7 +71,7 @@ df["assignment_6"] = balanced_random_assignment(
     seed=42,
     variants=["control", "variant_a", "variant_b"],
     allocation_ratio={"control": 0.4, "variant_a": 0.4, "variant_b": 0.2},
-    balance_covariates=["segment"],
+    stratification_covariates=["segment"],
 )
 print("Overall distribution:")
 print(df["assignment_6"].value_counts())
@@ -95,7 +95,7 @@ df["region"] = np.random.choice(["North", "South", "East", "West"], n)
 
 # Assignment with balance checking using categorical stratification
 df["assignment_7"] = balanced_random_assignment(
-    df, seed=42, allocation_ratio=0.5, balance_covariates=["age_group"], check_balance=True
+    df, seed=42, allocation_ratio=0.5, stratification_covariates=["age_group"]
 )
 
 # %%
@@ -105,7 +105,7 @@ print("=" * 60)
 
 # Assignment with multiple categorical covariates
 df["assignment_8"] = balanced_random_assignment(
-    df, seed=42, allocation_ratio=0.5, balance_covariates=["age_group", "region"], check_balance=True
+    df, seed=42, allocation_ratio=0.5, stratification_covariates=["age_group", "region"]
 )
 
 # %%
@@ -118,9 +118,8 @@ df["assignment_9"] = balanced_random_assignment(
     df,
     seed=42,
     variants=["control", "variant_a", "variant_b"],
-    balance_covariates=["age_group"],
+    stratification_covariates=["age_group"],
     comparison=[("variant_a", "control"), ("variant_b", "control")],
-    check_balance=True,
 )
 
 # %%
@@ -130,7 +129,7 @@ print("=" * 60)
 
 # Assignment with balance checking disabled
 df["assignment_10"] = balanced_random_assignment(
-    df, seed=42, allocation_ratio=0.5, balance_covariates=["region"], check_balance=False
+    df, seed=42, allocation_ratio=0.5, stratification_covariates=["region"]
 )
 print("No balance output (check_balance=False)")
 
@@ -144,8 +143,7 @@ df["assignment_11"] = balanced_random_assignment(
     df,
     seed=42,
     allocation_ratio=0.5,
-    balance_covariates=["age_group", "region"],
-    check_balance=True,
+    stratification_covariates=["age_group", "region"],
     smd_threshold=0.05,  # Stricter threshold
 )
 
