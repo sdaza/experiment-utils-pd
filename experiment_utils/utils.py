@@ -647,22 +647,62 @@ def check_covariate_balance(
     return pd.concat(balance_results, ignore_index=True)
 
 
+def _check_stratification_quality(
+    df: pd.DataFrame,
+    stratify_cols: list[str],
+    n_variants: int,
+    min_stratum_pct: float,
+    min_stratum_n: int,
+    logger: logging.Logger,
+) -> None:
+    """
+    Warn when any category of a stratification variable has too few observations.
+
+    A category is flagged when it falls below *both* a minimum percentage of the
+    total sample and a minimum absolute count.  Either condition alone may be
+    acceptable (e.g. a very large dataset with 3 % in a category is fine), so
+    the threshold used is ``max(min_stratum_n, round(n_total * min_stratum_pct))``.
+    """
+    n_total = len(df)
+    threshold = max(min_stratum_n, round(n_total * min_stratum_pct))
+
+    for col in stratify_cols:
+        if col == "_dummy_group":
+            continue
+
+        display_name = f"{col[5:]} (binned)" if col.startswith("_bin_") else col
+
+        value_counts = df[col].value_counts()
+        low_count = value_counts[value_counts < threshold]
+
+        if not low_count.empty:
+            details = ", ".join(f"{k} (n={v}, {v / n_total:.1%})" for k, v in low_count.items())
+            logger.warning(
+                f"Stratification variable '{display_name}' has categories with low prevalence "
+                f"(threshold: n>={threshold} or >={min_stratum_pct:.0%}): {details}. "
+                "Consider not blocking on this variable."
+            )
+
+
 def balanced_random_assignment(
     df,
     seed=42,
     allocation_ratio=0.5,
     variants=None,
+    stratification_covariates=None,
     balance_covariates=None,
-    check_balance=True,
-    check_balance_covariates=None,
     comparison=None,
     smd_threshold=0.1,
     n_bins=5,
+    min_stratum_pct=0.05,
+    min_stratum_n=10,
+    logger=None,
 ):
     """
     Randomly assign units to variants with forced balance according to allocation ratios.
     Optionally stratify by covariates to ensure balance within strata.
-    Optionally check and report covariate balance after assignment.
+    Always reports variant distribution and, when covariates are provided,
+    covariate balance after assignment.
 
     Parameters
     ----------
@@ -681,23 +721,30 @@ def balanced_random_assignment(
     variants : list, optional
         List of variant names. If provided, allocation_ratio should be a dict or
         units will be split equally among variants. If None, uses ['control', 'test']
+    stratification_covariates : list, optional
+        List of column names to use for block randomization (stratification).
+        Continuous covariates are automatically binned into quantiles.
+        Warns when any category has low prevalence or too few observations.
     balance_covariates : list, optional
-        List of column names to use for stratification (block randomization).
-        Continuous covariates are automatically binned into quantiles for stratification.
-    check_balance : bool, optional
-        Whether to check and print balance diagnostics after assignment (default True).
-    check_balance_covariates : list, optional
-        List of column names to check balance for after assignment. If None, falls back
-        to balance_covariates. Use this to check balance on covariates that were not
-        used for stratification.
+        List of column names to check balance for after assignment. If None, falls
+        back to stratification_covariates. Use this to check balance on covariates
+        that were not (or could not be) used for stratification.
     comparison : list[tuple], optional
-        List of (variant1, variant2) tuples specifying which pairs to compare for balance.
-        If None, performs all pairwise comparisons.
+        List of (variant1, variant2) tuples specifying which pairs to compare for
+        balance. If None, performs all pairwise comparisons.
     smd_threshold : float, optional
         Threshold for standardized mean difference to flag imbalance (default 0.1).
         Covariates with |SMD| < threshold are considered balanced.
     n_bins : int, optional
         Number of quantile bins for continuous covariates in stratification (default 5).
+    min_stratum_pct : float, optional
+        Minimum prevalence (as a fraction of total) for a stratification category
+        before a warning is raised (default 0.05).
+    min_stratum_n : int, optional
+        Minimum absolute count for a stratification category before a warning is
+        raised (default 10).
+    logger : logging.Logger, optional
+        Logger for warnings/info. If None, creates one.
 
     Returns
     -------
@@ -713,41 +760,44 @@ def balanced_random_assignment(
     assignment = balanced_random_assignment(
         df,
         allocation_ratio=0.5,
-        balance_covariates=['region', 'segment']
+        stratification_covariates=['region', 'segment']
     )
 
     # Stratified assignment with continuous covariates (auto-binned)
     assignment = balanced_random_assignment(
         df,
         variants=['control', 'treatment'],
-        balance_covariates=['age', 'previous_purchases']
+        stratification_covariates=['age', 'previous_purchases']
     )
 
     # No stratification, but check balance on covariates
     assignment = balanced_random_assignment(
         df,
         variants=['control', 'treatment'],
-        check_balance_covariates=['age', 'income', 'region']
+        balance_covariates=['age', 'income', 'region']
     )
 
-    # Stratify by region, but check balance on additional covariates
+    # Stratify by region, check balance on a broader set of covariates
     assignment = balanced_random_assignment(
         df,
         variants=['control', 'treatment'],
-        balance_covariates=['region'],
-        check_balance_covariates=['age', 'income', 'region']
+        stratification_covariates=['region'],
+        balance_covariates=['age', 'income', 'region']
     )
     """
+
+    if logger is None:
+        logger = get_logger("RandomAssignment")
 
     np.random.seed(seed)
 
     df_work = df.copy()
-    use_stratification = balance_covariates is not None
+    use_stratification = stratification_covariates is not None
 
     if use_stratification:
         # Auto-bin continuous covariates for stratification
         stratify_cols = []
-        for cov in balance_covariates:
+        for cov in stratification_covariates:
             is_numeric = pd.api.types.is_numeric_dtype(df_work[cov])
             n_unique = df_work[cov].nunique()
             if is_numeric and n_unique > n_bins * 2:
@@ -756,6 +806,17 @@ def balanced_random_assignment(
                 stratify_cols.append(bin_col)
             else:
                 stratify_cols.append(cov)
+
+        # Check stratification variable quality
+        n_variants_count = len(variants) if variants is not None else 2
+        _check_stratification_quality(
+            df=df_work,
+            stratify_cols=stratify_cols,
+            n_variants=n_variants_count,
+            min_stratum_pct=min_stratum_pct,
+            min_stratum_n=min_stratum_n,
+            logger=logger,
+        )
     else:
         df_work["_dummy_group"] = 1
         stratify_cols = ["_dummy_group"]
@@ -811,10 +872,23 @@ def balanced_random_assignment(
 
     final_assignments = pd.concat(assignments).sort_index()
 
-    # Determine which covariates to check balance for
-    covs_to_check = check_balance_covariates or (balance_covariates if use_stratification else None)
+    # Always print variant distribution
+    counts = final_assignments.value_counts()
+    n_total = len(final_assignments)
+    print("\n" + "=" * 50)
+    print("Variant Distribution")
+    print("-" * 50)
+    for variant, count in counts.items():
+        pct = count / n_total * 100
+        print(f"  {str(variant):<20} {count:>6,}   ({pct:.1f}%)")
+    print("-" * 50)
+    print(f"  {'Total':<20} {n_total:>6,}   (100.0%)")
+    print("=" * 50)
 
-    if check_balance and covs_to_check is not None:
+    # Determine which covariates to check balance for
+    covs_to_check = balance_covariates or (stratification_covariates if use_stratification else None)
+
+    if covs_to_check is not None:
         temp_df = df.copy()
         temp_df["_assignment"] = final_assignments
 
@@ -844,15 +918,15 @@ def balanced_random_assignment(
             print(display_df.to_string(index=False, float_format=lambda x: f"{x:.6f}" if isinstance(x, float) else x))
 
             n_balanced = balance_df["balance_flag"].sum()
-            n_total = len(balance_df)
+            n_total_covs = len(balance_df)
             mean_abs_smd = balance_df["smd"].abs().mean()
             max_abs_smd = balance_df["smd"].abs().max()
 
-            print(f"\nSummary: {n_balanced}/{n_total} covariates balanced (|SMD| < {smd_threshold})")
+            print(f"\nSummary: {n_balanced}/{n_total_covs} covariates balanced (|SMD| < {smd_threshold})")
             print(f"Mean |SMD|: {mean_abs_smd:.4f}")
             print(f"Max |SMD|: {max_abs_smd:.4f}")
 
-            if n_balanced < n_total:
+            if n_balanced < n_total_covs:
                 imbalanced = balance_df[balance_df["balance_flag"] == 0]["covariate"].tolist()
                 print(f"⚠️  Imbalanced covariates: {', '.join(imbalanced)}")
 
