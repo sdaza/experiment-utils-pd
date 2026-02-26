@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import truncnorm
 
-from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer
 
 # %%
 def sample_data(
@@ -1336,3 +1336,65 @@ Balance checking is crucial for assessing randomization quality:
    - analyzer.adjusted_balance: Shows SMDs after weighting
    - Compare before/after to assess adjustment effectiveness
 """)
+
+
+# %% metaanalysis and plots
+np.random.seed(42)
+
+true_effect = 0.05
+
+experiments = [
+    {"name": "exp_1", "n": 3000, "alloc": 0.20, "baseline": 0.20},
+    {"name": "exp_2", "n": 2000, "alloc": 0.30, "baseline": 0.25},
+    {"name": "exp_3", "n": 1500, "alloc": 0.50, "baseline": 0.30},
+    {"name": "exp_4", "n": 1000, "alloc": 0.70, "baseline": 0.40},
+    {"name": "exp_5", "n": 800,  "alloc": 0.80, "baseline": 0.50},
+]
+
+# %%
+dfs = []
+for exp in experiments:
+    n = exp["n"]
+    alloc = exp["alloc"]
+    n_treat = int(n * alloc)
+    n_control = n - n_treat
+    age = np.random.normal(40, 10, n)
+    treatment = np.array(["treatment"] * n_treat + ["control"] * n_control)
+    np.random.shuffle(treatment)
+    is_treatment = (treatment == "treatment").astype(int)
+    conversion = np.random.binomial(1, exp["baseline"] + true_effect * is_treatment)
+    dfs.append(pd.DataFrame({
+        "experiment": exp["name"],
+        "treatment": treatment,
+        "conversion": conversion,
+        "age": age,
+    }))
+
+meta_df = pd.concat(dfs, ignore_index=True)
+
+# %% naive pooled analysis: ignores experiment structure -> biased
+naive = ExperimentAnalyzer(
+    data=meta_df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+)
+naive.get_effects()
+print(naive.results[["outcome", "absolute_effect", "standard_error", "pvalue"]].round(4))
+
+# %% correct: fixed-effects meta-analysis
+analyzer = ExperimentAnalyzer(
+    data=meta_df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    experiment_identifier="experiment",
+)
+analyzer.get_effects()
+print(analyzer.results[["experiment", "outcome", "absolute_effect", "standard_error", "pvalue"]].round(4))
+
+pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+print(pooled[["outcome", "experiments", "absolute_effect", "standard_error", "pvalue"]])
+print(f"\nTrue effect: {true_effect}")
+
+
+# %% plot
+fig = analyzer.plot_effects(meta_analysis=True)

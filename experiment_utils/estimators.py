@@ -450,6 +450,7 @@ class Estimators:
         cluster_col: str | None = None,
         store_model: bool = False,
         compute_relative_ci: bool = True,
+        verbose: bool = True,
         **kwargs,
     ) -> dict[str, str | int | float]:  # noqa: E501
         """ "
@@ -495,15 +496,16 @@ class Estimators:
         else:
             quality = "Weak instrument (F < 10) — IV estimates may be substantially biased"
 
-        print("\n" + "=" * 60)
-        print("IV First-Stage Instrument Diagnostics")
-        print("=" * 60)
-        print(f"  Instrument : {self._instrument_col}")
-        print(f"  Treatment  : {self._treatment_col}")
-        print(f"  F-statistic: {f_stat:.4f}")
-        print(f"  P-value    : {f_pval:.4f}")
-        print(f"  Assessment : {quality}")
-        print("=" * 60 + "\n")
+        if verbose:
+            print("\n" + "=" * 60)
+            print("IV First-Stage Instrument Diagnostics")
+            print("=" * 60)
+            print(f"  Instrument : {self._instrument_col}")
+            print(f"  Treatment  : {self._treatment_col}")
+            print(f"  F-statistic: {f_stat:.4f}")
+            print(f"  P-value    : {f_pval:.4f}")
+            print(f"  Assessment : {quality}")
+            print("=" * 60 + "\n")
 
         formula = self.__create_formula(outcome_variable=outcome_variable, model_type="iv", covariates=covariates)
         model = IV2SLS.from_formula(formula, data)
