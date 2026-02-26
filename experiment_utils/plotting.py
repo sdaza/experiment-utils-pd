@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import pandas as pd
 import seaborn as sns
 from scipy import stats
@@ -26,25 +27,13 @@ _CLR_ZERO = "#475569"  # dark slate zero line
 _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
 
-# Discrete palette for color_by groups
-_GROUP_PALETTE = [
-    "#2563eb",  # blue
-    "#dc2626",  # red
-    "#16a34a",  # green
-    "#d97706",  # amber
-    "#7c3aed",  # violet
-    "#0891b2",  # cyan
-    "#be185d",  # pink
-    "#4b5563",  # gray
-]
-
 
 def _fmt_label(value: float, significant: int, eff_col: str) -> str:
     """Format an effect value as a label, appending '*' when significant."""
     if "relative" in eff_col:
-        text = f"{value:+.1%}"
+        text = f"{value:+.2%}"
     else:
-        text = f"{value:+.3g}"
+        text = f"{value:+.2f}"
     return text + ("*" if significant else "")
 
 
@@ -63,8 +52,8 @@ def _render_effects_figure(
     sort_by_magnitude: bool,
     panel_col: str = "outcome",
     row_col: str = "_label",
-    panel_titles: str | dict | None = None,
-    color_by: str | None = None,
+    panel_titles: str | list | dict | None = None,
+    row_labels: dict | None = None,
     show_labels: bool = False,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled).
@@ -105,20 +94,9 @@ def _render_effects_figure(
         fig_w = max(5.5, panel_w * n_panels)
         figsize = (fig_w, fig_h)
 
-    # ── resolve color_by groups ───────────────────────────────────────
-    use_color_by = color_by is not None and color_by in data.columns
-    if use_color_by:
-        import numpy as np
-
-        color_groups = list(data[color_by].unique())
-        n_groups = len(color_groups)
-        group_colors = {g: _GROUP_PALETTE[i % len(_GROUP_PALETTE)] for i, g in enumerate(color_groups)}
-        raw_offsets = np.linspace(-0.22, 0.22, n_groups) if n_groups > 1 else [0.0]
-        group_offsets = dict(zip(color_groups, raw_offsets, strict=False))
-
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
 
-    for ax, panel_val in zip(axes.flatten(), unique_panels, strict=False):
+    for panel_idx, (ax, panel_val) in enumerate(zip(axes.flatten(), unique_panels, strict=False)):
         od = data[data[panel_col] == panel_val].copy()
 
         ax.set_facecolor("white")
@@ -127,125 +105,69 @@ def _render_effects_figure(
             ax.axvline(0, color=_CLR_ZERO, linestyle="-", linewidth=1.0, alpha=0.55, zorder=1)
         cap_h = 0.08
 
-        # ── GROUPED MODE (color_by) ───────────────────────────────────
-        if use_color_by:
-            # Sort rows by max |effect| across groups
-            if sort_by_magnitude:
-                max_abs = od.groupby(row_col)[eff_col].apply(lambda x: x.abs().max()).sort_values(ascending=False)
-                unique_rows = list(max_abs.index)
+        if sort_by_magnitude:
+            od = od.sort_values(by=eff_col, ascending=False)
+
+        labels = list(od[row_col])
+        effs = list(od[eff_col])
+        los = list(od[_lo_col])
+        his = list(od[_hi_col])
+        sigs = list(od[sig_col]) if sig_col in od.columns else [0] * len(od)
+
+        has_meta = False
+        meta_label = None
+        if meta_df is not None and panel_col == "outcome":
+            outcome = panel_val
+            mo = meta_df[meta_df["outcome"] == outcome] if "outcome" in meta_df.columns else meta_df
+            if not mo.empty:
+                has_meta = True
+                meta_label = "◆ " + mo["_label"].iloc[0]
+                labels = labels + [meta_label]
+                effs = effs + [float(mo[eff_col].iloc[0])]
+                _meta_lo = _lo_col if _lo_col in mo.columns else lo_col
+                _meta_hi = _hi_col if _hi_col in mo.columns else hi_col
+                los = los + [float(mo[_meta_lo].iloc[0])]
+                his = his + [float(mo[_meta_hi].iloc[0])]
+                meta_sig_col = "stat_significance_mcp" if "stat_significance_mcp" in mo.columns else "stat_significance"
+                meta_sig = int(mo[meta_sig_col].iloc[0]) if meta_sig_col in mo.columns else 0
+                sigs = sigs + [meta_sig]
+
+        n_rows = len(labels)
+        n_exp = n_rows - (1 if has_meta else 0)
+        y_pos = list(range(n_rows))
+
+        for i in range(n_exp):
+            ax.axhline(i, color=_CLR_GUIDE, linewidth=0.6, linestyle=":", zorder=0)
+
+        if has_meta:
+            meta_y = n_rows - 1
+            ax.axhspan(meta_y - 0.48, meta_y + 0.48, color=_CLR_META_BG, zorder=0)
+            ax.axhline(meta_y - 0.52, color=_CLR_SPINE, linewidth=1.2, linestyle=(0, (6, 3)), zorder=1)
+
+        for i, (label, eff, lo, hi, sig) in enumerate(zip(labels, effs, los, his, sigs, strict=False)):
+            if eff is None:
+                continue
+            is_meta_row = has_meta and label == meta_label
+            if is_meta_row:
+                color = _CLR_SIG if sig == 1 else _CLR_NSIG
+                marker, dot_size, ci_lw = "D", 100, 2.2
+            elif sig == 1:
+                color, marker, dot_size, ci_lw = _CLR_SIG, "o", 75, 2.0
             else:
-                unique_rows = list(od[row_col].unique())
+                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 60, 1.6
 
-            n_rows = len(unique_rows)
-            y_pos = list(range(n_rows))
+            ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
+            ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+            ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+            ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=1.0)
 
-            # Alternating row bands to separate outcome groups
-            for i in range(n_rows):
-                if i % 2 == 1:
-                    ax.axhspan(i - 0.5, i + 0.5, color="#f8fafc", zorder=0)
-                ax.axhline(i, color=_CLR_GUIDE, linewidth=0.5, linestyle=":", zorder=0)
+            if show_labels:
+                lbl = _fmt_label(eff, sig, eff_col)
+                ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
-            for row_i, row_val in enumerate(unique_rows):
-                row_data = od[od[row_col] == row_val]
-                for group_val in color_groups:
-                    g_data = row_data[row_data[color_by] == group_val]
-                    if g_data.empty:
-                        continue
-                    y = row_i + group_offsets[group_val]
-                    color = group_colors[group_val]
-                    eff = float(g_data[eff_col].iloc[0])
-                    lo = float(g_data[_lo_col].iloc[0])
-                    hi = float(g_data[_hi_col].iloc[0])
-                    sig = int(g_data[sig_col].iloc[0]) if sig_col in g_data.columns else 0
-
-                    ax.hlines(y, lo, hi, color=color, linewidth=1.8, alpha=0.8, zorder=3)
-                    ax.vlines(lo, y - cap_h, y + cap_h, color=color, linewidth=1.35, alpha=0.8, zorder=3)
-                    ax.vlines(hi, y - cap_h, y + cap_h, color=color, linewidth=1.35, alpha=0.8, zorder=3)
-                    ax.scatter(eff, y, color=color, s=65, marker="o", zorder=5, edgecolors="white", linewidths=1.0)
-
-                    if show_labels:
-                        lbl = _fmt_label(eff, sig, eff_col)
-                        ax.text(
-                            eff,
-                            y - 0.14,
-                            lbl,
-                            ha="center",
-                            va="bottom",
-                            fontsize=7.5,
-                            color=color,
-                            fontweight="semibold" if sig else "normal",
-                            zorder=6,
-                        )
-
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels([str(r) for r in unique_rows], fontsize=9.5, color="#334155")
-
-        # ── STANDARD MODE ─────────────────────────────────────────────
-        else:
-            if sort_by_magnitude:
-                od = od.sort_values(by=eff_col, key=lambda x: x.abs(), ascending=False)
-
-            labels = list(od[row_col])
-            effs = list(od[eff_col])
-            los = list(od[_lo_col])
-            his = list(od[_hi_col])
-            sigs = list(od[sig_col]) if sig_col in od.columns else [0] * len(od)
-
-            has_meta = False
-            meta_label = None
-            if meta_df is not None and panel_col == "outcome":
-                outcome = panel_val
-                mo = meta_df[meta_df["outcome"] == outcome] if "outcome" in meta_df.columns else meta_df
-                if not mo.empty:
-                    has_meta = True
-                    meta_label = "◆ " + mo["_label"].iloc[0]
-                    labels = labels + [meta_label]
-                    effs = effs + [float(mo[eff_col].iloc[0])]
-                    _meta_lo = _lo_col if _lo_col in mo.columns else lo_col
-                    _meta_hi = _hi_col if _hi_col in mo.columns else hi_col
-                    los = los + [float(mo[_meta_lo].iloc[0])]
-                    his = his + [float(mo[_meta_hi].iloc[0])]
-                    meta_sig_col = (
-                        "stat_significance_mcp" if "stat_significance_mcp" in mo.columns else "stat_significance"
-                    )
-                    meta_sig = int(mo[meta_sig_col].iloc[0]) if meta_sig_col in mo.columns else 0
-                    sigs = sigs + [meta_sig]
-
-            n_rows = len(labels)
-            n_exp = n_rows - (1 if has_meta else 0)
-            y_pos = list(range(n_rows))
-
-            for i in range(n_exp):
-                ax.axhline(i, color=_CLR_GUIDE, linewidth=0.6, linestyle=":", zorder=0)
-
-            if has_meta:
-                meta_y = n_rows - 1
-                ax.axhspan(meta_y - 0.48, meta_y + 0.48, color=_CLR_META_BG, zorder=0)
-                ax.axhline(meta_y - 0.52, color=_CLR_SPINE, linewidth=1.2, linestyle=(0, (6, 3)), zorder=1)
-
-            for i, (label, eff, lo, hi, sig) in enumerate(zip(labels, effs, los, his, sigs, strict=False)):
-                if eff is None:
-                    continue
-                is_meta_row = has_meta and label == meta_label
-                if is_meta_row:
-                    color = _CLR_SIG if sig == 1 else _CLR_NSIG
-                    marker, dot_size, ci_lw = "D", 100, 2.2
-                elif sig == 1:
-                    color, marker, dot_size, ci_lw = _CLR_SIG, "o", 75, 2.0
-                else:
-                    color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 60, 1.6
-
-                ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
-                ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
-                ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
-                ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=1.0)
-
-                if show_labels:
-                    lbl = _fmt_label(eff, sig, eff_col)
-                    ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
-
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(labels, fontsize=9.5, color="#334155")
+        ax.set_yticks(y_pos)
+        display_labels = [row_labels.get(lbl, lbl) for lbl in labels] if row_labels else labels
+        ax.set_yticklabels(display_labels, fontsize=9.5, color="#334155")
 
         # ── shared axis styling ───────────────────────────────────────
         ax.tick_params(axis="y", length=0, pad=8)
@@ -259,24 +181,20 @@ def _render_effects_figure(
         ax.spines["bottom"].set_linewidth(0.8)
         if isinstance(panel_titles, dict):
             ptitle = panel_titles.get(panel_val, str(panel_val))
+        elif isinstance(panel_titles, list):
+            ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
         elif isinstance(panel_titles, str):
             ptitle = panel_titles
         else:
             ptitle = str(panel_val)
         ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
-        ax.xaxis.set_major_locator(plt.MaxNLocator(nbins=5, prune="both"))
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
 
     # ── legend ────────────────────────────────────────────────────────
-    if use_color_by:
-        legend_items = [
-            mlines.Line2D([], [], color=group_colors[g], marker="o", linestyle="-", markersize=6, label=str(g))
-            for g in color_groups
-        ]
-    else:
-        legend_items = [
-            mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
-            mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
-        ]
+    legend_items = [
+        mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
+        mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
+    ]
     if meta_df is not None:
         legend_items.append(
             mlines.Line2D(
@@ -308,6 +226,7 @@ def _render_effects_figure(
     # Use fig.tight_layout (not plt.tight_layout) to avoid triggering an extra
     # inline display in Jupyter notebooks via the global pyplot state machine.
     fig.tight_layout(rect=[0, 0, 1, 1.0 - reserved])
+    plt.close(fig)
     return fig
 
 
@@ -325,8 +244,8 @@ def plot_effects(
     sort_by_magnitude: bool = True,
     group_by: str | list[str] | None = None,
     y: str = "experiment",
-    panel_titles: str | dict | None = None,
-    color_by: str | None = None,
+    panel_titles: str | list | dict | None = None,
+    row_labels: dict | None = None,
     show_labels: bool = False,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     """
@@ -363,7 +282,7 @@ def plot_effects(
     show_zero_line : bool, optional
         Vertical reference line at zero (default ``True``).
     sort_by_magnitude : bool, optional
-        Sort rows within each panel by ``|effect|`` descending (default ``True``).
+        Sort rows within each panel by effect value descending (default ``True``).
     group_by : str or list[str], optional
         Column(s) to split into separate figures — one figure per unique value.
         Row labels are built from ``experiment_identifier`` minus these columns.
@@ -377,17 +296,28 @@ def plot_effects(
     panel_titles : str or dict, optional
         Override the auto-generated panel (subplot) titles.
 
-        - ``str`` — use the same string for every panel.
-        - ``dict`` — map each panel value to a custom string,
-          e.g. ``{"exp_A": "Experiment A", "exp_B": "Experiment B"}``.
         - ``None`` (default) — use the panel value as the title.
+        - ``str`` — use the same string for every panel (``""`` hides all).
+        - ``list`` — titles in panel order, e.g. ``["Revenue ($)", "CVR"]``.
+        - ``dict`` — map each panel value to a custom display string.
 
-    color_by : str, optional
-        Column name to use for color grouping instead of significance.
-        When set, each unique value of this column gets its own color, dots
-        for the same row are offset vertically, and the legend shows group
-        names rather than significance. Useful for showing multiple variants
-        (e.g. ``color_by="treatment_group"``).
+        What counts as a "panel value" depends on *y*:
+
+        - ``y="experiment"`` (default): one panel per **outcome**, so keys
+          are outcome names, e.g.
+          ``{"revenue": "Revenue ($)", "converted": "Conversion rate"}``.
+        - ``y="outcome"``: one panel per **experiment label**, so keys are
+          the auto-generated experiment labels (``experiment_identifier``
+          column values joined with ``" | "``), e.g.
+          ``{"US | email": "US — Email campaign"}``.
+
+    row_labels : dict, optional
+        Rename individual row labels on the y-axis.  Keys are the
+        auto-generated labels (column values joined with ``" | "``); values
+        are the display strings to use instead.
+        e.g. ``{"US | email": "Email (US)", "EU | push": "Push (EU)"}``.
+        Rows not in the dict keep their auto-generated label.
+
     show_labels : bool, optional
         Annotate each dot with its effect value (and ``*`` when significant).
         Default ``False``.
@@ -447,47 +377,31 @@ def plot_effects(
 
     exp_id = experiment_identifier
     exp_id_list = ([exp_id] if isinstance(exp_id, str) else list(exp_id)) if exp_id else []
-    # label cols = experiment_identifier minus any group_by cols
     label_cols = [c for c in exp_id_list if c not in group_cols]
-
-    # When color_by is a comparison axis, exclude it from labels so that
-    # multiple comparisons (e.g. variant_A vs control, variant_B vs control)
-    # collapse into the same panel rather than becoming separate panels.
-    _COMP_AXES = {"treatment_group", "control_group"}
-    color_by_is_comp_axis = color_by in _COMP_AXES
 
     def _build_labels(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        # Exclude color_by column from label if it's a comparison axis
-        effective_label_cols = [c for c in label_cols if c != color_by] if color_by_is_comp_axis else label_cols
-        available = [c for c in effective_label_cols if c in df.columns]
+        available = [c for c in label_cols if c in df.columns]
         if available:
             df["_label"] = df[available].astype(str).agg(" | ".join, axis=1)
         elif exp_id_list:
             df["_label"] = "Experiment"
-        elif color_by_is_comp_axis:
-            # Use the *other* comparison axis as the label
-            other_axis = "control_group" if color_by == "treatment_group" else "treatment_group"
-            df["_label"] = df[other_axis].astype(str)
         else:
             df["_label"] = df["treatment_group"].astype(str) + " vs " + df["control_group"].astype(str)
 
-        # Append comparison suffix only when not using color_by to distinguish comparisons
-        if not color_by_is_comp_axis:
-            n_comp = df.groupby(["treatment_group", "control_group"]).ngroups
-            if n_comp > 1 and available:
-                df["_label"] = (
-                    df["_label"]
-                    + "\n("
-                    + df["treatment_group"].astype(str)
-                    + " vs "
-                    + df["control_group"].astype(str)
-                    + ")"
-                )
+        n_comp = df.groupby(["treatment_group", "control_group"]).ngroups
+        if n_comp > 1 and available:
+            df["_label"] = (
+                df["_label"]
+                + "\n("
+                + df["treatment_group"].astype(str)
+                + " vs "
+                + df["control_group"].astype(str)
+                + ")"
+            )
         return df
 
     # ── render: grouped or single ─────────────────────────────────────
-    # Resolve panel / row axes based on y parameter
     if y == "outcome":
         panel_col = "_label"
         row_col = "outcome"
@@ -509,7 +423,7 @@ def plot_effects(
         panel_col=panel_col,
         row_col=row_col,
         panel_titles=panel_titles,
-        color_by=color_by,
+        row_labels=row_labels,
         show_labels=show_labels,
     )
 
