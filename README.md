@@ -1085,7 +1085,9 @@ print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relat
 
 ### Balanced Random Assignment
 
-Generate balanced treatment assignments with optional stratification:
+Generate balanced treatment assignments with optional block randomization.
+Variant distribution and, when covariates are provided, a covariate balance
+summary are always printed.
 
 ```python
 from experiment_utils import balanced_random_assignment
@@ -1098,28 +1100,41 @@ users = pd.DataFrame({
     "user_id": range(1000),
     "age_group": np.random.choice(["18-25", "26-35", "36-45", "46+"], 1000),
     "region": np.random.choice(["North", "South", "East", "West"], 1000),
+    "age": np.random.normal(35, 10, 1000),
 })
 
-# Simple 50/50 split
+# Simple 50/50 split — prints variant distribution automatically
 users["treatment"] = balanced_random_assignment(
-    users, 
+    users,
     allocation_ratio=0.5,
     seed=42
 )
-
-print(users["treatment"].value_counts())
-# Output: control: 500, test: 500
 ```
 
-**Stratified assignment (ensure balance within subgroups):**
+**Block randomization (stratify within subgroups):**
 
 ```python
-# Balance within age_group and region strata
+# Stratify by age_group and region; check balance on the same variables
 users["treatment_stratified"] = balanced_random_assignment(
     users,
     allocation_ratio=0.5,
-    balance_covariates=["age_group", "region"],
-    check_balance=True,  # Print balance diagnostics
+    stratification_covariates=["age_group", "region"],
+    seed=42
+)
+```
+
+Warns automatically if any stratification category has low prevalence (< 5 % by
+default) and suggests not blocking on that variable.
+
+**Check balance on additional covariates:**
+
+```python
+# Stratify by region; check balance on a broader set
+users["treatment_stratified"] = balanced_random_assignment(
+    users,
+    allocation_ratio=0.5,
+    stratification_covariates=["region"],
+    balance_covariates=["age_group", "region", "age"],
     seed=42
 )
 ```
@@ -1133,20 +1148,22 @@ users["assignment"] = balanced_random_assignment(
     variants=["control", "variant_A", "variant_B"]
 )
 
-# Custom allocation ratios
+# Custom allocation ratios with stratification
 users["assignment_custom"] = balanced_random_assignment(
     users,
     variants=["control", "variant_A", "variant_B"],
     allocation_ratio={"control": 0.5, "variant_A": 0.3, "variant_B": 0.2},
-    balance_covariates=["age_group"]
+    stratification_covariates=["age_group"]
 )
 ```
 
-**Parameters:**
-- `allocation_ratio`: Float (for binary) or dict (for multiple variants)
-- `balance_covariates`: List of columns to stratify by
-- `check_balance`: If True, prints balance diagnostics
-- `smd_threshold`: Threshold for balance flag (default 0.1)
+**Key parameters:**
+- `allocation_ratio`: Float (binary) or dict (multiple variants)
+- `stratification_covariates`: Columns to block-randomize on (continuous vars are auto-binned)
+- `balance_covariates`: Columns to check balance for after assignment (defaults to `stratification_covariates`)
+- `smd_threshold`: SMD threshold for balance flag (default `0.1`)
+- `min_stratum_pct`: Minimum category prevalence before a stratification warning is raised (default `0.05`)
+- `min_stratum_n`: Minimum absolute category count before a stratification warning is raised (default `10`)
 - `seed`: Random seed for reproducibility
 
 ### Standalone Balance Checker
