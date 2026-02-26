@@ -619,9 +619,26 @@ def check_covariate_balance(
         )
 
         if not balance_df.empty:
-            # Add tracking columns
+            # Add tracking and count columns
+            balance_df["n_treated"] = n_treatment
+            balance_df["n_control"] = n_control
             balance_df["treatment_group"] = treatment_val
             balance_df["control_group"] = control_val
+
+            # Reorder columns consistently
+            balance_df = balance_df[
+                [
+                    "covariate",
+                    "n_treated",
+                    "n_control",
+                    "mean_treated",
+                    "mean_control",
+                    "smd",
+                    "balance_flag",
+                    "treatment_group",
+                    "control_group",
+                ]
+            ]
 
             # Log balance summary
             balance_mean = balance_df["balance_flag"].mean()
@@ -635,6 +652,8 @@ def check_covariate_balance(
         return pd.DataFrame(
             columns=[
                 "covariate",
+                "n_treated",
+                "n_control",
                 "mean_treated",
                 "mean_control",
                 "smd",
@@ -907,13 +926,20 @@ def balanced_random_assignment(
         print("=" * 70)
 
         for var1, var2 in comparison_pairs:
+            n_var1 = (temp_df["_assignment"] == var1).sum()
+            n_var2 = (temp_df["_assignment"] == var2).sum()
+
             balance_df = _check_assignment_balance(temp_df, "_assignment", covs_to_check, var1, var2, smd_threshold)
 
-            print(f"\nComparison: {var1} vs {var2}")
+            print(f"\nComparison: {var1} (n={n_var1:,}) vs {var2} (n={n_var2:,})")
             print("-" * 70)
-            display_df = balance_df.copy()
-            display_df.columns = ["covariate", f"mean_{var1}", f"mean_{var2}", "smd", "balanced"]
-            display_df["balanced"] = display_df["balanced"].map({1: "✓", 0: "✗"})
+            display_df = balance_df[["covariate"]].copy()
+            display_df[f"n_{var1}"] = n_var1
+            display_df[f"n_{var2}"] = n_var2
+            display_df[f"mean_{var1}"] = balance_df[f"mean_{var1}"]
+            display_df[f"mean_{var2}"] = balance_df[f"mean_{var2}"]
+            display_df["smd"] = balance_df["smd"]
+            display_df["balanced"] = balance_df["balance_flag"].map({1: "✓", 0: "✗"})
 
             print(display_df.to_string(index=False, float_format=lambda x: f"{x:.6f}" if isinstance(x, float) else x))
 
