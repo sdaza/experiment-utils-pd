@@ -72,6 +72,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
+- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
@@ -99,6 +100,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
     - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
+    - [Visualizing Effects](#visualizing-effects)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
@@ -138,11 +140,12 @@ pip install git+https://github.com/sdaza/experiment-utils-pd.git
 
 ## Quick Start
 
-All main classes are available directly from the package:
+All main classes and standalone functions are available directly from the package:
 
 ```python
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
+from experiment_utils import plot_effects, plot_power
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -322,11 +325,12 @@ print(weights_df.head())
 - `ps-xgboost`: Propensity score via XGBoost (flexible, non-linear)
 - `entropy`: Entropy balancing (exact moment matching)
 
-**Target effects:**
-- `ATT`: Average Treatment Effect on Treated (most common)
-- `ATE`: Average Treatment Effect (entire population)
-- `ATC`: Average Treatment Effect on Control
-- `ATO`: Average Treatment Effect for the Overlap population (overlap weights — see below)
+Target effects:
+
+    ATT: Average Treatment Effect on Treated (most common)
+    ATE: Average Treatment Effect (entire population)
+    ATC: Average Treatment Effect on Control
+    ATO: Average Treatment Effect for the Overlap population (overlap weights — see below)
 
 **Option 2: Regression Adjustment**
 
@@ -854,6 +858,134 @@ aggregated = analyzer.aggregate_effects(grouping_cols=["outcome"])
 print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 ```
 
+### Visualizing Effects
+
+`plot_effects` produces a Cleveland dot plot with confidence intervals and optional meta-analysis pooling. It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+
+The two axis roles are controlled by `y`:
+
+| `y` | Rows (y-axis) | Panels (subplots) |
+|---|---|---|
+| `"experiment"` *(default)* | Experiment labels | Outcomes |
+| `"outcome"` | Outcomes | Experiment labels |
+
+**Basic usage — multiple experiments, outcomes as panels (default)**
+
+```python
+analyzer.get_effects()
+
+fig = analyzer.plot_effects(title="Treatment Effects")
+fig.savefig("effects.png", bbox_inches="tight")
+```
+
+**Single experiment, multiple outcomes on the y-axis**
+
+When you have one experiment and several outcomes, flip the axes with `y="outcome"` and customise the panel subtitle with `panel_titles`:
+
+```python
+fig = analyzer.plot_effects(
+    y="outcome",
+    title="My Experiment",
+    panel_titles="Treatment vs Control",   # single string → same for all panels
+)
+```
+
+**Multiple experiments, outcomes on the y-axis**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted", "orders"],
+    experiment_identifier=["country", "type"],
+)
+analyzer.get_effects()
+
+# One panel per experiment group; rows = outcomes
+fig = analyzer.plot_effects(
+    y="outcome",
+    panel_titles={"US | email": "US — Email", "EU | push": "EU — Push"},  # dict overrides
+)
+```
+
+**Standalone usage**
+
+```python
+from experiment_utils import plot_effects
+
+fig = plot_effects(
+    results=analyzer.results,
+    experiment_identifier="experiment",
+    alpha=0.05,
+    title="Treatment Effects",
+)
+```
+
+**Add a pooled meta-analysis row**
+
+```python
+# Auto-compute pooled estimate
+fig = analyzer.plot_effects(
+    outcomes="revenue",
+    meta_analysis=True,
+    title="Revenue — with Pooled Estimate",
+)
+
+# Pass a pre-computed combine_effects() DataFrame
+pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+fig = analyzer.plot_effects(meta_analysis=pooled)
+```
+
+**Split into one figure per group**
+
+When `experiment_identifier` contains multiple columns (e.g. `["country", "type"]`), `group_by` produces one figure per unique value. Row labels are built from the remaining identifier columns automatically.
+
+```python
+# One figure per country; rows = type
+figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
+for country, fig in figs.items():
+    fig.savefig(f"effects_{country}.png", bbox_inches="tight")
+
+# One figure per experiment type; rows = country
+figs = analyzer.plot_effects(group_by="type")
+```
+
+`group_by` returns `dict[str, Figure]`; without it a single `Figure` is returned.
+
+**Relative effects**
+
+```python
+fig = analyzer.plot_effects(effect="relative", meta_analysis=True)
+```
+
+**Multiple comparison adjustments**
+
+If `adjust_pvalues()` has been called before plotting, the plot automatically uses the adjusted significance column (`stat_significance_mcp`) and updates the legend label accordingly:
+
+```python
+analyzer.get_effects()
+analyzer.adjust_pvalues(method="holm")
+
+# Legend shows "Significant (holm, α=0.05)" and coloring uses adjusted p-values
+fig = analyzer.plot_effects()
+```
+
+**Key parameters**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
+| `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
+| `outcomes` | `None` | Outcome(s) to include; `None` = all |
+| `effect` | `"absolute"` | `"absolute"` or `"relative"` |
+| `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
+| `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
+| `group_by` | `None` | Column(s) to split into separate figures |
+| `comparison` | `None` | `(treatment, control)` tuple to filter to one comparison |
+| `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
+| `show_zero_line` | `True` | Vertical reference line at zero |
+| `figsize` | auto | `(width, height)` in inches |
+
 ### Retrodesign Analysis
 
 Assess reliability of significant results (post-hoc power analysis):
@@ -1140,7 +1272,9 @@ print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relat
 
 ### Balanced Random Assignment
 
-Generate balanced treatment assignments with optional stratification:
+Generate balanced treatment assignments with optional block randomization.
+Variant distribution and, when covariates are provided, a covariate balance
+summary are always printed.
 
 ```python
 from experiment_utils import balanced_random_assignment
@@ -1153,28 +1287,41 @@ users = pd.DataFrame({
     "user_id": range(1000),
     "age_group": np.random.choice(["18-25", "26-35", "36-45", "46+"], 1000),
     "region": np.random.choice(["North", "South", "East", "West"], 1000),
+    "age": np.random.normal(35, 10, 1000),
 })
 
-# Simple 50/50 split
+# Simple 50/50 split — prints variant distribution automatically
 users["treatment"] = balanced_random_assignment(
-    users, 
+    users,
     allocation_ratio=0.5,
     seed=42
 )
-
-print(users["treatment"].value_counts())
-# Output: control: 500, test: 500
 ```
 
-**Stratified assignment (ensure balance within subgroups):**
+**Block randomization (stratify within subgroups):**
 
 ```python
-# Balance within age_group and region strata
+# Stratify by age_group and region; check balance on the same variables
 users["treatment_stratified"] = balanced_random_assignment(
     users,
     allocation_ratio=0.5,
-    balance_covariates=["age_group", "region"],
-    check_balance=True,  # Print balance diagnostics
+    stratification_covariates=["age_group", "region"],
+    seed=42
+)
+```
+
+Warns automatically if any stratification category has low prevalence (< 5 % by
+default) and suggests not blocking on that variable.
+
+**Check balance on additional covariates:**
+
+```python
+# Stratify by region; check balance on a broader set
+users["treatment_stratified"] = balanced_random_assignment(
+    users,
+    allocation_ratio=0.5,
+    stratification_covariates=["region"],
+    balance_covariates=["age_group", "region", "age"],
     seed=42
 )
 ```
@@ -1188,20 +1335,22 @@ users["assignment"] = balanced_random_assignment(
     variants=["control", "variant_A", "variant_B"]
 )
 
-# Custom allocation ratios
+# Custom allocation ratios with stratification
 users["assignment_custom"] = balanced_random_assignment(
     users,
     variants=["control", "variant_A", "variant_B"],
     allocation_ratio={"control": 0.5, "variant_A": 0.3, "variant_B": 0.2},
-    balance_covariates=["age_group"]
+    stratification_covariates=["age_group"]
 )
 ```
 
-**Parameters:**
-- `allocation_ratio`: Float (for binary) or dict (for multiple variants)
-- `balance_covariates`: List of columns to stratify by
-- `check_balance`: If True, prints balance diagnostics
-- `smd_threshold`: Threshold for balance flag (default 0.1)
+**Key parameters:**
+- `allocation_ratio`: Float (binary) or dict (multiple variants)
+- `stratification_covariates`: Columns to block-randomize on (continuous vars are auto-binned)
+- `balance_covariates`: Columns to check balance for after assignment (defaults to `stratification_covariates`)
+- `smd_threshold`: SMD threshold for balance flag (default `0.1`)
+- `min_stratum_pct`: Minimum category prevalence before a stratification warning is raised (default `0.05`)
+- `min_stratum_n`: Minimum absolute category count before a stratification warning is raised (default `10`)
 - `seed`: Random seed for reproducibility
 
 ### Standalone Balance Checker

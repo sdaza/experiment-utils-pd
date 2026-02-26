@@ -72,6 +72,7 @@ print(
 fig1 = analyzer.plot_effects(
     title="Treatment Effects — Revenue & Conversion",
     sort_by_magnitude=True,
+    show_labels=True,
 )
 fig1.savefig("examples/plot_effects_basic.png", bbox_inches="tight", dpi=150)
 plt.close(fig1)
@@ -164,130 +165,6 @@ fig6 = analyzer_single.plot_effects(
 fig6.savefig("examples/plot_effects_single_exp.png", bbox_inches="tight", dpi=150)
 plt.close(fig6)
 
-# %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 7 — nested / grouped: multiple variants on the same outcome row
-# Simulate an experiment with two treatment variants (V1, V2) and one control
-# ─────────────────────────────────────────────────────────────────────────────
-np.random.seed(99)
-
-VARIANTS = {
-    "control": (0.0, 0.0),
-    "variant_A": (4.0, 0.03),
-    "variant_B": (8.5, 0.06),
-}
-
-rows = []
-for arm, (rl, cl) in VARIANTS.items():
-    n = 600
-    rows.append(
-        pd.DataFrame(
-            {
-                "treatment": arm,
-                "revenue": np.random.normal(50, 20, n) + rl,
-                "converted": np.random.binomial(1, np.clip(0.12 + cl, 0, 1), n),
-                "engagement": np.random.normal(3.0, 1.2, n) + rl * 0.05,
-            }
-        )
-    )
-
-df_multi = pd.concat(rows, ignore_index=True)
-
-analyzer_multi = ExperimentAnalyzer(
-    data=df_multi,
-    treatment_col="treatment",
-    outcomes=["revenue", "converted", "engagement"],
-)
-analyzer_multi.get_effects()
-
-# color_by="treatment_group" puts both variants on the same outcome row
-fig7 = analyzer_multi.plot_effects(
-    y="outcome",
-    color_by="treatment_group",
-    show_labels=True,
-    title="Variant A vs Variant B — side-by-side",
-)
-fig7.savefig("examples/plot_effects_color_by.png", bbox_inches="tight", dpi=150)
-plt.close(fig7)
-
-# %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 8 — nested relative effects with two named variants, MCP correction,
-#           and value labels (replicates the "Variants vs Control" style)
-# ─────────────────────────────────────────────────────────────────────────────
-np.random.seed(7)
-
-# Baseline rates / counts per group (control arm)
-BASELINE = {
-    "total_leads": 12.5,
-    "paid_leads": 6.0,
-    "unpaid_leads": 6.5,
-    "has_lead": 0.58,
-    "has_paid_lead": 0.35,
-    "has_unpaid_lead": 0.30,
-    "has_multi_leads_per_cat": 0.22,
-}
-
-# (relative_lift_v1, relative_lift_v2) per outcome
-LIFTS = {
-    "total_leads": (0.004, 0.080),
-    "paid_leads": (-0.055, 0.085),
-    "unpaid_leads": (0.234, 0.057),
-    "has_lead": (-0.009, 0.045),
-    "has_paid_lead": (-0.056, 0.051),
-    "has_unpaid_lead": (0.177, 0.042),
-    "has_multi_leads_per_cat": (-0.008, 0.104),
-}
-
-COUNT_OUTCOMES = ["total_leads", "paid_leads", "unpaid_leads"]
-PROP_OUTCOMES = ["has_lead", "has_paid_lead", "has_unpaid_lead", "has_multi_leads_per_cat"]
-ALL_OUTCOMES = COUNT_OUTCOMES + PROP_OUTCOMES
-
-n_per_arm = 4_000
-arms = {"control": 0, "V1 (Proximity)": 1, "V2 (ML)": 2}
-
-rows_nested = []
-for arm_name, arm_idx in arms.items():
-    rng = np.random.default_rng(seed=arm_idx * 100 + 7)
-    d: dict = {"treatment": arm_name}
-    for outcome in ALL_OUTCOMES:
-        base = BASELINE[outcome]
-        lift_v1, lift_v2 = LIFTS[outcome]
-        if arm_name == "control":
-            lift = 0.0
-        elif arm_name == "V1 (Proximity)":
-            lift = lift_v1
-        else:
-            lift = lift_v2
-        effective = base * (1 + lift)
-        if outcome in PROP_OUTCOMES:
-            d[outcome] = rng.binomial(1, np.clip(effective, 0, 1), n_per_arm).astype(float)
-        else:
-            d[outcome] = rng.poisson(lam=max(effective, 0.01), size=n_per_arm).astype(float)
-    rows_nested.append(pd.DataFrame(d))
-
-df_nested = pd.concat(rows_nested, ignore_index=True)
-
-analyzer_nested = ExperimentAnalyzer(
-    data=df_nested,
-    treatment_col="treatment",
-    outcomes=ALL_OUTCOMES,
-    pvalue_adjustment="bonferroni",
-)
-analyzer_nested.get_effects()
-
-fig8 = analyzer_nested.plot_effects(
-    y="outcome",
-    effect="relative",
-    color_by="treatment_group",
-    show_labels=True,
-    sort_by_magnitude=False,
-    title="Variants vs Control\n* = significant after multiple comparisons correction",
-    panel_titles="",
-)
-fig8.savefig("examples/plot_effects_nested_relative.png", bbox_inches="tight", dpi=150)
-plt.close(fig8)
-
 print("\nAll plots saved to examples/")
 print("  plot_effects_basic.png")
 print("  plot_effects_country_us.png  /  plot_effects_country_eu.png")
@@ -295,5 +172,3 @@ print("  plot_effects_type_email.png  /  plot_effects_type_push.png  /  plot_eff
 print("  plot_effects_meta.png")
 print("  plot_effects_y_outcome.png")
 print("  plot_effects_single_exp.png")
-print("  plot_effects_color_by.png")
-print("  plot_effects_nested_relative.png")
