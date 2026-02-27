@@ -921,7 +921,7 @@ fig = analyzer.plot_effects()
 | `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
 | `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
-| `effect` | `"absolute"` | `"absolute"` or `"relative"` |
+| `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
 | `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
 | `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
 | `group_by` | `None` | Column(s) to split into separate figures |
