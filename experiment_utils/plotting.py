@@ -37,40 +37,8 @@ def _fmt_label(value: float, significant: int, eff_col: str) -> str:
     return text + ("*" if significant else "")
 
 
-def _render_effects_figure(
-    data: pd.DataFrame,
-    unique_outcomes: list[str],
-    eff_col: str,
-    lo_col: str,
-    hi_col: str,
-    x_label: str,
-    alpha: float,
-    meta_df: pd.DataFrame | None,
-    figsize: tuple | None,
-    title: str | None,
-    show_zero_line: bool,
-    sort_by_magnitude: bool,
-    panel_col: str = "outcome",
-    row_col: str = "_label",
-    panel_titles: str | list | dict | None = None,
-    row_labels: dict | None = None,
-    show_labels: bool = False,
-) -> plt.Figure:
-    """Build and return a single effects figure for *data* (already labelled).
-
-    Parameters
-    ----------
-    panel_col : str
-        Column whose unique values become separate subplots (default ``"outcome"``).
-    row_col : str
-        Column whose values become y-axis rows within each subplot
-        (default ``"_label"``).
-    """
-    # Use MCP-adjusted significance when available
-    sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
-    mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
-    sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
-    # Use MCP-adjusted CI bounds to keep bars visually consistent with significance colors
+def _resolve_ci_cols(lo_col: str, hi_col: str, data: pd.DataFrame, sig_col: str) -> tuple[str, str]:
+    """Return effective (lo, hi) columns, using MCP-adjusted bounds when available."""
     _mcp_lo = lo_col.replace("_lower", "_lower_mcp").replace("effect_lower", "effect_lower_mcp")
     _mcp_hi = hi_col.replace("_upper", "_upper_mcp").replace("effect_upper", "effect_upper_mcp")
     use_mcp_ci = (
@@ -79,24 +47,33 @@ def _render_effects_figure(
         and _mcp_hi in data.columns
         and not data[_mcp_lo].isna().all()
     )
-    _lo_col = _mcp_lo if use_mcp_ci else lo_col
-    _hi_col = _mcp_hi if use_mcp_ci else hi_col
+    return (_mcp_lo if use_mcp_ci else lo_col, _mcp_hi if use_mcp_ci else hi_col)
 
-    unique_panels = list(data[panel_col].unique())
-    n_panels = len(unique_panels)
-    max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
-    if meta_df is not None and panel_col == "outcome":
-        max_rows += 1
-    if figsize is None:
-        fig_h = max(3.5, 0.65 * max_rows + 2.4)
-        # Cap per-panel width so many-panel layouts stay readable
-        panel_w = max(3.2, min(5.5, 14.0 / n_panels))
-        fig_w = max(5.5, panel_w * n_panels)
-        figsize = (fig_w, fig_h)
 
-    fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
+def _draw_panels_into_axes(
+    axes: list,
+    data: pd.DataFrame,
+    unique_panels: list,
+    eff_col: str,
+    lo_col: str,
+    hi_col: str,
+    x_label: str,
+    sig_col: str,
+    meta_df: pd.DataFrame | None,
+    show_zero_line: bool,
+    sort_by_magnitude: bool,
+    panel_col: str,
+    row_col: str,
+    panel_titles: str | list | dict | None,
+    row_labels: dict | None,
+    show_labels: bool,
+    show_yticklabels: bool = True,
+    row_order: dict | None = None,
+) -> None:
+    """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
+    _lo_col, _hi_col = _resolve_ci_cols(lo_col, hi_col, data, sig_col)
 
-    for panel_idx, (ax, panel_val) in enumerate(zip(axes.flatten(), unique_panels, strict=False)):
+    for panel_idx, (ax, panel_val) in enumerate(zip(axes, unique_panels, strict=False)):
         od = data[data[panel_col] == panel_val].copy()
 
         ax.set_facecolor("white")
@@ -105,7 +82,11 @@ def _render_effects_figure(
             ax.axvline(0, color=_CLR_ZERO, linestyle="-", linewidth=1.0, alpha=0.55, zorder=1)
         cap_h = 0.06
 
-        if sort_by_magnitude:
+        if row_order is not None and panel_val in row_order:
+            order_map = {label: i for i, label in enumerate(row_order[panel_val])}
+            od["_row_order"] = od[row_col].map(order_map).fillna(len(order_map))
+            od = od.sort_values("_row_order")
+        elif sort_by_magnitude:
             od = od.sort_values(by=eff_col, ascending=False)
 
         labels = list(od[row_col])
@@ -166,11 +147,13 @@ def _render_effects_figure(
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
         ax.set_yticks(y_pos)
-        display_labels = [row_labels.get(lbl, lbl) for lbl in labels] if row_labels else labels
-        ax.set_yticklabels(display_labels, fontsize=9.5, color="#334155")
+        if show_yticklabels:
+            display_labels = [row_labels.get(lbl, lbl) for lbl in labels] if row_labels else labels
+            ax.set_yticklabels(display_labels, fontsize=9.5, color="#334155")
+        else:
+            ax.set_yticklabels([])
 
-        # ── shared axis styling ───────────────────────────────────────
-        ax.tick_params(axis="y", length=0, pad=8)
+        ax.tick_params(axis="y", length=0, pad=8 if show_yticklabels else 2)
         ax.tick_params(axis="x", labelsize=8.5, colors="#64748b", pad=4)
         ax.set_xlabel(x_label, fontsize=9.5, color="#64748b", labelpad=6)
         ax.set_ylim(-0.6, n_rows - 0.4)
@@ -179,18 +162,29 @@ def _render_effects_figure(
             ax.spines[spine].set_visible(False)
         ax.spines["bottom"].set_color(_CLR_SPINE)
         ax.spines["bottom"].set_linewidth(0.8)
-        if isinstance(panel_titles, dict):
-            ptitle = panel_titles.get(panel_val, str(panel_val))
-        elif isinstance(panel_titles, list):
-            ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
-        elif isinstance(panel_titles, str):
-            ptitle = panel_titles
-        else:
-            ptitle = str(panel_val)
-        ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
+
+        if show_yticklabels:
+            if isinstance(panel_titles, dict):
+                ptitle = panel_titles.get(panel_val, str(panel_val))
+            elif isinstance(panel_titles, list):
+                ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
+            elif isinstance(panel_titles, str):
+                ptitle = panel_titles
+            else:
+                ptitle = str(panel_val)
+            ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
+
         ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
 
-    # ── legend ────────────────────────────────────────────────────────
+
+def _add_legend_and_title(
+    fig: plt.Figure,
+    figsize: tuple,
+    title: str | None,
+    sig_label: str,
+    meta_df: pd.DataFrame | None,
+) -> None:
+    """Add a shared legend and optional suptitle, then call tight_layout."""
     legend_items = [
         mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
         mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
@@ -219,14 +213,168 @@ def _render_effects_figure(
         columnspacing=1.4,
     )
 
-    # Reserve a fixed height in inches for the header (legend + optional suptitle)
-    # so the gap stays constant regardless of figure height.
     header_inches = 0.45 + (0.28 if title else 0.0)
     reserved = header_inches / figsize[1]
-    # Use fig.tight_layout (not plt.tight_layout) to avoid triggering an extra
-    # inline display in Jupyter notebooks via the global pyplot state machine.
     fig.tight_layout(rect=[0, 0, 1, 1.0 - reserved])
     plt.close(fig)
+
+
+def _render_effects_figure(
+    data: pd.DataFrame,
+    unique_outcomes: list[str],
+    eff_col: str,
+    lo_col: str,
+    hi_col: str,
+    x_label: str,
+    alpha: float,
+    meta_df: pd.DataFrame | None,
+    figsize: tuple | None,
+    title: str | None,
+    show_zero_line: bool,
+    sort_by_magnitude: bool,
+    panel_col: str = "outcome",
+    row_col: str = "_label",
+    panel_titles: str | list | dict | None = None,
+    row_labels: dict | None = None,
+    show_labels: bool = False,
+) -> plt.Figure:
+    """Build and return a single effects figure for *data* (already labelled)."""
+    sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
+    mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
+    sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
+
+    unique_panels = list(data[panel_col].unique())
+    n_panels = len(unique_panels)
+    max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
+    if meta_df is not None and panel_col == "outcome":
+        max_rows += 1
+    if figsize is None:
+        fig_h = max(3.5, 0.65 * max_rows + 2.4)
+        panel_w = max(3.2, min(5.5, 14.0 / n_panels))
+        fig_w = max(5.5, panel_w * n_panels)
+        figsize = (fig_w, fig_h)
+
+    fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
+
+    _draw_panels_into_axes(
+        list(axes.flatten()),
+        data,
+        unique_panels,
+        eff_col,
+        lo_col,
+        hi_col,
+        x_label,
+        sig_col,
+        meta_df,
+        show_zero_line,
+        sort_by_magnitude,
+        panel_col,
+        row_col,
+        panel_titles,
+        row_labels,
+        show_labels,
+        show_yticklabels=True,
+    )
+
+    _add_legend_and_title(fig, figsize, title, sig_label, meta_df)
+    return fig
+
+
+def _render_multi_effect_figure(
+    data: pd.DataFrame,
+    effect_specs: list[tuple],
+    alpha: float,
+    meta_df: pd.DataFrame | None,
+    figsize: tuple | None,
+    title: str | None,
+    show_zero_line: bool,
+    sort_by_magnitude: bool,
+    panel_col: str,
+    row_col: str,
+    panel_titles: str | list | dict | None,
+    row_labels: dict | None,
+    show_labels: bool,
+) -> plt.Figure:
+    """Build a side-by-side figure with one column group per effect type.
+
+    ``effect_specs`` is a list of ``(eff_col, lo_col, hi_col, x_label)`` tuples,
+    one per effect type.  Panels for the same outcome are placed adjacent to each
+    other: ``[abs_p0 | rel_p0 | abs_p1 | rel_p1 | ...]``.  Row labels and the
+    panel title are shown only on the leftmost column of each panel group.
+    """
+    sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
+    mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
+    sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
+
+    unique_panels = list(data[panel_col].unique())
+    n_panels = len(unique_panels)
+    n_effects = len(effect_specs)
+    n_cols = n_panels * n_effects
+
+    max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
+    if meta_df is not None and panel_col == "outcome":
+        max_rows += 1
+
+    if figsize is None:
+        fig_h = max(3.5, 0.65 * max_rows + 2.4)
+        panel_w = max(2.8, min(4.5, 12.0 / n_cols))
+        fig_w = max(5.5, panel_w * n_cols)
+        figsize = (fig_w, fig_h)
+
+    fig, all_axes = plt.subplots(1, n_cols, figsize=figsize, squeeze=False)
+
+    # Derive a stable row order from the first effect so all panels share the
+    # same top-to-bottom sequence regardless of which effect is displayed.
+    row_order: dict | None = None
+    if sort_by_magnitude:
+        first_ec = effect_specs[0][0]
+        row_order = {}
+        for pval in unique_panels:
+            pdata = data[data[panel_col] == pval]
+            sorted_rows = pdata.sort_values(by=first_ec, ascending=False)
+            row_order[pval] = list(sorted_rows[row_col])
+
+    for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
+        # Prepare CI columns for this effect type
+        eff_data = data.copy()
+        z = stats.norm.ppf(1 - alpha / 2)
+        if lc not in eff_data.columns or eff_data[lc].isna().all():
+            eff_data[lc] = eff_data[ec] - z * eff_data["standard_error"]
+            eff_data[hc] = eff_data[ec] + z * eff_data["standard_error"]
+        if meta_df is not None:
+            _meta = meta_df.copy()
+            if lc not in _meta.columns or _meta[lc].isna().all():
+                _meta[lc] = _meta[ec] - z * _meta["standard_error"]
+                _meta[hc] = _meta[ec] + z * _meta["standard_error"]
+        else:
+            _meta = None
+
+        # Columns for this effect: positions [pi * n_effects + eff_idx] for each panel pi
+        panel_axes = [all_axes[0][pi * n_effects + eff_idx] for pi in range(n_panels)]
+        show_yticks = eff_idx == 0
+
+        _draw_panels_into_axes(
+            panel_axes,
+            eff_data,
+            unique_panels,
+            ec,
+            lc,
+            hc,
+            xl,
+            sig_col,
+            _meta,
+            show_zero_line,
+            sort_by_magnitude,
+            panel_col,
+            row_col,
+            panel_titles if show_yticks else "",
+            row_labels,
+            show_labels,
+            show_yticklabels=show_yticks,
+            row_order=row_order,
+        )
+
+    _add_legend_and_title(fig, figsize, title, sig_label, meta_df)
     return fig
 
 
@@ -235,7 +383,7 @@ def plot_effects(
     experiment_identifier: str | list[str] | None = None,
     alpha: float = 0.05,
     outcomes: list[str] | str | None = None,
-    effect: str = "absolute",
+    effect: str | list[str] = "absolute",
     meta_df: pd.DataFrame | None = None,
     comparison: tuple | list[tuple] | None = None,
     figsize: tuple | None = None,
@@ -266,8 +414,10 @@ def plot_effects(
         Significance level used for the legend label (default 0.05).
     outcomes : str or list[str], optional
         Outcomes to include.  ``None`` shows all outcomes in *results*.
-    effect : {"absolute", "relative"}, optional
-        Which effect metric to display (default ``"absolute"``).
+    effect : {"absolute", "relative"} or list, optional
+        Which effect metric(s) to display (default ``"absolute"``).
+        Pass a list such as ``["absolute", "relative"]`` to produce a
+        side-by-side figure with one column group per effect type.
     meta_df : pd.DataFrame, optional
         Pre-computed ``combine_effects()`` result to append as a pooled row.
         Pass ``None`` (default) to omit the pooled row.
@@ -353,26 +503,36 @@ def plot_effects(
     if data.empty:
         return None
 
-    # ── effect columns + CI fallback ──────────────────────────────────
-    if effect == "relative":
-        eff_col, lo_col, hi_col = "relative_effect", "rel_effect_lower", "rel_effect_upper"
-        x_label = "Relative Effect"
-    else:
-        eff_col, lo_col, hi_col = "absolute_effect", "abs_effect_lower", "abs_effect_upper"
-        x_label = "Absolute Effect"
+    # ── normalise effect to a list ────────────────────────────────────
+    effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
+
+    def _effect_cols(e: str) -> tuple[str, str, str, str]:
+        if e == "relative":
+            return "relative_effect", "rel_effect_lower", "rel_effect_upper", "Relative Effect"
+        return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect"
 
     z = stats.norm.ppf(1 - alpha / 2)
-    if lo_col not in data.columns or data[lo_col].isna().all():
-        data[lo_col] = data[eff_col] - z * data["standard_error"]
-        data[hi_col] = data[eff_col] + z * data["standard_error"]
 
-    if meta_df is not None:
-        meta_df = meta_df.copy()
-        if "_label" not in meta_df.columns:
-            meta_df["_label"] = "Pooled"
-        if lo_col not in meta_df.columns or meta_df[lo_col].isna().all():
-            meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
-            meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
+    # For a single effect: resolve CI columns on the main data now (existing behaviour)
+    if len(effects) == 1:
+        eff_col, lo_col, hi_col, x_label = _effect_cols(effects[0])
+        if lo_col not in data.columns or data[lo_col].isna().all():
+            data[lo_col] = data[eff_col] - z * data["standard_error"]
+            data[hi_col] = data[eff_col] + z * data["standard_error"]
+        if meta_df is not None:
+            meta_df = meta_df.copy()
+            if "_label" not in meta_df.columns:
+                meta_df["_label"] = "Pooled"
+            if lo_col not in meta_df.columns or meta_df[lo_col].isna().all():
+                meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
+                meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
+    else:
+        # Multi-effect: CI columns are resolved later inside _render_multi_effect_figure
+        eff_col = lo_col = hi_col = x_label = None  # type: ignore[assignment]
+        if meta_df is not None:
+            meta_df = meta_df.copy()
+            if "_label" not in meta_df.columns:
+                meta_df["_label"] = "Pooled"
 
     # ── resolve group_by and label columns ───────────────────────────
     group_cols: list[str] = []
@@ -414,12 +574,7 @@ def plot_effects(
         panel_col = "outcome"
         row_col = "_label"
 
-    render_kw = dict(
-        unique_outcomes=unique_outcomes,
-        eff_col=eff_col,
-        lo_col=lo_col,
-        hi_col=hi_col,
-        x_label=x_label,
+    shared_kw = dict(
         alpha=alpha,
         meta_df=meta_df,
         figsize=figsize,
@@ -432,17 +587,37 @@ def plot_effects(
         show_labels=show_labels,
     )
 
+    def _render(labelled: pd.DataFrame, fig_title: str | None) -> plt.Figure:
+        if len(effects) == 1:
+            return _render_effects_figure(
+                labelled,
+                unique_outcomes=unique_outcomes,
+                eff_col=eff_col,
+                lo_col=lo_col,
+                hi_col=hi_col,
+                x_label=x_label,
+                title=fig_title,
+                **shared_kw,
+            )
+        effect_specs = [_effect_cols(e) for e in effects]
+        return _render_multi_effect_figure(
+            labelled,
+            effect_specs=effect_specs,
+            title=fig_title,
+            **shared_kw,
+        )
+
     if group_cols:
         figures: dict[str, plt.Figure] = {}
         for group_key, group_data in data.groupby(group_cols):
             key_str = " | ".join(str(v) for v in group_key) if isinstance(group_key, tuple) else str(group_key)
             fig_title = title if title is not None else key_str
             labelled = _build_labels(group_data)
-            figures[key_str] = _render_effects_figure(labelled, title=fig_title, **render_kw)
+            figures[key_str] = _render(labelled, fig_title)
         return figures
 
     labelled = _build_labels(data)
-    return _render_effects_figure(labelled, title=title, **render_kw)
+    return _render(labelled, title)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1997,7 +1997,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
     def plot_effects(
         self,
         outcomes: list[str] | str | None = None,
-        effect: str = "absolute",
+        effect: str | list[str] = "absolute",
         meta_analysis: bool | pd.DataFrame | None = None,
         comparison: tuple | list[tuple] | None = None,
         figsize: tuple | None = None,
@@ -2021,8 +2021,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         ----------
         outcomes : str or list[str], optional
             Outcomes to include.  If None all outcomes in results are shown.
-        effect : {"absolute", "relative"}, optional
-            Which effect metric to display (default "absolute").
+        effect : {"absolute", "relative"} or list, optional
+            Which effect metric(s) to display (default "absolute").
+            Pass ``["absolute", "relative"]`` to produce a side-by-side figure
+            with one column group per effect type.
         meta_analysis : bool or pd.DataFrame, optional
             - True  → compute pooled estimate via ``combine_effects()``
             - pd.DataFrame → use a pre-computed ``combine_effects()`` result
