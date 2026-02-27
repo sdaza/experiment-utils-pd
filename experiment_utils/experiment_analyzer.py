@@ -1999,7 +1999,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         outcomes: list[str] | str | None = None,
         effect: str = "absolute",
         meta_analysis: bool | pd.DataFrame | None = None,
-        comparison: tuple | None = None,
+        comparison: tuple | list[tuple] | None = None,
         figsize: tuple | None = None,
         title: str | None = None,
         show_zero_line: bool = True,
@@ -2027,9 +2027,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             - True  → compute pooled estimate via ``combine_effects()``
             - pd.DataFrame → use a pre-computed ``combine_effects()`` result
             - None (default) → no pooled row
-        comparison : tuple, optional
+        comparison : tuple or list of tuple, optional
             ``(treatment_group, control_group)`` to restrict the plot to one
-            specific comparison.
+            specific comparison, or a list of such tuples to include multiple
+            comparisons, e.g.
+            ``[('variant_1', 'control'), ('variant_1', 'variant_2')]``.
         figsize : tuple, optional
             ``(width, height)`` in inches.  Auto-sized when None.
         title : str, optional

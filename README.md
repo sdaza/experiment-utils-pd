@@ -925,7 +925,7 @@ fig = analyzer.plot_effects()
 | `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
 | `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
 | `group_by` | `None` | Column(s) to split into separate figures |
-| `comparison` | `None` | `(treatment, control)` tuple to filter to one comparison |
+| `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
 | `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
 | `show_zero_line` | `True` | Vertical reference line at zero |
 | `figsize` | auto | `(width, height)` in inches |
