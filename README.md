@@ -36,6 +36,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Checking Covariate Balance](#checking-covariate-balance)
     - [Covariate Adjustment Methods](#covariate-adjustment-methods)
     - [Outcome Models](#outcome-models)
+    - [Ratio Metrics (Delta Method)](#ratio-metrics-delta-method)
     - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)
     - [Bootstrap Inference](#bootstrap-inference)
     - [Multiple Experiments](#multiple-experiments)
@@ -487,6 +488,100 @@ analyzer = ExperimentAnalyzer(..., compute_marginal_effects=False)
 | `"overall"` (default) | Probability change (pp) | Change in expected count |
 | `"mean"` | Probability change at mean | Count change at mean |
 | `False` | Odds ratio | Rate ratio |
+
+### Ratio Metrics (Delta Method)
+
+Use `ratio_outcomes` for metrics where both the numerator and denominator include randomness — for example, *leads per converter* or *revenue per session*. Conditioning on the denominator (e.g., analysing only converters) introduces selection bias, so the correct approach is the **delta method linearization** (Deng et al. 2018):
+
+```
+linearized_i = numerator_i  −  R_control × denominator_i
+where  R_control = mean(numerator_control) / mean(denominator_control)
+```
+
+OLS on `linearized_i` estimates the difference in population-average ratios with correct standard errors. `R_control` is computed separately for each `(treatment, control)` comparison pair, so multi-arm experiments work out of the box.
+
+**Basic usage**
+
+```python
+import numpy as np
+import pandas as pd
+from experiment_utils import ExperimentAnalyzer
+
+np.random.seed(42)
+n = 20_000
+treatment = np.random.choice(["control", "variant_1", "variant_2"], n)
+
+# ~30% of users convert; converters generate ~2 leads on average
+converters = np.where(
+    treatment == "variant_2", np.random.binomial(1, 0.32, n),
+    np.where(treatment == "variant_1", np.random.binomial(1, 0.31, n),
+                                       np.random.binomial(1, 0.30, n)),
+)
+leads = np.where(converters == 1, np.random.poisson(2 + 0.1 * (treatment == "variant_2"), n), 0)
+
+df = pd.DataFrame({"treatment": treatment, "converters": converters, "leads": leads})
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["converters", "leads"],           # regular outcomes
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+)
+
+analyzer.get_effects()
+
+cols = ["outcome", "treatment_group", "control_group",
+        "control_value", "absolute_effect", "standard_error",
+        "stat_significance", "effect_type"]
+print(analyzer.results[cols].to_string())
+```
+
+Output:
+```
+               outcome treatment_group control_group  control_value  absolute_effect  standard_error  stat_significance      effect_type
+0           converters       variant_1       control       0.301              0.010        0.006                  1   mean_difference
+1                leads       variant_1       control       0.602              0.046        0.017                  1   mean_difference
+2  leads_per_converter       variant_1       control       1.977              0.022        0.011                  1  ratio_difference
+3           converters       variant_2       control       0.301              0.019        0.006                  1   mean_difference
+4                leads       variant_2       control       0.602              0.076        0.017                  1   mean_difference
+5  leads_per_converter       variant_2       control       1.977              0.037        0.011                  1  ratio_difference
+6           converters       variant_2     variant_1       0.311              0.009        0.007                  0   mean_difference
+7                leads       variant_2     variant_1       0.647              0.030        0.017                  0   mean_difference
+8  leads_per_converter       variant_2     variant_1       2.049              0.014        0.012                  0  ratio_difference
+```
+
+The `control_value` column shows `R_control` (the control arm's ratio), and `absolute_effect` is the estimated difference in ratios. Results integrate normally with `plot_effects`, `calculate_retrodesign`, and MCP correction.
+
+**With bootstrap**
+
+Bootstrap correctly re-estimates `R_control` on each resample, so standard errors fully capture the uncertainty in the ratio baseline:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["leads"],
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+    bootstrap=True,
+    bootstrap_iterations=1000,
+    bootstrap_seed=42,
+)
+
+analyzer.get_effects()
+print(analyzer.results[["outcome", "absolute_effect", "standard_error",
+                         "abs_effect_lower", "abs_effect_upper"]])
+```
+
+> **Why not just subset to converters?** Analysing only users who converted conditions on a post-randomisation variable, creating selection bias. The delta method preserves the full randomised sample and gives an unbiased estimate of the causal effect on the population-average ratio.
+
+**Key result columns for ratio outcomes**
+
+| Column | Meaning |
+|---|---|
+| `control_value` | `R_control = mean(num_control) / mean(den_control)` for this comparison |
+| `absolute_effect` | Estimated difference in population-average ratios |
+| `relative_effect` | `absolute_effect / control_value` |
+| `effect_type` | `"ratio_difference"` |
 
 ### Survival Analysis (Cox Models)
 
@@ -1387,13 +1482,14 @@ print(balance[balance["covariate"].str.contains("region")])
 
 **Choosing an outcome model:**
 
-| Outcome type | Model | `outcome_models` |
-|---|---|---|
-| Continuous (revenue, time) | OLS | `"ols"` (default) |
-| Binary (converted, churned) | Logistic | `"logistic"` |
-| Count (orders, clicks) | Poisson | `"poisson"` |
-| Overdispersed count | Negative binomial | `"negative_binomial"` |
-| Time-to-event | Cox PH | `"cox"` |
+| Outcome type | Parameter |
+|---|---|
+| Continuous (revenue, time) | `outcome_models="ols"` (default) |
+| Binary (converted, churned) | `outcome_models="logistic"` |
+| Count (orders, clicks) | `outcome_models="poisson"` |
+| Overdispersed count | `outcome_models="negative_binomial"` |
+| Time-to-event | `outcome_models="cox"` |
+| Ratio (leads/converter, revenue/session) | `ratio_outcomes={"name": ("num_col", "den_col")}` |
 
 ### Non-Collapsibility of Hazard and Odds Ratios
 

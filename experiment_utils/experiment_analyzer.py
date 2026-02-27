@@ -166,6 +166,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Two ways to specify Cox models:
         1. Tuple notation (recommended): outcomes=[("time_col", "event_col")]
         2. Separate parameter: outcomes=["time_col"], event_col="event_col"
+    ratio_outcomes : dict[str, tuple[str, str]], optional
+        Ratio metrics where both numerator and denominator contain randomness (e.g., leads per
+        converter). Specify as ``{"metric_name": ("numerator_col", "denominator_col")}``.
+
+        Uses OLS on the delta-method linearized metric (Deng et al. 2018):
+
+        .. code-block:: text
+
+            linearized_i = numerator_i - R_control * denominator_i
+            where R_control = mean(numerator_control) / mean(denominator_control)
+
+        This gives a statistically valid estimate of the difference in population-average
+        ratios (E[num/den]), avoiding the selection bias of conditioning on converters.
+        R_control is computed separately for each (treatment, control) comparison pair.
+        Results appear alongside regular outcomes with ``effect_type="ratio_difference"``.
+        By default None.
+
+        Example::
+
+            ratio_outcomes={"leads_per_converter": ("leads", "converters")}
+
     interaction_covariates : list[str], optional
         Covariates added to OLS formulas as a CUPED-style treatment interaction:
         ``z_{col} + treatment:z_{col}``. Each covariate is automatically centered and
@@ -234,6 +255,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         store_fitted_models: bool = True,
         event_col: str | None = None,
         interaction_covariates: list[str] | None = None,
+        ratio_outcomes: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -296,6 +318,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._event_col = event_col
         self._interaction_covariates = self.__ensure_list(interaction_covariates)
         self._all_covariates = list(dict.fromkeys(self._balance_covariates + self._regression_covariates))
+
+        # Validate and store ratio outcomes: {name: (numerator_col, denominator_col)}
+        self._ratio_outcomes: dict[str, tuple[str, str]] = {}
+        if ratio_outcomes:
+            for name, pair in ratio_outcomes.items():
+                if not (isinstance(pair, tuple | list) and len(pair) == 2):
+                    log_and_raise_error(
+                        self._logger,
+                        f"ratio_outcomes['{name}'] must be a (numerator, denominator) tuple.",
+                    )
+                num_col, den_col = pair
+                for col in (num_col, den_col):
+                    if col not in self._data.columns:
+                        log_and_raise_error(
+                            self._logger,
+                            f"Column '{col}' not found in data (required for ratio outcome '{name}').",
+                        )
+                self._ratio_outcomes[name] = (num_col, den_col)
+
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -343,6 +384,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
+        # Collect numerator and denominator columns for ratio outcomes
+        ratio_raw_cols = [col for pair in self._ratio_outcomes.values() for col in pair]
+
         required_columns = (
             self._experiment_identifier
             + [self._treatment_col]
@@ -355,6 +399,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
             + (self._interaction_covariates if self._interaction_covariates else [])
+            + ratio_raw_cols
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -1425,7 +1470,29 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         adjustment_label = "regression"
                     adjustment_label += "+interactions"
 
-                for outcome in self._outcomes:
+                # Compute linearized ratio metrics for this comparison (delta method).
+                # For each ratio outcome Y/X, the linearized metric is:
+                #   lin_i = Y_i - R_control * X_i   where R_control = mean(Y_control) / mean(X_control)
+                # OLS on lin_i estimates the difference in ratios with correct variance.
+                _ratio_lin_cols: dict[str, tuple[str, str, str, float]] = {}  # lin_col -> (name, num, den, R)
+                _c_mask = comparison_data[self._treatment_col] == 0
+                for _ratio_name, (_num_col, _den_col) in self._ratio_outcomes.items():
+                    _den_ctrl_mean = comparison_data.loc[_c_mask, _den_col].mean()
+                    if _den_ctrl_mean == 0 or np.isnan(_den_ctrl_mean):
+                        self._logger.warning(
+                            f"Denominator mean is 0 or NaN for ratio outcome '{_ratio_name}' "
+                            f"in comparison {treatment_val} vs {control_val}. Skipping."
+                        )
+                        continue
+                    _R = comparison_data.loc[_c_mask, _num_col].mean() / _den_ctrl_mean
+                    _lin_col = f"__ratio_lin_{_ratio_name}"
+                    comparison_data[_lin_col] = comparison_data[_num_col] - _R * comparison_data[_den_col]
+                    _ratio_lin_cols[_lin_col] = (_ratio_name, _num_col, _den_col, _R)
+
+                _all_outcomes = list(self._outcomes) + list(_ratio_lin_cols.keys())
+
+                for outcome in _all_outcomes:
+                    _is_ratio = outcome in _ratio_lin_cols
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
                         self._logger.warning(
                             f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. "
@@ -1439,7 +1506,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         )
                         continue
 
-                    model_types = self._normalized_outcome_models.get(outcome, ["ols"])
+                    # Ratio outcomes always use OLS on the linearized column
+                    model_types = ["ols"] if _is_ratio else self._normalized_outcome_models.get(outcome, ["ols"])
 
                     for model_type in model_types:
                         # Auto-detect binary outcomes: when using AIPW with OLS on a binary outcome,
@@ -1520,6 +1588,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
+                            # For ratio outcomes: override effect_type and control_value
+                            if _is_ratio:
+                                _ratio_name, _num_col, _den_col, _R = _ratio_lin_cols[outcome]
+                                output["effect_type"] = "ratio_difference"
+                                # control_value = the control ratio R (interpretable baseline)
+                                output["control_value"] = _R
+                                output["treatment_value"] = (
+                                    comparison_data.loc[~control_mask, _num_col].mean()
+                                    / comparison_data.loc[~control_mask, _den_col].mean()
+                                )
+
                             if self._store_fitted_models and "fitted_model" in output:
                                 if experiment_tuple not in self._fitted_models:
                                     self._fitted_models[experiment_tuple] = {}
@@ -1591,6 +1670,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         model_type=model_type,
                                         compute_marginal_effects=me_setting,
                                         interaction_covariates=active_int_covs,
+                                        ratio_cols=(_ratio_lin_cols[outcome][1], _ratio_lin_cols[outcome][2])
+                                        if _is_ratio
+                                        else None,
                                     )
                                     bootstrap_results = self._calculate_bootstrap_inference(
                                         bootstrap_abs_effects,
@@ -1667,6 +1749,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["srm_detected"] = srm_detected
                             output["srm_pvalue"] = srm_pvalue
                             output["trimmed_units"] = n_trimmed
+
+                            # For ratio outcomes: rename outcome from the temp linearized column
+                            # to the user-specified ratio name
+                            if _is_ratio:
+                                output["outcome"] = _ratio_lin_cols[outcome][0]
+
                             temp_results.append(output)
 
                         except Exception as e:

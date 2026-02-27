@@ -228,6 +228,7 @@ class BootstrapMixin:
         iteration: int,
         event_col_for_resample: str | None = None,
         bootstrap_indices: np.ndarray | None = None,
+        ratio_cols: tuple[str, str] | None = None,
     ) -> tuple[pd.DataFrame | None, list[str], str | None, str | None]:
         """
         Prepare a bootstrap sample (Stage 1: I/O-bound, use threading).
@@ -272,6 +273,16 @@ class BootstrapMixin:
             else:
                 seed = self._bootstrap_seed + iteration if self._bootstrap_seed is not None else None
                 boot_data = self._stratified_resample(data, seed=seed, event_col=event_col_for_resample)
+
+            # For ratio outcomes: re-estimate R_control on this resample so the bootstrap
+            # correctly captures variance in the control ratio, not just OLS residuals.
+            if ratio_cols is not None:
+                num_col, den_col = ratio_cols
+                c_mask_boot = boot_data[self._treatment_col] == 0
+                den_ctrl_boot = boot_data.loc[c_mask_boot, den_col].mean()
+                if den_ctrl_boot != 0 and not np.isnan(den_ctrl_boot):
+                    R_boot = boot_data.loc[c_mask_boot, num_col].mean() / den_ctrl_boot
+                    boot_data[outcome] = boot_data[num_col] - R_boot * boot_data[den_col]
 
             # Impute and standardize
             boot_data = self.impute_missing_values(
@@ -422,6 +433,7 @@ class BootstrapMixin:
         event_col_for_resample: str | None = None,
         interaction_covariates: list[str] | None = None,
         bootstrap_indices: np.ndarray | None = None,
+        ratio_cols: tuple[str, str] | None = None,
     ) -> tuple[float | None, float | None, str | None]:
         """
         Execute a single bootstrap iteration.
@@ -479,6 +491,7 @@ class BootstrapMixin:
             iteration=iteration,
             event_col_for_resample=event_col_for_resample,
             bootstrap_indices=bootstrap_indices,
+            ratio_cols=ratio_cols,
         )
 
         if prep_error is not None:
@@ -518,6 +531,7 @@ class BootstrapMixin:
         model_type: str = "ols",
         compute_marginal_effects: str | bool = "overall",
         interaction_covariates: list[str] | None = None,
+        ratio_cols: tuple[str, str] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Bootstrap a single effect estimate for one outcome.
@@ -560,6 +574,10 @@ class BootstrapMixin:
         # Key format: "data_hash_eventcol" - ensures same data+stratification = same indices
         data_hash = str(len(data))  # Simple hash based on data size
         cache_key = f"bootstrap_{data_hash}_{event_col_for_resample}"
+
+        # Strip internal ratio prefix for progress bar display
+        _RATIO_PREFIX = "__ratio_lin_"
+        outcome_display = outcome[len(_RATIO_PREFIX) :] if outcome.startswith(_RATIO_PREFIX) else outcome
 
         # Get or generate bootstrap indices (cached for reuse across outcomes/models)
         # MAJOR OPTIMIZATION: If you have 5 outcomes × 2 models, this reuses the same 1000 samples
@@ -606,6 +624,7 @@ class BootstrapMixin:
                         iteration=i,
                         event_col_for_resample=event_col_for_resample,
                         bootstrap_indices=bootstrap_indices_list[i],
+                        ratio_cols=ratio_cols,
                     )
                     for i in range(self._bootstrap_iterations)
                 )
@@ -641,7 +660,7 @@ class BootstrapMixin:
                             for boot_data, boot_relevant_covariates, weight_col, _ in valid_samples
                         ),
                         total=len(valid_samples),
-                        desc=f"Bootstrap [{outcome}]",
+                        desc=f"Bootstrap [{outcome_display}]",
                         unit="iter",
                     )
                 )
@@ -704,11 +723,12 @@ class BootstrapMixin:
                                 event_col_for_resample=event_col_for_resample,
                                 interaction_covariates=interaction_covariates,
                                 bootstrap_indices=bootstrap_indices_list[i],
+                                ratio_cols=ratio_cols,
                             )
                             for i in range(self._bootstrap_iterations)
                         ),
                         total=self._bootstrap_iterations,
-                        desc=f"Bootstrap [{outcome}]",
+                        desc=f"Bootstrap [{outcome_display}]",
                         unit="iter",
                     )
                 )
@@ -741,7 +761,7 @@ class BootstrapMixin:
             bootstrap_rel_effects = []
             error_counts = {}
 
-            for i in tqdm(range(self._bootstrap_iterations), desc=f"Bootstrap [{outcome}]", unit="iter"):
+            for i in tqdm(range(self._bootstrap_iterations), desc=f"Bootstrap [{outcome_display}]", unit="iter"):
                 abs_eff, rel_eff, error_info = self._bootstrap_single_iteration(
                     data=data,
                     outcome=outcome,
@@ -756,7 +776,8 @@ class BootstrapMixin:
                     iteration=i,
                     event_col_for_resample=event_col_for_resample,
                     interaction_covariates=interaction_covariates,
-                    bootstrap_indices=bootstrap_indices_list[i],  # Use pre-generated indices
+                    bootstrap_indices=bootstrap_indices_list[i],
+                    ratio_cols=ratio_cols,
                 )
 
                 if abs_eff is not None:

@@ -37,17 +37,49 @@ def _fmt_label(value: float, significant: int, eff_col: str) -> str:
     return text + ("*" if significant else "")
 
 
-def _resolve_ci_cols(lo_col: str, hi_col: str, data: pd.DataFrame, sig_col: str) -> tuple[str, str]:
-    """Return effective (lo, hi) columns, using MCP-adjusted bounds when available."""
+def _resolve_ci_cols(
+    lo_col: str, hi_col: str, data: pd.DataFrame, sig_col: str, eff_col: str | None = None
+) -> tuple[str, str, pd.DataFrame]:
+    """Return effective (lo, hi) columns and (possibly augmented) data.
+
+    When Bonferroni/MCP significance is active but the pre-computed MCP CI
+    columns are absent, derive them on-the-fly so the displayed CI always
+    matches the significance decision.  Without this, a gray (non-significant)
+    dot can have a CI that visually excludes 0 — inconsistent with the legend.
+    """
     _mcp_lo = lo_col.replace("_lower", "_lower_mcp").replace("effect_lower", "effect_lower_mcp")
     _mcp_hi = hi_col.replace("_upper", "_upper_mcp").replace("effect_upper", "effect_upper_mcp")
-    use_mcp_ci = (
-        sig_col == "stat_significance_mcp"
-        and _mcp_lo in data.columns
-        and _mcp_hi in data.columns
-        and not data[_mcp_lo].isna().all()
+
+    mcp_cols_exist = _mcp_lo in data.columns and _mcp_hi in data.columns and not data[_mcp_lo].isna().all()
+
+    if sig_col != "stat_significance_mcp":
+        return lo_col, hi_col, data
+
+    if mcp_cols_exist:
+        return _mcp_lo, _mcp_hi, data
+
+    # MCP CI columns are absent — compute them from pvalue ratio or row count.
+    if "standard_error" not in data.columns or "pvalue" not in data.columns:
+        return lo_col, hi_col, data
+
+    # Estimate n_tests from median pvalue_mcp / pvalue ratio, fall back to row count.
+    n_tests = len(data)
+    if "pvalue_mcp" in data.columns:
+        valid = data[(data["pvalue"] > 0) & (data["pvalue_mcp"] < 1) & data["pvalue_mcp"].notna()]
+        if not valid.empty:
+            n_tests = max(1, round((valid["pvalue_mcp"] / valid["pvalue"]).median()))
+
+    z_adj = stats.norm.ppf(1 - 0.05 / (2 * n_tests))
+    _eff_col = eff_col or lo_col.replace("_lower", "").replace("abs_effect", "absolute_effect").replace(
+        "rel_effect", "relative_effect"
     )
-    return (_mcp_lo if use_mcp_ci else lo_col, _mcp_hi if use_mcp_ci else hi_col)
+    if _eff_col not in data.columns:
+        return lo_col, hi_col, data
+
+    data = data.copy()
+    data[_mcp_lo] = data[_eff_col] - z_adj * data["standard_error"]
+    data[_mcp_hi] = data[_eff_col] + z_adj * data["standard_error"]
+    return _mcp_lo, _mcp_hi, data
 
 
 def _draw_panels_into_axes(
@@ -67,13 +99,14 @@ def _draw_panels_into_axes(
     panel_titles: str | list | dict | None,
     row_labels: dict | None,
     show_labels: bool,
-    show_yticklabels: bool = True,
+    show_yticklabels: bool | list[bool] = True,
     row_order: dict | None = None,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
-    _lo_col, _hi_col = _resolve_ci_cols(lo_col, hi_col, data, sig_col)
+    _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
 
     for panel_idx, (ax, panel_val) in enumerate(zip(axes, unique_panels, strict=False)):
+        show_yticks = show_yticklabels[panel_idx] if isinstance(show_yticklabels, list) else show_yticklabels
         od = data[data[panel_col] == panel_val].copy()
 
         ax.set_facecolor("white")
@@ -147,13 +180,13 @@ def _draw_panels_into_axes(
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
         ax.set_yticks(y_pos)
-        if show_yticklabels:
+        if show_yticks:
             display_labels = [row_labels.get(lbl, lbl) for lbl in labels] if row_labels else labels
             ax.set_yticklabels(display_labels, fontsize=9.5, color="#334155")
         else:
             ax.set_yticklabels([])
 
-        ax.tick_params(axis="y", length=0, pad=8 if show_yticklabels else 2)
+        ax.tick_params(axis="y", length=0, pad=8 if show_yticks else 2)
         ax.tick_params(axis="x", labelsize=8.5, colors="#64748b", pad=4)
         ax.set_xlabel(x_label, fontsize=9.5, color="#64748b", labelpad=6)
         ax.set_ylim(-0.6, n_rows - 0.4)
@@ -163,16 +196,15 @@ def _draw_panels_into_axes(
         ax.spines["bottom"].set_color(_CLR_SPINE)
         ax.spines["bottom"].set_linewidth(0.8)
 
-        if show_yticklabels:
-            if isinstance(panel_titles, dict):
-                ptitle = panel_titles.get(panel_val, str(panel_val))
-            elif isinstance(panel_titles, list):
-                ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
-            elif isinstance(panel_titles, str):
-                ptitle = panel_titles
-            else:
-                ptitle = str(panel_val)
-            ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
+        if isinstance(panel_titles, dict):
+            ptitle = panel_titles.get(panel_val, str(panel_val))
+        elif isinstance(panel_titles, list):
+            ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
+        elif isinstance(panel_titles, str):
+            ptitle = panel_titles
+        else:
+            ptitle = str(panel_val)
+        ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
 
         ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
 
@@ -256,6 +288,21 @@ def _render_effects_figure(
 
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
 
+    # Derive a stable row order from the first panel so all panels share the same
+    # top-to-bottom sequence regardless of per-panel effect magnitudes.
+    row_order: dict | None = None
+    if sort_by_magnitude and n_panels > 1:
+        row_order = {}
+        first_panel = unique_panels[0]
+        pdata = data[data[panel_col] == first_panel]
+        sorted_rows = pdata.sort_values(by=eff_col, ascending=False)
+        reference_order = list(sorted_rows[row_col])
+        for pval in unique_panels:
+            row_order[pval] = reference_order
+
+    # Only the leftmost panel shows y-tick labels; all panels show their titles.
+    show_yticklabels = [pi == 0 for pi in range(n_panels)]
+
     _draw_panels_into_axes(
         list(axes.flatten()),
         data,
@@ -273,7 +320,8 @@ def _render_effects_figure(
         panel_titles,
         row_labels,
         show_labels,
-        show_yticklabels=True,
+        show_yticklabels=show_yticklabels,
+        row_order=row_order,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df)
