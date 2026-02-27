@@ -504,13 +504,29 @@ class RetrodesignMixin:
         # trimmed_abs_effect: observed effect deflated by relative_bias to approximate the true effect.
         # relative_bias = E[estimated / true] among significant estimates, so dividing the
         # observed effect by it yields a sign-preserving, bias-corrected estimate.
+        # Set to NaN when type_s_error >= 0.10: high sign error rates mean relative_bias is
+        # contaminated by wrong-sign estimates and the trimmed value can point in the wrong direction.
+        TYPE_S_TRIM_THRESHOLD = 0.10
         rb = df_filtered["relative_bias"]
+        type_s = df_filtered["type_s_error"]
+
+        unreliable_mask = type_s >= TYPE_S_TRIM_THRESHOLD
+        if unreliable_mask.any():
+            outcomes = df_filtered.loc[unreliable_mask, "outcome"].tolist()
+            self._logger.warning(
+                f"trimmed_abs_effect set to NaN for {unreliable_mask.sum()} row(s) where "
+                f"type_s_error >= {TYPE_S_TRIM_THRESHOLD} (outcomes: {outcomes}). "
+                "High sign-error rates make the bias correction unreliable."
+            )
+
         df_filtered["trimmed_abs_effect"] = df_filtered["absolute_effect"].where(
-            rb.isna() | (rb == 0), df_filtered["absolute_effect"] / rb
+            rb.isna() | (rb == 0) | unreliable_mask,
+            df_filtered["absolute_effect"] / rb,
         )
+        df_filtered.loc[unreliable_mask, "trimmed_abs_effect"] = np.nan
 
         # Drop internal columns not meant for display
-        internal_cols = ["se_intercept", "cov_coef_intercept", "control_std"]
+        internal_cols = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param"]
         df_filtered = df_filtered.drop(columns=[c for c in internal_cols if c in df_filtered.columns])
 
         return df_filtered
