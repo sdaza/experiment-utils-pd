@@ -103,7 +103,7 @@ def _render_effects_figure(
         ax.set_axisbelow(True)
         if show_zero_line:
             ax.axvline(0, color=_CLR_ZERO, linestyle="-", linewidth=1.0, alpha=0.55, zorder=1)
-        cap_h = 0.08
+        cap_h = 0.06
 
         if sort_by_magnitude:
             od = od.sort_values(by=eff_col, ascending=False)
@@ -150,16 +150,16 @@ def _render_effects_figure(
             is_meta_row = has_meta and label == meta_label
             if is_meta_row:
                 color = _CLR_SIG if sig == 1 else _CLR_NSIG
-                marker, dot_size, ci_lw = "D", 100, 2.2
+                marker, dot_size, ci_lw = "D", 70, 1.8
             elif sig == 1:
-                color, marker, dot_size, ci_lw = _CLR_SIG, "o", 75, 2.0
+                color, marker, dot_size, ci_lw = _CLR_SIG, "o", 45, 1.4
             else:
-                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 60, 1.6
+                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
 
             ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
             ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
-            ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=1.0)
+            ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_labels:
                 lbl = _fmt_label(eff, sig, eff_col)
@@ -237,7 +237,7 @@ def plot_effects(
     outcomes: list[str] | str | None = None,
     effect: str = "absolute",
     meta_df: pd.DataFrame | None = None,
-    comparison: tuple | None = None,
+    comparison: tuple | list[tuple] | None = None,
     figsize: tuple | None = None,
     title: str | None = None,
     show_zero_line: bool = True,
@@ -271,9 +271,11 @@ def plot_effects(
     meta_df : pd.DataFrame, optional
         Pre-computed ``combine_effects()`` result to append as a pooled row.
         Pass ``None`` (default) to omit the pooled row.
-    comparison : tuple, optional
+    comparison : tuple or list of tuple, optional
         ``(treatment_group, control_group)`` to restrict the plot to one
-        specific comparison.
+        specific comparison, or a list of such tuples to include multiple
+        comparisons, e.g.
+        ``[('variant_1', 'control'), ('variant_1', 'variant_2')]``.
     figsize : tuple, optional
         ``(width, height)`` in inches.  Auto-sized when ``None``.
     title : str, optional
@@ -343,8 +345,11 @@ def plot_effects(
 
     # ── filter comparison ─────────────────────────────────────────────
     if comparison is not None:
-        t_val, c_val = comparison
-        data = data[(data["treatment_group"] == t_val) & (data["control_group"] == c_val)]
+        pairs = [comparison] if isinstance(comparison, tuple) else list(comparison)
+        mask = pd.Series(False, index=data.index)
+        for t_val, c_val in pairs:
+            mask |= (data["treatment_group"] == t_val) & (data["control_group"] == c_val)
+        data = data[mask]
     if data.empty:
         return None
 
