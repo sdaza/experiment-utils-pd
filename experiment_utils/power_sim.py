@@ -1441,60 +1441,149 @@ class PowerSim:
 
         sorted_comparisons = sorted(target_comparisons, key=get_effect_size)
 
-        # For each comparison, find minimum sample size
-        # Note: We need to test with ALL groups to properly account for multiple comparison corrections
+        # Collect all groups that appear in any comparison (used to floor their sizes)
+        groups_needed = set()
+        for comp in target_comparisons:
+            groups_needed.update(comp)
+
+        # For each comparison, find minimum per-group sample size.
+        # Note: We need to test with ALL groups to properly account for multiple
+        # comparison corrections (e.g. Holm).
         for group1, group2 in sorted_comparisons:
             comp_target_power = power_dict[(group1, group2)]
             comp_result_idx = self.comparisons.index((group1, group2))
 
-            low = min_sample_size
-            high = max_sample_size
-            found_size = None
-
-            current_size = low
-            while current_size <= high:
-                per_group = int(current_size / 2)
-
-                # Test with ALL groups, using current max for groups already processed
-                # and per_group for the groups in this comparison
-                sample_sizes = list(group_samples)  # Start with current max for each group
-                sample_sizes[group1] = max(sample_sizes[group1], per_group)
-                sample_sizes[group2] = max(sample_sizes[group2], per_group)
-
-                # Ensure groups involved in comparisons have minimum samples
-                # Groups not in target_comparisons can be 0
-                groups_needed = set()
-                for comp in target_comparisons:
-                    groups_needed.add(comp[0])
-                    groups_needed.add(comp[1])
-
+            # ---- local helpers ----------------------------------------
+            # Bind loop variables as defaults to avoid B023 (closure over loop var)
+            def _make_sizes(
+                total_for_pair: int,
+                _g1: int = group1,
+                _g2: int = group2,
+            ) -> list[int]:
+                """Build a full sample-size list for a candidate total_for_pair."""
+                per_g = max(100, int(total_for_pair / 2))
+                sizes = list(group_samples)
+                sizes[_g1] = max(sizes[_g1], per_g)
+                sizes[_g2] = max(sizes[_g2], per_g)
                 for i in range(num_groups):
                     if i in groups_needed:
-                        sample_sizes[i] = max(sample_sizes[i], 100)
+                        sizes[i] = max(sizes[i], 100)
+                return sizes
 
+            def _eval_alloc_power(
+                total_for_pair: int,
+                use_early_stopping=None,
+                _idx: int = comp_result_idx,
+            ) -> float:
+                sizes = _make_sizes(total_for_pair)
                 try:
                     with warnings.catch_warnings():
                         warnings.filterwarnings("ignore", category=RuntimeWarning)
-                        power_result = self.get_power(
+                        res = self.get_power(
                             baseline=baseline,
                             effect=effect,
-                            sample_size=sample_sizes,
+                            sample_size=sizes,
                             compliance=compliance,
                             standard_deviation=standard_deviation,
+                            show_progress=False,
+                            use_early_stopping=use_early_stopping,
                         )
-                    current_power = power_result.iloc[comp_result_idx]["power"]
-
-                    if current_power >= comp_target_power - tolerance:
-                        found_size = per_group
-                        break
+                    return res.iloc[_idx]["power"]
                 except Exception:
-                    pass
+                    return 0.0
 
-                current_size += step_size
+            # ---- analytical estimate for initial bracket --------------
+            from scipy.stats import norm as _norm
 
-            if found_size is None:
-                found_size = int(high / 2)
+            z_alpha = _norm.ppf(1 - self.alpha / 2)
+            z_beta = _norm.ppf(comp_target_power)
+            eff_val = (
+                effect[group2 - 1]
+                if (self.metric != "average" and group2 > 0 and group2 - 1 < len(effect))
+                else (effect[0] if effect else 0.1)
+            )
+            sd_val = standard_deviation[group2] if group2 < len(standard_deviation) else standard_deviation[0]
+            n_analytical_pair = None
+            try:
+                if self.metric == "proportion":
+                    p1 = np.clip(baseline, 0.001, 0.999)
+                    p2 = np.clip(baseline + eff_val, 0.001, 0.999)
+                    pp = np.clip((p1 + p2) / 2, 0.001, 0.999)
+                    num = (z_alpha * np.sqrt(2 * pp * (1 - pp)) + z_beta * np.sqrt(p1 * (1 - p1) + p2 * (1 - p2))) ** 2
+                    denom = (p2 - p1) ** 2
+                    if denom > 0:
+                        n_analytical_pair = int(num / denom) * 2  # *2 for total pair
+                elif self.metric == "average":
+                    if eff_val != 0:
+                        n_analytical_pair = int(2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (eff_val**2)) * 2
+                else:
+                    lam1, lam2 = baseline, baseline + eff_val
+                    if lam2 != lam1:
+                        n_analytical_pair = int(((z_alpha + z_beta) ** 2) * (lam1 + lam2) / ((lam2 - lam1) ** 2)) * 2
+            except (ZeroDivisionError, ValueError):
+                pass
 
+            # ---- bracket ----------------------------------------------
+            if n_analytical_pair and min_sample_size <= n_analytical_pair <= max_sample_size:
+                lo = max(min_sample_size, int(n_analytical_pair * 0.5))
+                hi = min(max_sample_size, int(n_analytical_pair * 2.0))
+            else:
+                lo = min_sample_size
+                hi = max_sample_size
+
+            # Verify upper bound
+            p_hi = _eval_alloc_power(hi)
+            if p_hi < comp_target_power - tolerance:
+                while hi < max_sample_size:
+                    lo = hi
+                    hi = min(max_sample_size, hi * 2)
+                    p_hi = _eval_alloc_power(hi)
+                    if p_hi >= comp_target_power - tolerance:
+                        break
+                if p_hi < comp_target_power - tolerance:
+                    group_samples[group1] = max(group_samples[group1], max(100, int(hi / 2)))
+                    group_samples[group2] = max(group_samples[group2], max(100, int(hi / 2)))
+                    continue
+
+            # Contract lower bound if already sufficient
+            p_lo = _eval_alloc_power(lo)
+            if p_lo >= comp_target_power - tolerance:
+                while lo > min_sample_size:
+                    candidate = max(min_sample_size, lo // 2)
+                    p_cand = _eval_alloc_power(candidate)
+                    if p_cand >= comp_target_power - tolerance:
+                        hi, p_hi = lo, p_lo
+                        lo, p_lo = candidate, p_cand
+                    else:
+                        lo = candidate
+                        break
+                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
+                    found_size = max(100, int(lo / 2))
+                    group_samples[group1] = max(group_samples[group1], found_size)
+                    group_samples[group2] = max(group_samples[group2], found_size)
+                    continue
+
+            # ---- binary search ----------------------------------------
+            best_pair_size = hi
+            while hi - lo > step_size:
+                mid = (lo + hi) // 2
+                if _eval_alloc_power(mid) >= comp_target_power - tolerance:
+                    best_pair_size = mid
+                    hi = mid
+                else:
+                    lo = mid
+
+            # ---- post-convergence verification + recovery -------------
+            verified = _eval_alloc_power(best_pair_size, use_early_stopping=False)
+            _recovery = 0
+            while verified < comp_target_power - tolerance and _recovery < 10:
+                if best_pair_size >= max_sample_size:
+                    break
+                best_pair_size = min(max_sample_size, best_pair_size + step_size)
+                verified = _eval_alloc_power(best_pair_size, use_early_stopping=False)
+                _recovery += 1
+
+            found_size = max(100, int(best_pair_size / 2))
             group_samples[group1] = max(group_samples[group1], found_size)
             group_samples[group2] = max(group_samples[group2], found_size)
 
@@ -1727,62 +1816,76 @@ class PowerSim:
 
         results = []
 
-        def _get_analytical_sample_size(metric, baseline_val, effect_val, sd_val, target_power, alpha, allocation):
-            """Get analytical sample size estimate for initial guess."""
+        def _get_analytical_sample_size(metric, baseline_val, effect_val, sd_val, target_pwr, alpha, allocation):
+            """Closed-form sample size estimate — used only to initialise the search bracket."""
             from scipy.stats import norm
 
-            # Get z-scores
-            z_alpha = norm.ppf(1 - alpha / 2)  # two-tailed
-            z_beta = norm.ppf(target_power)
+            z_alpha = norm.ppf(1 - alpha / 2)
+            z_beta = norm.ppf(target_pwr)
 
             try:
                 if metric == "proportion":
-                    # Two-sample proportion test
-                    p1 = baseline_val
-                    p2 = baseline_val + effect_val
-                    p_pooled = (p1 + p2) / 2
-
-                    # Clip to valid range
-                    p1 = np.clip(p1, 0.001, 0.999)
-                    p2 = np.clip(p2, 0.001, 0.999)
-                    p_pooled = np.clip(p_pooled, 0.001, 0.999)
-
-                    # Formula: n = (z_alpha*sqrt(2*p*(1-p)) + z_beta*sqrt(p1*(1-p1) + p2*(1-p2)))^2 / (p1-p2)^2
+                    p1 = np.clip(baseline_val, 0.001, 0.999)
+                    p2 = np.clip(baseline_val + effect_val, 0.001, 0.999)
+                    p_pooled = np.clip((p1 + p2) / 2, 0.001, 0.999)
                     numerator = (
                         z_alpha * np.sqrt(2 * p_pooled * (1 - p_pooled))
                         + z_beta * np.sqrt(p1 * (1 - p1) + p2 * (1 - p2))
                     ) ** 2
-                    denominator = (p2 - p1) ** 2
-                    n_per_group = numerator / denominator if denominator > 0 else None
+                    denom = (p2 - p1) ** 2
+                    n_per_group = numerator / denom if denom > 0 else None
 
                 elif metric == "average":
-                    # Two-sample t-test
-                    # Formula: n = 2 * (z_alpha + z_beta)^2 * sd^2 / effect^2
-                    if effect_val != 0:
-                        n_per_group = 2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (effect_val**2)
-                    else:
-                        n_per_group = None
+                    n_per_group = (
+                        2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (effect_val**2) if effect_val != 0 else None
+                    )
 
-                else:  # count
-                    # Poisson test - use similar logic to proportion
-                    lambda1 = baseline_val
-                    lambda2 = baseline_val + effect_val
-                    if lambda2 != lambda1:
-                        n_per_group = ((z_alpha + z_beta) ** 2) * (lambda1 + lambda2) / ((lambda2 - lambda1) ** 2)
-                    else:
-                        n_per_group = None
+                else:  # count / Poisson
+                    lam1, lam2 = baseline_val, baseline_val + effect_val
+                    n_per_group = (
+                        ((z_alpha + z_beta) ** 2) * (lam1 + lam2) / ((lam2 - lam1) ** 2) if lam2 != lam1 else None
+                    )
 
                 if n_per_group and n_per_group > 0:
-                    # Adjust for allocation ratio (n_per_group is for equal allocation)
-                    # Total sample size = n_per_group * 2 for equal allocation
-                    # For unequal, use: n_total = n_per_group / (r1 * r2) where r1, r2 are allocation ratios
                     r1, r2 = allocation[group1], allocation[group2]
                     total_n = n_per_group / (r1 * r2) if (r1 * r2) > 0 else n_per_group * 2
                     return int(total_n)
             except (ZeroDivisionError, ValueError):
                 pass
-
             return None
+
+        # Warn early if nsim is too low for reliable search
+        _RELIABLE_NSIM = 500
+        if self.nsim < _RELIABLE_NSIM:
+            self.logger.warning(
+                f"nsim={self.nsim} is low — power estimates will be noisy (SE ≈ "
+                f"{np.sqrt(0.8 * 0.2 / self.nsim):.3f} per evaluation). "
+                f"Increase nsim to {_RELIABLE_NSIM}+ for more reliable results."
+            )
+
+        def _eval_power(n_total, use_early_stopping=None):
+            """Simulate power at n_total. Suppresses inner progress bars."""
+            sizes = [int(n_total * r) for r in allocation_ratio]
+            try:
+                res = self.get_power(
+                    baseline=baseline,
+                    effect=effect,
+                    sample_size=sizes,
+                    compliance=compliance,
+                    standard_deviation=standard_deviation,
+                    show_progress=False,
+                    use_early_stopping=use_early_stopping,
+                )
+                return res.iloc[comp_result_idx]["power"]
+            except (RuntimeWarning, ZeroDivisionError, ValueError) as exc:
+                if "divide by zero" in str(exc).lower() or "invalid value" in str(exc).lower():
+                    log_and_raise_error(
+                        self.logger,
+                        f"Sample sizes too small causing numerical errors. "
+                        f"Try increasing min_sample_size (current: {min_sample_size}). "
+                        f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
+                    )
+                raise
 
         # For each target comparison, find the required sample size
         for group1, group2 in tqdm(target_comparisons, desc="Finding sample size", unit="comp"):
@@ -1792,187 +1895,151 @@ class PowerSim:
             # like Holm to be applied across the full family of tests).
             comp_result_idx = self.comparisons.index((group1, group2))
 
-            # Get analytical estimate for better starting point
+            # Analytical starting estimate (no simulations, O(1))
             baseline_val = baseline
-            if self.metric != "average" and group2 > 0 and group2 - 1 < len(effect):
-                effect_val = effect[group2 - 1]
-            else:
-                effect_val = effect[0] if len(effect) > 0 else 0.1
+            effect_val = (
+                effect[group2 - 1]
+                if (self.metric != "average" and group2 > 0 and group2 - 1 < len(effect))
+                else (effect[0] if effect else 0.1)
+            )
             sd_val = standard_deviation[group2] if group2 < len(standard_deviation) else standard_deviation[0]
-
-            analytical_estimate = _get_analytical_sample_size(
+            n_analytical = _get_analytical_sample_size(
                 self.metric, baseline_val, effect_val, sd_val, comp_target_power, self.alpha, allocation_ratio
             )
 
-            # Start with full range - we'll use analytical estimate to guide initial coarse search
-            low = min_sample_size
-            high = max_sample_size
+            # ----------------------------------------------------------------
+            # Phase 1 — Bracket: find [low, high] where
+            #   power(low) < target - tolerance   (insufficient)
+            #   power(high) >= target - tolerance  (sufficient)
+            #
+            # Strategy (all O(log n), no linear scan):
+            #   a. Seed bracket from analytical estimate (±50 %)
+            #   b. If estimate > max_sample_size, skip directly to max check
+            #   c. Expand upward with doubling if high is still insufficient
+            #   d. Contract downward with halving if low is already sufficient
+            # ----------------------------------------------------------------
+            n_evals = 0
 
-            # Use analytical estimate to set better starting point for coarse search
-            if analytical_estimate and min_sample_size <= analytical_estimate <= max_sample_size:
-                # Start coarse search near analytical estimate, but ensure we check below it too
-                coarse_start = max(min_sample_size, int(analytical_estimate * 0.5))
-                self.logger.debug(
-                    f"Analytical estimate: {analytical_estimate}, starting coarse search at {coarse_start}"
-                )
+            if n_analytical and n_analytical <= max_sample_size:
+                lo = max(min_sample_size, int(n_analytical * 0.5))
+                hi = min(max_sample_size, int(n_analytical * 2.0))
             else:
-                coarse_start = min_sample_size
+                lo = min_sample_size
+                hi = max_sample_size
 
-            best_total_size = None
-            best_power = None
+            self.logger.debug(f"Comparison {(group1, group2)}: analytical={n_analytical}, bracket=[{lo}, {hi}]")
 
-            # First do a coarse search to find a good starting range
-            current_total_size = coarse_start
-            while current_total_size <= max_sample_size:
-                # Distribute total sample size by allocation ratio
-                sample_sizes = [int(current_total_size * ratio) for ratio in allocation_ratio]
+            # Check upper bound of bracket
+            p_hi = _eval_power(hi)
+            n_evals += 1
 
-                try:
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                    )
-                    current_power = power_result.iloc[comp_result_idx]["power"]
-                except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                    if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                        log_and_raise_error(
-                            self.logger,
-                            f"Sample sizes too small causing numerical errors. "
-                            f"Try increasing min_sample_size (current: {min_sample_size}). "
-                            f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                        )
-                    raise
-
-                if current_power >= comp_target_power - tolerance:
-                    high = current_total_size
-                    best_total_size = current_total_size
-                    best_power = current_power
-                    break
-
-                low = current_total_size
-                current_total_size += step_size
-
-            # If we didn't find a solution in coarse search
-            if best_total_size is None:
-                # Check if we need to search below coarse_start
-                if coarse_start > min_sample_size:
-                    # The coarse search might have started too high - check min_sample_size first
-                    sample_sizes = [int(min_sample_size * ratio) for ratio in allocation_ratio]
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                    )
-                    min_power = power_result.iloc[comp_result_idx]["power"]
-
-                    if min_power >= comp_target_power - tolerance:
-                        # Solution is at or below min_sample_size
-                        best_total_size = min_sample_size
-                        best_power = min_power
-                        low = min_sample_size
-                        high = coarse_start
-                    else:
-                        # Solution is between min_sample_size and coarse_start
-                        low = min_sample_size
-                        high = coarse_start
-                        # Do a coarse search in this range
-                        current_total_size = min_sample_size
-                        while current_total_size < coarse_start:
-                            sample_sizes = [int(current_total_size * ratio) for ratio in allocation_ratio]
-                            try:
-                                power_result = self.get_power(
-                                    baseline=baseline,
-                                    effect=effect,
-                                    sample_size=sample_sizes,
-                                    compliance=compliance,
-                                    standard_deviation=standard_deviation,
-                                )
-                                current_power = power_result.iloc[comp_result_idx]["power"]
-                            except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                                if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                                    log_and_raise_error(
-                                        self.logger,
-                                        f"Sample sizes too small causing numerical errors. "
-                                        f"Try increasing min_sample_size (current: {min_sample_size}). "
-                                        f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                                    )
-                                raise
-
-                            if current_power >= comp_target_power - tolerance:
-                                high = current_total_size
-                                best_total_size = current_total_size
-                                best_power = current_power
-                                break
-
-                            low = current_total_size
-                            current_total_size += step_size
-
-                # If still no solution, truly can't achieve within max_sample_size
-                if best_total_size is None:
-                    self.logger.warning(
-                        f"Could not achieve target power {comp_target_power} for comparison {(group1, group2)} "
-                        f"within max_sample_size {max_sample_size}"
-                    )
-                    best_total_size = max_sample_size
-                    sample_sizes = [int(max_sample_size * ratio) for ratio in allocation_ratio]
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        use_early_stopping=False,  # Accurate calculation for reporting
-                    )
-                    best_power = power_result.iloc[comp_result_idx]["power"]
-            else:
-                # Refine with binary search
-                while high - low > step_size // 2:
-                    mid = (low + high) // 2
-                    sample_sizes = [int(mid * ratio) for ratio in allocation_ratio]
-
-                    try:
-                        power_result = self.get_power(
-                            baseline=baseline,
-                            effect=effect,
-                            sample_size=sample_sizes,
-                            compliance=compliance,
-                            standard_deviation=standard_deviation,
-                        )
-                        current_power = power_result.iloc[comp_result_idx]["power"]
-                    except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                        if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                            log_and_raise_error(
-                                self.logger,
-                                f"Sample sizes too small causing numerical errors. "
-                                f"Try increasing min_sample_size (current: {min_sample_size}). "
-                                f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                            )
-                        raise
-
-                    # Accept if we're within tolerance of the target
-                    if abs(current_power - comp_target_power) <= tolerance:
-                        # Prefer solutions closer to target (don't overshoot too much)
-                        if best_total_size is None or abs(current_power - comp_target_power) < abs(
-                            best_power - comp_target_power
-                        ):
-                            best_total_size = mid
-                            best_power = current_power
+            if p_hi < comp_target_power - tolerance:
+                # Insufficient at hi → expand upward with doubling
+                while hi < max_sample_size:
+                    lo = hi
+                    hi = min(max_sample_size, hi * 2)
+                    p_hi = _eval_power(hi)
+                    n_evals += 1
+                    if p_hi >= comp_target_power - tolerance:
                         break
-                    elif current_power < comp_target_power:
-                        low = mid
+
+                if p_hi < comp_target_power - tolerance:
+                    # Cannot reach target within max_sample_size
+                    self.logger.warning(
+                        f"Could not achieve target power {comp_target_power} for comparison "
+                        f"{(group1, group2)} within max_sample_size {max_sample_size} "
+                        f"(achieved {p_hi:.3f} at {max_sample_size:,})"
+                    )
+                    results.append(
+                        {
+                            "comparison": (group1, group2),
+                            "target_power": comp_target_power,
+                            "total_sample_size": max_sample_size,
+                            "allocation_ratio": str(allocation_ratio),
+                            "sample_sizes": str([int(max_sample_size * r) for r in allocation_ratio]),
+                            "achieved_power": p_hi,
+                        }
+                    )
+                    self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations (failed to converge)")
+                    continue
+
+            # Check lower bound — contract downward if already sufficient
+            p_lo = _eval_power(lo)
+            n_evals += 1
+
+            if p_lo >= comp_target_power - tolerance:
+                # Already sufficient at lo → halve downward to find tighter lower bound
+                while lo > min_sample_size:
+                    candidate = max(min_sample_size, lo // 2)
+                    p_candidate = _eval_power(candidate)
+                    n_evals += 1
+                    if p_candidate >= comp_target_power - tolerance:
+                        hi, p_hi = lo, p_lo
+                        lo, p_lo = candidate, p_candidate
                     else:
-                        high = mid
-                        # Update best if this is closer to target than previous best
-                        if best_total_size is None or abs(current_power - comp_target_power) < abs(
-                            best_power - comp_target_power
-                        ):
-                            best_total_size = mid
-                            best_power = current_power
+                        lo = candidate  # insufficient here → good lower bound
+                        break
+                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
+                    # min_sample_size itself is sufficient — done
+                    results.append(
+                        {
+                            "comparison": (group1, group2),
+                            "target_power": comp_target_power,
+                            "total_sample_size": min_sample_size,
+                            "allocation_ratio": str(allocation_ratio),
+                            "sample_sizes": str([int(min_sample_size * r) for r in allocation_ratio]),
+                            "achieved_power": p_lo,
+                        }
+                    )
+                    self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations")
+                    continue
+
+            # ----------------------------------------------------------------
+            # Phase 2 — Binary search in [lo, hi]
+            # Invariant: power(lo) < target, power(hi) >= target
+            # ----------------------------------------------------------------
+            best_total_size = hi
+            best_power = p_hi
+
+            while hi - lo > step_size:
+                mid = (lo + hi) // 2
+                p_mid = _eval_power(mid)
+                n_evals += 1
+                if p_mid >= comp_target_power - tolerance:
+                    best_total_size = mid
+                    best_power = p_mid
+                    hi = mid
+                else:
+                    lo = mid
+
+            self.logger.debug(f"Comparison {(group1, group2)}: converged in {n_evals} evaluations")
+
+            # ------------------------------------------------------------------
+            # Post-convergence verification
+            # Binary search evaluations are intentionally fast (early stopping on,
+            # low nsim is allowed). Re-evaluate the candidate with early stopping
+            # disabled so all nsim simulations run. If power is still below target,
+            # advance by step_size until it passes (max 10 steps).
+            # This catches cases where a single noisy evaluation misled the search.
+            # ------------------------------------------------------------------
+            verified_power = _eval_power(best_total_size, use_early_stopping=False)
+            n_evals += 1
+            _MAX_RECOVERY = 10
+            _recovery = 0
+            while verified_power < comp_target_power - tolerance and _recovery < _MAX_RECOVERY:
+                if best_total_size >= max_sample_size:
+                    break
+                best_total_size = min(max_sample_size, best_total_size + step_size)
+                verified_power = _eval_power(best_total_size, use_early_stopping=False)
+                n_evals += 1
+                _recovery += 1
+
+            if _recovery > 0:
+                self.logger.debug(
+                    f"Comparison {(group1, group2)}: verification recovered to n={best_total_size:,} "
+                    f"in {_recovery} step(s) — consider increasing nsim (current: {self.nsim})"
+                )
+            best_power = verified_power
 
             # Calculate final allocation
             final_sample_sizes = [int(best_total_size * ratio) for ratio in allocation_ratio]
