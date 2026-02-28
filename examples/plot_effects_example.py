@@ -72,7 +72,7 @@ print(
 fig1 = analyzer.plot_effects(
     title="Treatment Effects — Revenue & Conversion",
     sort_by_magnitude=True,
-    show_labels=True,
+    show_values=True,
 )
 fig1.savefig("examples/plot_effects_basic.png", bbox_inches="tight", dpi=150)
 plt.close(fig1)

@@ -458,10 +458,10 @@ def test_plot_effects_default(simple_analyzer):
     assert isinstance(fig, mfig.Figure)
 
 
-def test_plot_effects_show_labels(simple_analyzer):
+def test_plot_effects_show_values(simple_analyzer):
     import matplotlib.figure as mfig
 
-    fig = simple_analyzer.plot_effects(show_labels=True)
+    fig = simple_analyzer.plot_effects(show_values=True)
     assert isinstance(fig, mfig.Figure)
 
 

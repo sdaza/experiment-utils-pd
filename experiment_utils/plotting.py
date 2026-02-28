@@ -98,7 +98,7 @@ def _draw_panels_into_axes(
     row_col: str,
     panel_titles: str | list | dict | None,
     row_labels: dict | None,
-    show_labels: bool,
+    show_values: bool,
     show_yticklabels: bool | list[bool] = True,
     row_order: dict | None = None,
 ) -> None:
@@ -175,7 +175,7 @@ def _draw_panels_into_axes(
             ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
-            if show_labels:
+            if show_values:
                 lbl = _fmt_label(eff, sig, eff_col)
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
@@ -271,7 +271,7 @@ def _render_effects_figure(
     row_col: str = "_label",
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
-    show_labels: bool = False,
+    show_values: bool = False,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
 ) -> plt.Figure:
@@ -324,7 +324,7 @@ def _render_effects_figure(
         row_col,
         panel_titles,
         row_labels,
-        show_labels,
+        show_values,
         show_yticklabels=show_yticklabels,
         row_order=row_order,
     )
@@ -346,7 +346,7 @@ def _render_multi_effect_figure(
     row_col: str,
     panel_titles: str | list | dict | None,
     row_labels: dict | None,
-    show_labels: bool,
+    show_values: bool,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
 ) -> plt.Figure:
@@ -424,7 +424,7 @@ def _render_multi_effect_figure(
             row_col,
             panel_titles if show_yticks else "",
             row_labels,
-            show_labels,
+            show_values,
             show_yticklabels=show_yticks,
             row_order=row_order,
         )
@@ -449,10 +449,14 @@ def plot_effects(
     y: str = "experiment",
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
-    show_labels: bool = False,
+    show_values: bool = False,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
+    # backward-compat alias
+    if "show_labels" in kwargs:
+        show_values = kwargs.pop("show_labels")
     """
     Cleveland dot plot of treatment effects across experiments.
 
@@ -527,7 +531,7 @@ def plot_effects(
         e.g. ``{"US | email": "Email (US)", "EU | push": "Push (EU)"}``.
         Rows not in the dict keep their auto-generated label.
 
-    show_labels : bool, optional
+    show_values : bool, optional
         Annotate each dot with its effect value (and ``*`` when significant).
         Default ``False``.
     panel_spacing : float, optional
@@ -650,7 +654,7 @@ def plot_effects(
         row_col=row_col,
         panel_titles=panel_titles,
         row_labels=row_labels,
-        show_labels=show_labels,
+        show_values=show_values,
         panel_spacing=panel_spacing,
         repeat_ylabels=repeat_ylabels,
     )

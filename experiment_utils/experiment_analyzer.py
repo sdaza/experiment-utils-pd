@@ -2146,10 +2146,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         y: str = "experiment",
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
-        show_labels: bool = False,
+        show_values: bool = False,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
+        **kwargs,
     ) -> "plt.Figure | dict | None":
+        # backward-compat alias
+        if "show_labels" in kwargs:
+            show_values = kwargs.pop("show_labels")
         """
         Cleveland dot plot of treatment effects across experiments.
 
@@ -2212,7 +2216,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             values are the display strings to show instead.
             e.g. ``{"US | email": "Email (US)", "EU | push": "Push (EU)"}``.
             Rows not present in the dict keep their auto-generated label.
-        show_labels : bool, optional
+        show_values : bool, optional
             Annotate each dot with its effect value (and ``*`` when significant).
             Default ``False``.
 
@@ -2251,7 +2255,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             y=y,
             panel_titles=panel_titles,
             row_labels=row_labels,
-            show_labels=show_labels,
+            show_values=show_values,
             panel_spacing=panel_spacing,
             repeat_ylabels=repeat_ylabels,
         )
