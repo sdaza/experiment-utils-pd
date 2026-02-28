@@ -215,6 +215,7 @@ def _add_legend_and_title(
     title: str | None,
     sig_label: str,
     meta_df: pd.DataFrame | None,
+    panel_spacing: float | None = None,
 ) -> None:
     """Add a shared legend and optional suptitle, then call tight_layout."""
     legend_items = [
@@ -248,6 +249,8 @@ def _add_legend_and_title(
     header_inches = 0.45 + (0.28 if title else 0.0)
     reserved = header_inches / figsize[1]
     fig.tight_layout(rect=[0, 0, 1, 1.0 - reserved])
+    if panel_spacing is not None:
+        fig.subplots_adjust(wspace=panel_spacing)
     plt.close(fig)
 
 
@@ -269,6 +272,8 @@ def _render_effects_figure(
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
     show_labels: bool = False,
+    panel_spacing: float | None = None,
+    repeat_ylabels: bool = False,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -300,8 +305,8 @@ def _render_effects_figure(
         for pval in unique_panels:
             row_order[pval] = reference_order
 
-    # Only the leftmost panel shows y-tick labels; all panels show their titles.
-    show_yticklabels = [pi == 0 for pi in range(n_panels)]
+    # By default only the leftmost panel shows y-tick labels; repeat_ylabels shows all.
+    show_yticklabels = True if repeat_ylabels else [pi == 0 for pi in range(n_panels)]
 
     _draw_panels_into_axes(
         list(axes.flatten()),
@@ -324,7 +329,7 @@ def _render_effects_figure(
         row_order=row_order,
     )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df)
+    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
     return fig
 
 
@@ -342,6 +347,8 @@ def _render_multi_effect_figure(
     panel_titles: str | list | dict | None,
     row_labels: dict | None,
     show_labels: bool,
+    panel_spacing: float | None = None,
+    repeat_ylabels: bool = False,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -399,7 +406,7 @@ def _render_multi_effect_figure(
 
         # Columns for this effect: positions [pi * n_effects + eff_idx] for each panel pi
         panel_axes = [all_axes[0][pi * n_effects + eff_idx] for pi in range(n_panels)]
-        show_yticks = eff_idx == 0
+        show_yticks = eff_idx == 0 or repeat_ylabels
 
         _draw_panels_into_axes(
             panel_axes,
@@ -422,7 +429,7 @@ def _render_multi_effect_figure(
             row_order=row_order,
         )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df)
+    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
     return fig
 
 
@@ -443,6 +450,8 @@ def plot_effects(
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
     show_labels: bool = False,
+    panel_spacing: float | None = None,
+    repeat_ylabels: bool = False,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     """
     Cleveland dot plot of treatment effects across experiments.
@@ -521,6 +530,15 @@ def plot_effects(
     show_labels : bool, optional
         Annotate each dot with its effect value (and ``*`` when significant).
         Default ``False``.
+    panel_spacing : float, optional
+        Horizontal whitespace between panels as a fraction of the average axes
+        width (passed to ``subplots_adjust(wspace=...)``).  Larger values add
+        more room between panels.  ``None`` (default) uses matplotlib's
+        automatic spacing.  Try values like ``0.4``–``0.8`` when panels overlap.
+    repeat_ylabels : bool, optional
+        When ``True``, show y-axis tick labels on every panel instead of only
+        the leftmost one.  Useful when panels are far apart or when saving
+        individual panels.  Default ``False``.
 
     Returns
     -------
@@ -633,6 +651,8 @@ def plot_effects(
         panel_titles=panel_titles,
         row_labels=row_labels,
         show_labels=show_labels,
+        panel_spacing=panel_spacing,
+        repeat_ylabels=repeat_ylabels,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None) -> plt.Figure:
