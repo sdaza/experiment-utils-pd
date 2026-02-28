@@ -454,9 +454,8 @@ def plot_effects(
     repeat_ylabels: bool = False,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
-    # backward-compat alias
-    if "show_labels" in kwargs:
-        show_values = kwargs.pop("show_labels")
+    if kwargs:
+        raise TypeError(f"plot_effects() got unexpected keyword argument(s): {list(kwargs.keys())}")
     """
     Cleveland dot plot of treatment effects across experiments.
 
