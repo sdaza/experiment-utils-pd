@@ -282,7 +282,7 @@ class BootstrapMixin:
                 den_ctrl_boot = boot_data.loc[c_mask_boot, den_col].mean()
                 if den_ctrl_boot != 0 and not np.isnan(den_ctrl_boot):
                     R_boot = boot_data.loc[c_mask_boot, num_col].mean() / den_ctrl_boot
-                    boot_data[outcome] = boot_data[num_col] - R_boot * boot_data[den_col]
+                    boot_data[outcome] = (boot_data[num_col] - R_boot * boot_data[den_col]) / den_ctrl_boot
 
             # Impute and standardize
             boot_data = self.impute_missing_values(

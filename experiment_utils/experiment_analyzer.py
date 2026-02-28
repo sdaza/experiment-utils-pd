@@ -1486,7 +1486,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         continue
                     _R = comparison_data.loc[_c_mask, _num_col].mean() / _den_ctrl_mean
                     _lin_col = f"__ratio_lin_{_ratio_name}"
-                    comparison_data[_lin_col] = comparison_data[_num_col] - _R * comparison_data[_den_col]
+                    # Divide by den_ctrl_mean so OLS coefficient ≈ R_t - R_c.
+                    # Without scaling the coefficient equals (R_t - R_c) * mu_X_t, not the ratio difference.
+                    comparison_data[_lin_col] = (
+                        comparison_data[_num_col] - _R * comparison_data[_den_col]
+                    ) / _den_ctrl_mean
                     _ratio_lin_cols[_lin_col] = (_ratio_name, _num_col, _den_col, _R)
 
                 _all_outcomes = list(self._outcomes) + list(_ratio_lin_cols.keys())
