@@ -1026,7 +1026,6 @@ class RetrodesignMixin:
 
             elif model_type == "logistic":
                 params = fitted_model.params.copy()
-                params[self._treatment_col] = true_effect if effect_type == "log_odds" else params[self._treatment_col]
 
                 if hasattr(self, "_final_covariates") and self._final_covariates:
                     for cov in self._final_covariates:
@@ -1035,25 +1034,28 @@ class RetrodesignMixin:
                             sd = sim_data[cov].std() + 1e-10
                             sim_data[f"z_{cov}"] = (sim_data[cov] - mu) / sd
 
-                logit_pred = params["Intercept"]
-
-                if effect_type == "probability_change":
-                    baseline_prob = 1 / (1 + np.exp(-params["Intercept"]))
-                    logit_pred += np.log(
-                        (baseline_prob + true_effect * sim_data[self._treatment_col])
-                        / (1 - baseline_prob - true_effect * sim_data[self._treatment_col] + 1e-10)
-                    )
-                else:
-                    logit_pred += params[self._treatment_col] * sim_data[self._treatment_col]
-
+                # Build the baseline linear predictor (intercept + covariates, no treatment)
+                logit_pred_baseline = params["Intercept"]
                 for param_name in params.index:
                     if param_name not in ["Intercept", self._treatment_col]:
                         if param_name in sim_data.columns:
-                            logit_pred += params[param_name] * sim_data[param_name]
+                            logit_pred_baseline = logit_pred_baseline + params[param_name] * sim_data[param_name]
 
-                prob = 1 / (1 + np.exp(-logit_pred))
-                prob = np.clip(prob, 0.001, 0.999)
-                sim_data["outcome"] = np.random.binomial(1, prob)
+                if effect_type == "probability_change":
+                    # Shift probability directly on the probability scale.
+                    # Old code erroneously added logit(baseline_prob) on top of the intercept
+                    # (which equals the intercept itself), effectively halving the true effect
+                    # and distorting baseline probabilities.
+                    baseline_prob = 1 / (1 + np.exp(-logit_pred_baseline))
+                    target_prob = baseline_prob + true_effect * sim_data[self._treatment_col]
+                    target_prob = np.clip(target_prob, 0.001, 0.999)
+                    sim_data["outcome"] = np.random.binomial(1, target_prob)
+                else:
+                    # log_odds: true_effect is the logistic coefficient
+                    logit_pred = logit_pred_baseline + true_effect * sim_data[self._treatment_col]
+                    prob = 1 / (1 + np.exp(-logit_pred))
+                    prob = np.clip(prob, 0.001, 0.999)
+                    sim_data["outcome"] = np.random.binomial(1, prob)
 
                 treatment_outcomes = sim_data[sim_data[self._treatment_col] == 1]["outcome"]
                 control_outcomes = sim_data[sim_data[self._treatment_col] == 0]["outcome"]
