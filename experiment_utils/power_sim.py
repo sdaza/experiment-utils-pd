@@ -716,10 +716,11 @@ class PowerSim:
                 # HYBRID: Two-stage pipeline for maximum efficiency
                 # Stage 1: Generate all simulation data (threading - shares memory, fast)
                 # Stage 2: Run statistical tests (multiprocessing - true parallelism, CPU-intensive)
-                self.logger.info(
-                    f"Running {self.nsim} power simulations with hybrid parallelization "
-                    f"(threading for data generation + multiprocessing for tests)..."
-                )
+                if show_progress:
+                    self.logger.info(
+                        f"Running {self.nsim} power simulations with hybrid parallelization "
+                        f"(threading for data generation + multiprocessing for tests)..."
+                    )
 
                 # Stage 1: Generate simulation datasets in parallel (threading)
                 self.logger.debug("Stage 1/2: Generating simulation data (threading)...")
@@ -756,7 +757,8 @@ class PowerSim:
 
             elif self.parallel_strategy == "threading":
                 # Pure threading approach (memory-efficient but GIL-limited)
-                self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
+                if show_progress:
+                    self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
                 results = list(
                     tqdm(
                         Parallel(n_jobs=-1, backend="threading", return_as="generator")(
@@ -780,7 +782,8 @@ class PowerSim:
 
             else:  # "loky" or default
                 # Pure multiprocessing approach (high memory but true parallelism)
-                self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
+                if show_progress:
+                    self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
                 results = list(
                     tqdm(
                         Parallel(n_jobs=-1, backend="loky", return_as="generator")(
@@ -1167,7 +1170,7 @@ class PowerSim:
         grid["metric"] = self.metric
         grid["variants"] = self.variants
         grid["comparisons"] = str(self.comparisons)
-        grid["correction"] = self.correction
+        grid["correction"] = self.correction if self.correction is not None else "none"
         grid["allocation_ratio"] = str(allocation_ratio)
         grid["relative_effect"] = self.relative_effect
         grid = grid.loc[
@@ -2082,7 +2085,8 @@ class PowerSim:
             sample_size=final_sample_sizes,
             compliance=compliance,
             standard_deviation=standard_deviation,
-            use_early_stopping=False,  # Disable for final accurate calculation
+            use_early_stopping=False,
+            show_progress=False,
         )
 
         sample_sizes_dict = {"control": final_sample_sizes[0]}
@@ -2107,7 +2111,7 @@ class PowerSim:
             "total_sample_size": max_sample_size_needed,
             "sample_sizes_by_group": sample_sizes_dict,
             "power_criteria": power_criteria,
-            "correction": self.correction,
+            "correction": self.correction if self.correction is not None else "none",
             "limiting_comparison": str(limiting_comparison),
             "target_power_by_comparison": target_power_by_comparison,
             "achieved_power_by_comparison": achieved_power_by_comparison,

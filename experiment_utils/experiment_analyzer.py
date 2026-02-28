@@ -1588,16 +1588,33 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
-                            # For ratio outcomes: override effect_type and control_value
+                            # For ratio outcomes: fix control_value, treatment_value,
+                            # and all relative-effect fields.
+                            # The OLS linearized column has control mean ≈ 0 by
+                            # construction, so the estimator's relative_effect =
+                            # absolute_effect / ~0 is meaningless. Override everything
+                            # with values based on the actual ratio R.
                             if _is_ratio:
                                 _ratio_name, _num_col, _den_col, _R = _ratio_lin_cols[outcome]
                                 output["effect_type"] = "ratio_difference"
-                                # control_value = the control ratio R (interpretable baseline)
                                 output["control_value"] = _R
                                 output["treatment_value"] = (
                                     comparison_data.loc[~control_mask, _num_col].mean()
                                     / comparison_data.loc[~control_mask, _den_col].mean()
                                 )
+                                # Recompute relative effect and CI bounds using R
+                                if _R != 0:
+                                    output["relative_effect"] = output["absolute_effect"] / _R
+                                    for _lo, _hi in (
+                                        ("abs_effect_lower", "rel_effect_lower"),
+                                        ("abs_effect_upper", "rel_effect_upper"),
+                                    ):
+                                        if _lo in output and output[_lo] is not None:
+                                            output[_hi] = output[_lo] / _R
+                                else:
+                                    output["relative_effect"] = np.nan
+                                    output["rel_effect_lower"] = np.nan
+                                    output["rel_effect_upper"] = np.nan
 
                             if self._store_fitted_models and "fitted_model" in output:
                                 if experiment_tuple not in self._fitted_models:
