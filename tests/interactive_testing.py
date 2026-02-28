@@ -1397,7 +1397,7 @@ print(f"\nTrue effect: {true_effect}")
 
 
 # %% plot
-analyzer.plot_effects(meta_analysis=True, show_labels=True, 
+analyzer.plot_effects(meta_analysis=True, show_values=True, 
                             title="Meta-Analysis of Treatment Effects Across Experiments")
 
 # %% simulate an example to use panel title in the effect plot
