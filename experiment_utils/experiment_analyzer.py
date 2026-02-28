@@ -2149,6 +2149,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         show_values: bool = False,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
+        save_path: str | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":
         if kwargs:
@@ -2218,6 +2219,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         show_values : bool, optional
             Annotate each dot with its effect value (and ``*`` when significant).
             Default ``False``.
+        save_path : str or path-like, optional
+            File path to save the figure.  When ``group_by`` produces multiple
+            figures the group key is inserted before the file extension, e.g.
+            ``"effects.png"`` → ``"effects_US.png"``, ``"effects_EU.png"``.
+            Supports any format recognised by matplotlib (``png``, ``pdf``,
+            ``svg``, …).  ``None`` (default) skips saving.
 
         Returns
         -------
@@ -2257,6 +2264,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             show_values=show_values,
             panel_spacing=panel_spacing,
             repeat_ylabels=repeat_ylabels,
+            save_path=save_path,
         )
 
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:

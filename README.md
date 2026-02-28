@@ -1026,6 +1026,7 @@ fig = analyzer.plot_effects()
 | `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
+| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). With `group_by`, each figure is saved as `"effects_<key>.png"` |
 | `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis

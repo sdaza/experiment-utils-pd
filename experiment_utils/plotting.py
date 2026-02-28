@@ -452,6 +452,7 @@ def plot_effects(
     show_values: bool = False,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    save_path: str | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     if kwargs:
@@ -542,6 +543,12 @@ def plot_effects(
         When ``True``, show y-axis tick labels on every panel instead of only
         the leftmost one.  Useful when panels are far apart or when saving
         individual panels.  Default ``False``.
+    save_path : str or path-like, optional
+        File path to save the figure.  When ``group_by`` produces multiple
+        figures the group key is inserted before the file extension, e.g.
+        ``"effects.png"`` becomes ``"effects_US.png"``, ``"effects_EU.png"``.
+        Supports any format recognised by matplotlib (``png``, ``pdf``,
+        ``svg``, …).  ``None`` (default) skips saving.
 
     Returns
     -------
@@ -685,10 +692,21 @@ def plot_effects(
             fig_title = title if title is not None else key_str
             labelled = _build_labels(group_data)
             figures[key_str] = _render(labelled, fig_title)
+        if save_path is not None:
+            import os
+
+            base, ext = os.path.splitext(save_path)
+            ext = ext or ".png"
+            for key_str, fig in figures.items():
+                safe_key = key_str.replace(" | ", "_").replace(" ", "_")
+                fig.savefig(f"{base}_{safe_key}{ext}", bbox_inches="tight")
         return figures
 
     labelled = _build_labels(data)
-    return _render(labelled, title)
+    fig = _render(labelled, title)
+    if save_path is not None and fig is not None:
+        fig.savefig(save_path, bbox_inches="tight")
+    return fig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
