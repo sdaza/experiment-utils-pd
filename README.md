@@ -1023,6 +1023,9 @@ fig = analyzer.plot_effects()
 | `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
 | `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
 | `show_zero_line` | `True` | Vertical reference line at zero |
+| `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
+| `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
+| `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
 | `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis
