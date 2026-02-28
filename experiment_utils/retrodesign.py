@@ -31,8 +31,6 @@ class RetrodesignMixin:
         bool
             True if analytical/PowerSim approach should be used
         """
-        if method == "simulation":
-            return False
         if method == "analytical":
             return True
 
@@ -49,6 +47,26 @@ class RetrodesignMixin:
         has_covariates = self._regression_covariates and len(self._regression_covariates) > 0
 
         if has_fitted_models and has_covariates:
+            return False
+
+        if method == "simulation":
+            # For large samples, full simulation is impractically slow (each logistic fit
+            # on tens of thousands of rows can take tens of seconds; 5000 simulations
+            # would take hours) and empirically produces unreliable power / type_m estimates
+            # because margeff delta-method p-values behave differently from proportion tests
+            # at this scale. Redirect to PowerSim, which is equivalent and finishes in seconds.
+            n_total = row.get("treatment_units", 0) + row.get("control_units", 0)
+            _SIMULATION_N_THRESHOLD = 10_000
+            if n_total > _SIMULATION_N_THRESHOLD:
+                outcome = row.get("outcome", "unknown")
+                self._logger.warning(
+                    f"method='simulation' requested for outcome '{outcome}' with n={n_total:,} total units. "
+                    f"Full simulation is impractically slow at this scale (each logistic fit on {n_total:,} rows "
+                    f"can take >60s; 5 000 simulations would require days) and produces unreliable estimates. "
+                    f"Redirecting to PowerSim (equivalent results, completes in seconds). "
+                    f"To suppress this redirect, use method='auto' or method='analytical'."
+                )
+                return True
             return False
 
         return True

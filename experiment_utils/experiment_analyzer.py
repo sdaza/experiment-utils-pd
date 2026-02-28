@@ -2023,7 +2023,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "control_units",
             "treatment_units",
             "absolute_effect",
+            "abs_effect_lower",
+            "abs_effect_upper",
             "relative_effect",
+            "rel_effect_lower",
+            "rel_effect_upper",
             "stat_significance",
             "standard_error",
             "pvalue",
@@ -2037,24 +2041,47 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         return pooled_results[result_columns]
 
     def __get_fixed_meta_analysis_estimate(self, data: pd.DataFrame) -> dict[str, int | float]:
-        weights = 1 / (data["standard_error"] ** 2)
-        absolute_estimate = np.sum(weights * data["absolute_effect"]) / np.sum(weights)
-        pooled_standard_error = np.sqrt(1 / np.sum(weights))
-        relative_estimate = np.sum(weights * data["relative_effect"]) / np.sum(weights)
+        # Absolute effect: IVW with 1/SE_abs²
+        weights_abs = 1 / (data["standard_error"] ** 2)
+        absolute_estimate = np.sum(weights_abs * data["absolute_effect"]) / np.sum(weights_abs)
+        pooled_se_abs = np.sqrt(1 / np.sum(weights_abs))
+
+        # Relative effect: IVW with 1/SE_rel² where SE_rel = SE_abs / |control_mean|
+        # This is the delta-method approximation; using absolute-scale weights would give
+        # wrong CIs (wrong units) when displaying relative effects in the plot.
+        rel_se_pooled = np.nan
+        relative_estimate = np.nan
+        if "control_value" in data.columns:
+            ctrl = data["control_value"].abs()
+            valid = ctrl > 0
+            if valid.any():
+                se_rel = data.loc[valid, "standard_error"] / ctrl[valid]
+                weights_rel = 1 / (se_rel**2)
+                relative_estimate = np.sum(weights_rel * data.loc[valid, "relative_effect"]) / np.sum(weights_rel)
+                rel_se_pooled = float(np.sqrt(1 / np.sum(weights_rel)))
+
+        # Fallback: derive from pooled absolute when relative pooling is not possible
+        if np.isnan(relative_estimate) and "relative_effect" in data.columns:
+            relative_estimate = np.sum(weights_abs * data["relative_effect"]) / np.sum(weights_abs)
 
         np.seterr(invalid="ignore")
         try:
-            pvalue = stats.norm.sf(abs(absolute_estimate / pooled_standard_error)) * 2
+            pvalue = stats.norm.sf(abs(absolute_estimate / pooled_se_abs)) * 2
         except FloatingPointError:
             pvalue = np.nan
 
+        z = stats.norm.ppf(1 - self._alpha / 2)
         meta_results = {
             "experiments": int(data.shape[0]),
             "control_units": int(data["control_units"].sum()),
             "treatment_units": int(data["treatment_units"].sum()),
             "absolute_effect": absolute_estimate,
+            "abs_effect_lower": absolute_estimate - z * pooled_se_abs,
+            "abs_effect_upper": absolute_estimate + z * pooled_se_abs,
             "relative_effect": relative_estimate,
-            "standard_error": pooled_standard_error,
+            "rel_effect_lower": relative_estimate - z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
+            "rel_effect_upper": relative_estimate + z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
+            "standard_error": pooled_se_abs,
             "pvalue": pvalue,
         }
 
@@ -2092,7 +2119,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             if "outcome" not in grouping_cols:
                 grouping_cols.append("outcome")
 
-        aggregate_results = data.groupby(grouping_cols).apply(self.__compute_weighted_effect).reset_index()
+        aggregate_results = (
+            data.groupby(grouping_cols).apply(self.__compute_weighted_effect, include_groups=False).reset_index()
+        )
 
         self._logger.info("Aggregating effects using weighted averages!")
         self._logger.info("For a better standard error estimation, use meta-analysis or `combine_effects`")
@@ -2118,6 +2147,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
         show_labels: bool = False,
+        panel_spacing: float | None = None,
+        repeat_ylabels: bool = False,
     ) -> "plt.Figure | dict | None":
         """
         Cleveland dot plot of treatment effects across experiments.
@@ -2221,16 +2252,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             panel_titles=panel_titles,
             row_labels=row_labels,
             show_labels=show_labels,
+            panel_spacing=panel_spacing,
+            repeat_ylabels=repeat_ylabels,
         )
 
     def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
-        group["gweight"] = group["treatment_units"].astype(int)
-        absolute_effect = np.sum(group["absolute_effect"] * group["gweight"]) / np.sum(group["gweight"])
-        relative_effect = np.sum(group["relative_effect"] * group["gweight"]) / np.sum(group["gweight"])
-        variance = (group["standard_error"] ** 2) * group["gweight"]
+        weights = group["treatment_units"].astype(float)
+        group = group.copy()
+        group["gweight"] = weights
+        total_weight = weights.sum()
 
-        pooled_variance = np.sum(variance) / np.sum(group["gweight"])
-        combined_se = np.sqrt(pooled_variance)
+        absolute_effect = np.sum(weights * group["absolute_effect"]) / total_weight
+        relative_effect = np.sum(weights * group["relative_effect"]) / total_weight
+
+        # SE of a weighted mean: sqrt(Σ(w_i² × SE_i²)) / Σ(w_i)
+        combined_se = np.sqrt(np.sum(weights**2 * group["standard_error"] ** 2)) / total_weight
         z_score = absolute_effect / combined_se
         combined_p_value = 2 * (1 - stats.norm.cdf(abs(z_score)))
 
