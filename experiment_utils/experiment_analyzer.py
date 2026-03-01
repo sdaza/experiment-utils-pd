@@ -1938,14 +1938,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         control?"  The acceptable inferiority is defined by the margin M > 0.
 
         **Higher-is-better metrics** (e.g. conversion rate, revenue):
-            H₀: δ ≤ −M  (treatment is worse by more than M)
-            H₁: δ > −M  (treatment is non-inferior)
-            Reject H₀ when the one-sided lower CI > −M.
+            Non-inferior when treatment value is confidently above
+            ``control_value − M``.  Formally: one-sided lower CI of the
+            absolute effect > −M.
 
         **Lower-is-better metrics** (e.g. error rate, churn, cost):
-            H₀: δ ≥ M   (treatment is worse by more than M)
-            H₁: δ < M   (treatment is non-inferior)
-            Reject H₀ when the one-sided upper CI < M.
+            Non-inferior when treatment value is confidently below
+            ``control_value + M``.  Formally: one-sided upper CI of the
+            absolute effect < +M.
 
         Parameters
         ----------
@@ -2000,8 +2000,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             results_df["ni_margin"] = float(absolute_margin)
 
         # ── one-sided test statistic and p-value ──────────────────────────
-        # For higher_is_better: z = (effect + M) / SE  → large z means non-inferior
-        # For lower_is_better:  z = (M - effect) / SE  → large z means non-inferior
+        # higher_is_better: z = (effect + M) / SE  — large z → non-inferior
+        # lower_is_better:  z = (M - effect) / SE  — large z → non-inferior
         if direction == "higher_is_better":
             z_stat = (results_df["absolute_effect"] + results_df["ni_margin"]) / results_df["standard_error"]
         else:

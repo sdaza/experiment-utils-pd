@@ -837,22 +837,26 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 Test whether the treatment is *not unacceptably worse* than control.  The
 margin M defines the largest acceptable inferiority.
 
-| Direction | H₀ (inferior) | H₁ (non-inferior) | Reject H₀ when … |
-|---|---|---|---|
-| `higher_is_better` | δ ≤ −M | δ > −M | one-sided lower CI > −M |
-| `lower_is_better` | δ ≥ M | δ < M | one-sided upper CI < M |
+**Intuition** — given `control_value = 0.03` and `margin = 0.01`:
+
+| Direction | Non-inferior when … | In other words … |
+|---|---|---|
+| `higher_is_better` (default) | one-sided lower CI of effect > −M | treatment value is confidently above `control − margin` = 0.02 |
+| `lower_is_better` | one-sided upper CI of effect < +M | treatment value is confidently below `control + margin` = 0.04 |
+
+The test uses a one-sided normal z-test at the specified `alpha` (default 0.05).
 
 ```python
 analyzer.get_effects()
 
-# Higher-is-better outcome (e.g. conversion): treatment within 5 pp of control
-analyzer.test_non_inferiority(absolute_margin=0.05)
+# Higher-is-better (e.g. conversion rate): treatment must stay within 1 pp of control
+analyzer.test_non_inferiority(absolute_margin=0.01)
 
-# Or specify the margin as a fraction of the control mean (10% of control rate)
+# Margin as a fraction of the control mean — 10% of control rate
 analyzer.test_non_inferiority(relative_margin=0.10)
 
-# Lower-is-better outcome (e.g. error rate, churn)
-analyzer.test_non_inferiority(absolute_margin=0.05, direction="lower_is_better")
+# Lower-is-better (e.g. error rate, churn): treatment must not increase by more than 1 pp
+analyzer.test_non_inferiority(absolute_margin=0.01, direction="lower_is_better")
 
 results = analyzer.results
 print(results[["outcome", "absolute_effect", "ni_margin", "ni_pvalue", "is_non_inferior"]])
@@ -860,7 +864,7 @@ print(results[["outcome", "absolute_effect", "ni_margin", "ni_pvalue", "is_non_i
 
 Added columns:
 - `ni_margin` — absolute margin used for each row
-- `ni_pvalue` — one-sided p-value (non-inferiority)
+- `ni_pvalue` — one-sided p-value; smaller = stronger evidence of non-inferiority
 - `is_non_inferior` — `True` when `ni_pvalue < alpha`
 
 ### Combining Effects (Meta-Analysis)
