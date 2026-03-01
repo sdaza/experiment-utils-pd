@@ -1024,6 +1024,7 @@ fig = analyzer.plot_effects()
 | `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
 | `show_zero_line` | `True` | Vertical reference line at zero |
 | `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
+| `value_decimals` | `2` | Decimal places for value labels when `show_values=True` |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
 | `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). With `group_by`, each figure is saved as `"effects_<key>.png"` |

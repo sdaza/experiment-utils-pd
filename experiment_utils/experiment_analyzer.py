@@ -2147,6 +2147,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
         show_values: bool = False,
+        value_decimals: int = 2,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
         save_path: str | None = None,
@@ -2219,6 +2220,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         show_values : bool, optional
             Annotate each dot with its effect value (and ``*`` when significant).
             Default ``False``.
+        value_decimals : int, optional
+            Number of decimal places for the value labels shown when
+            ``show_values=True``.  Default ``2``.
         save_path : str or path-like, optional
             File path to save the figure.  When ``group_by`` produces multiple
             figures the group key is inserted before the file extension, e.g.
@@ -2262,6 +2266,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             panel_titles=panel_titles,
             row_labels=row_labels,
             show_values=show_values,
+            value_decimals=value_decimals,
             panel_spacing=panel_spacing,
             repeat_ylabels=repeat_ylabels,
             save_path=save_path,
