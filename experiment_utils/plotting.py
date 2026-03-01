@@ -204,7 +204,8 @@ def _draw_panels_into_axes(
         elif isinstance(panel_titles, str):
             ptitle = panel_titles
         else:
-            ptitle = str(panel_val)
+            # Fall back to row_labels when the panel key is an outcome name
+            ptitle = row_labels.get(panel_val, str(panel_val)) if row_labels else str(panel_val)
         ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
 
         ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
