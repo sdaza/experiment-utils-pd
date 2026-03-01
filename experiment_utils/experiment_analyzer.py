@@ -1925,58 +1925,90 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             self._bootstrap = original_bootstrap
 
     def test_non_inferiority(
-        self, absolute_margin: float | None = None, relative_margin: float | None = None, alpha: float = 0.05
+        self,
+        absolute_margin: float | None = None,
+        relative_margin: float | None = None,
+        alpha: float = 0.05,
+        direction: str = "higher_is_better",
     ) -> None:
         """
-        Performs a non-inferiority test on the results.
+        Perform a one-sided non-inferiority test on the results.
 
-        This test determines if the test group is not unacceptably worse than the control group.
-        You must provide either an absolute or a relative margin.
+        Non-inferiority asks: "Is the treatment *not unacceptably worse* than
+        control?"  The acceptable inferiority is defined by the margin M > 0.
+
+        **Higher-is-better metrics** (e.g. conversion rate, revenue):
+            H₀: δ ≤ −M  (treatment is worse by more than M)
+            H₁: δ > −M  (treatment is non-inferior)
+            Reject H₀ when the one-sided lower CI > −M.
+
+        **Lower-is-better metrics** (e.g. error rate, churn, cost):
+            H₀: δ ≥ M   (treatment is worse by more than M)
+            H₁: δ < M   (treatment is non-inferior)
+            Reject H₀ when the one-sided upper CI < M.
 
         Parameters
         ----------
         absolute_margin : float, optional
-            The absolute margin of non-inferiority.
+            Maximum acceptable absolute inferiority (must be > 0).
         relative_margin : float, optional
-            The relative margin of non-inferiority, calculated as a percentage of the control group's value.
+            Maximum acceptable inferiority as a fraction of ``|control_value|``
+            (e.g. ``0.10`` = 10 %).  Must be > 0.
         alpha : float, optional
-            The significance level for the one-sided test, by default 0.05.
+            One-sided significance level (default 0.05).
+        direction : {"higher_is_better", "lower_is_better"}, optional
+            Whether a larger or smaller value of the outcome is preferred.
+            Default ``"higher_is_better"``.
 
         Updates
         -------
         self._results : pd.DataFrame
-            Adds non-inferiority test columns to the results DataFrame.
+            Adds the following columns:
+
+            - ``ni_margin``: the absolute margin used for each row.
+            - ``ni_pvalue``: one-sided p-value for the non-inferiority test.
+            - ``is_non_inferior``: ``True`` when ``ni_pvalue < alpha``.
         """
         if self._results is None:
             log_and_raise_error(self._logger, "Must run get_effects() before testing for non-inferiority.")
 
         if not (0 < alpha < 1):
-            log_and_raise_error(self._logger, "Alpha must be between 0 and 1 (exclusive).")
+            log_and_raise_error(self._logger, "alpha must be between 0 and 1 (exclusive).")
 
         if absolute_margin is not None and relative_margin is not None:
-            log_and_raise_error(
-                self._logger, "Please provide either an absolute_margin or a relative_margin, not both."
-            )  # noqa: E501
+            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin, not both.")
 
         if absolute_margin is None and relative_margin is None:
-            log_and_raise_error(self._logger, "Please provide either an absolute_margin or a relative_margin.")
+            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin.")
 
         if absolute_margin is not None and absolute_margin <= 0:
-            log_and_raise_error(self._logger, "absolute_margin must be a positive value.")
+            log_and_raise_error(self._logger, "absolute_margin must be > 0.")
 
         if relative_margin is not None and relative_margin <= 0:
-            log_and_raise_error(self._logger, "relative_margin must be a positive value.")
+            log_and_raise_error(self._logger, "relative_margin must be > 0.")
+
+        valid_directions = {"higher_is_better", "lower_is_better"}
+        if direction not in valid_directions:
+            log_and_raise_error(self._logger, f"direction must be one of {valid_directions}.")
 
         results_df = self._results.copy()
+
+        # ── margin ────────────────────────────────────────────────────────
         if relative_margin is not None:
-            results_df["non_inferiority_margin"] = relative_margin * results_df["control_value"].abs()
+            results_df["ni_margin"] = relative_margin * results_df["control_value"].abs()
         else:
-            results_df["non_inferiority_margin"] = absolute_margin
+            results_df["ni_margin"] = float(absolute_margin)
 
-        z_critical = stats.norm.ppf(1 - alpha)
-        results_df["ci_lower_bound"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
+        # ── one-sided test statistic and p-value ──────────────────────────
+        # For higher_is_better: z = (effect + M) / SE  → large z means non-inferior
+        # For lower_is_better:  z = (M - effect) / SE  → large z means non-inferior
+        if direction == "higher_is_better":
+            z_stat = (results_df["absolute_effect"] + results_df["ni_margin"]) / results_df["standard_error"]
+        else:
+            z_stat = (results_df["ni_margin"] - results_df["absolute_effect"]) / results_df["standard_error"]
 
-        results_df["is_non_inferior"] = results_df["ci_lower_bound"] > -results_df["non_inferiority_margin"]
+        results_df["ni_pvalue"] = 1 - stats.norm.cdf(z_stat)
+        results_df["is_non_inferior"] = results_df["ni_pvalue"] < alpha
 
         self._results = results_df
 

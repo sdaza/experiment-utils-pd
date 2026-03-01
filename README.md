@@ -834,24 +834,34 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 
 ### Non-Inferiority Testing
 
-Test if a new treatment is "not worse" than control:
+Test whether the treatment is *not unacceptably worse* than control.  The
+margin M defines the largest acceptable inferiority.
+
+| Direction | H₀ (inferior) | H₁ (non-inferior) | Reject H₀ when … |
+|---|---|---|---|
+| `higher_is_better` | δ ≤ −M | δ > −M | one-sided lower CI > −M |
+| `lower_is_better` | δ ≥ M | δ < M | one-sided upper CI < M |
 
 ```python
-analyzer = ExperimentAnalyzer(
-    data=df,
-    treatment_col="treatment",
-    outcomes=["conversion"],
-)
-
 analyzer.get_effects()
 
-# Test if treatment is within 10% of control
+# Higher-is-better outcome (e.g. conversion): treatment within 5 pp of control
+analyzer.test_non_inferiority(absolute_margin=0.05)
+
+# Or specify the margin as a fraction of the control mean (10% of control rate)
 analyzer.test_non_inferiority(relative_margin=0.10)
 
+# Lower-is-better outcome (e.g. error rate, churn)
+analyzer.test_non_inferiority(absolute_margin=0.05, direction="lower_is_better")
+
 results = analyzer.results
-print(results[["outcome", "relative_effect", "is_non_inferior", 
-               "non_inferiority_margin"]])
+print(results[["outcome", "absolute_effect", "ni_margin", "ni_pvalue", "is_non_inferior"]])
 ```
+
+Added columns:
+- `ni_margin` — absolute margin used for each row
+- `ni_pvalue` — one-sided p-value (non-inferiority)
+- `is_non_inferior` — `True` when `ni_pvalue < alpha`
 
 ### Combining Effects (Meta-Analysis)
 
