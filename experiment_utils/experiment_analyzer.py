@@ -1932,27 +1932,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         direction: str = "higher_is_better",
     ) -> None:
         """
-        Perform a one-sided non-inferiority test on the results.
+        Test whether the treatment stays within an acceptable margin of control.
 
-        Non-inferiority asks: "Is the treatment *not unacceptably worse* than
-        control?"  The acceptable inferiority is defined by the margin M > 0.
+        Given margin M, the test asks: "Can we confidently say the treatment
+        is close enough to control to be acceptable?"
 
         **Higher-is-better metrics** (e.g. conversion rate, revenue):
-            Non-inferior when treatment value is confidently above
+            Passes when treatment value is confidently above
             ``control_value − M``.  Formally: one-sided lower CI of the
             absolute effect > −M.
 
         **Lower-is-better metrics** (e.g. error rate, churn, cost):
-            Non-inferior when treatment value is confidently below
+            Passes when treatment value is confidently below
             ``control_value + M``.  Formally: one-sided upper CI of the
             absolute effect < +M.
 
         Parameters
         ----------
         absolute_margin : float, optional
-            Maximum acceptable absolute inferiority (must be > 0).
+            Maximum acceptable absolute deviation from control (must be > 0).
         relative_margin : float, optional
-            Maximum acceptable inferiority as a fraction of ``|control_value|``
+            Maximum acceptable deviation as a fraction of ``|control_value|``
             (e.g. ``0.10`` = 10 %).  Must be > 0.
         alpha : float, optional
             One-sided significance level (default 0.05).
@@ -1965,12 +1965,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._results : pd.DataFrame
             Adds the following columns:
 
-            - ``ni_margin``: the absolute margin used for each row.
-            - ``ni_pvalue``: one-sided p-value for the non-inferiority test.
-            - ``is_non_inferior``: ``True`` when ``ni_pvalue < alpha``.
+            - ``margin``: the absolute margin used for each row.
+            - ``margin_pvalue``: one-sided p-value; smaller = stronger evidence
+              the treatment is within the margin.
+            - ``within_margin``: ``True`` when ``margin_pvalue < alpha``.
         """
         if self._results is None:
-            log_and_raise_error(self._logger, "Must run get_effects() before testing for non-inferiority.")
+            log_and_raise_error(self._logger, "Must run get_effects() before test_non_inferiority().")
 
         if not (0 < alpha < 1):
             log_and_raise_error(self._logger, "alpha must be between 0 and 1 (exclusive).")
@@ -1993,22 +1994,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         results_df = self._results.copy()
 
-        # ── margin ────────────────────────────────────────────────────────
         if relative_margin is not None:
-            results_df["ni_margin"] = relative_margin * results_df["control_value"].abs()
+            results_df["margin"] = relative_margin * results_df["control_value"].abs()
         else:
-            results_df["ni_margin"] = float(absolute_margin)
+            results_df["margin"] = float(absolute_margin)
 
-        # ── one-sided test statistic and p-value ──────────────────────────
-        # higher_is_better: z = (effect + M) / SE  — large z → non-inferior
-        # lower_is_better:  z = (M - effect) / SE  — large z → non-inferior
+        # higher_is_better: z = (effect + M) / SE  — large z → within margin
+        # lower_is_better:  z = (M - effect) / SE  — large z → within margin
         if direction == "higher_is_better":
-            z_stat = (results_df["absolute_effect"] + results_df["ni_margin"]) / results_df["standard_error"]
+            z_stat = (results_df["absolute_effect"] + results_df["margin"]) / results_df["standard_error"]
         else:
-            z_stat = (results_df["ni_margin"] - results_df["absolute_effect"]) / results_df["standard_error"]
+            z_stat = (results_df["margin"] - results_df["absolute_effect"]) / results_df["standard_error"]
 
-        results_df["ni_pvalue"] = 1 - stats.norm.cdf(z_stat)
-        results_df["is_non_inferior"] = results_df["ni_pvalue"] < alpha
+        results_df["margin_pvalue"] = 1 - stats.norm.cdf(z_stat)
+        results_df["within_margin"] = results_df["margin_pvalue"] < alpha
 
         self._results = results_df
 

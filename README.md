@@ -834,12 +834,13 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 
 ### Non-Inferiority Testing
 
-Test whether the treatment is *not unacceptably worse* than control.  The
-margin M defines the largest acceptable inferiority.
+Test whether the treatment stays within an acceptable margin of control
+(`test_non_inferiority`).  Given margin M, the question is: *"Is the treatment
+close enough to control to be acceptable?"*
 
 **Intuition** — given `control_value = 0.03` and `margin = 0.01`:
 
-| Direction | Non-inferior when … | In other words … |
+| Direction | Passes when … | In other words … |
 |---|---|---|
 | `higher_is_better` (default) | one-sided lower CI of effect > −M | treatment value is confidently above `control − margin` = 0.02 |
 | `lower_is_better` | one-sided upper CI of effect < +M | treatment value is confidently below `control + margin` = 0.04 |
@@ -859,13 +860,13 @@ analyzer.test_non_inferiority(relative_margin=0.10)
 analyzer.test_non_inferiority(absolute_margin=0.01, direction="lower_is_better")
 
 results = analyzer.results
-print(results[["outcome", "absolute_effect", "ni_margin", "ni_pvalue", "is_non_inferior"]])
+print(results[["outcome", "absolute_effect", "margin", "margin_pvalue", "within_margin"]])
 ```
 
 Added columns:
-- `ni_margin` — absolute margin used for each row
-- `ni_pvalue` — one-sided p-value; smaller = stronger evidence of non-inferiority
-- `is_non_inferior` — `True` when `ni_pvalue < alpha`
+- `margin` — absolute margin used for each row
+- `margin_pvalue` — one-sided p-value; smaller = stronger evidence the treatment is within the margin
+- `within_margin` — `True` when `margin_pvalue < alpha`
 
 ### Combining Effects (Meta-Analysis)
 
