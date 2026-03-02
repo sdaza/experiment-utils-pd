@@ -381,7 +381,7 @@ def test_sample_ratio_with_categorical():
         outcomes="conversion",
         treatment_col="treatment",
         treatment_comparisons=[("treatment_a", "control")],
-        exp_sample_ratio_col="expected_ratio",
+        exp_sample_ratio="expected_ratio",
         experiment_identifier="experiment_id",
     )
 

@@ -4,13 +4,12 @@ PowerSim class for simulation of power analysis.
 
 import itertools
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import statsmodels.api as sm
 from multiprocess.pool import ThreadPool
 from scipy import stats
+from tqdm import tqdm
 
 from .utils import get_logger, log_and_raise_error
 
@@ -359,9 +358,9 @@ class PowerSim:
                     sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
                     significant = [p < sidak_alpha for p in l_pvalues]
                 else:
-                    # For other corrections, use full correction method
-                    correction_func = correction_methods[self.correction]
-                    significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
+                    # Sequential methods (Holm, Hochberg, FDR) need all p-values to rank them;
+                    # with a subset use Bonferroni (full family size) as a conservative fallback.
+                    significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
             else:
                 correction_func = correction_methods[self.correction]
                 significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
@@ -639,6 +638,7 @@ class PowerSim:
         standard_deviation: float | list[float] = None,
         target_comparisons: list[tuple[int, int]] = None,
         use_early_stopping: bool = None,
+        show_progress: bool = True,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate power using simulation.
@@ -671,6 +671,8 @@ class PowerSim:
         # Set default values for mutable arguments
         if baseline is None:
             baseline = 1.0
+        elif isinstance(baseline, list | tuple):
+            baseline = float(baseline[0])
         if effect is None:
             effect = [0.10]
         elif isinstance(effect, int | float):
@@ -714,10 +716,11 @@ class PowerSim:
                 # HYBRID: Two-stage pipeline for maximum efficiency
                 # Stage 1: Generate all simulation data (threading - shares memory, fast)
                 # Stage 2: Run statistical tests (multiprocessing - true parallelism, CPU-intensive)
-                self.logger.info(
-                    f"Running {self.nsim} power simulations with hybrid parallelization "
-                    f"(threading for data generation + multiprocessing for tests)..."
-                )
+                if show_progress:
+                    self.logger.info(
+                        f"Running {self.nsim} power simulations with hybrid parallelization "
+                        f"(threading for data generation + multiprocessing for tests)..."
+                    )
 
                 # Stage 1: Generate simulation datasets in parallel (threading)
                 self.logger.debug("Stage 1/2: Generating simulation data (threading)...")
@@ -734,43 +737,72 @@ class PowerSim:
 
                 # Stage 2: Run statistical tests in parallel (multiprocessing)
                 self.logger.debug("Stage 2/2: Computing statistical tests (multiprocessing)...")
-                results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
-                    delayed(self._compute_statistical_tests)(
-                        sim_data=sim_data,
-                        sample_size=sample_size,
-                        comparisons_to_compute=comparisons_to_compute,
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
+                            delayed(self._compute_statistical_tests)(
+                                sim_data=sim_data,
+                                sample_size=sample_size,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for sim_data in sim_datasets
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
+                        disable=not show_progress,
                     )
-                    for sim_data in sim_datasets
                 )
 
             elif self.parallel_strategy == "threading":
                 # Pure threading approach (memory-efficient but GIL-limited)
-                self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
-                results = Parallel(n_jobs=-1, backend="threading")(
-                    delayed(self._run_single_power_simulation)(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_size,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        comparisons_to_compute=comparisons_to_compute,
+                if show_progress:
+                    self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                            delayed(self._run_single_power_simulation)(
+                                baseline=baseline,
+                                effect=effect,
+                                sample_size=sample_size,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for _ in range(self.nsim)
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
+                        disable=not show_progress,
                     )
-                    for _ in range(self.nsim)
                 )
 
             else:  # "loky" or default
                 # Pure multiprocessing approach (high memory but true parallelism)
-                self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
-                results = Parallel(n_jobs=-1, backend="loky")(
-                    delayed(self._run_single_power_simulation)(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_size,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        comparisons_to_compute=comparisons_to_compute,
+                if show_progress:
+                    self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
+                results = list(
+                    tqdm(
+                        Parallel(n_jobs=-1, backend="loky", return_as="generator")(
+                            delayed(self._run_single_power_simulation)(
+                                baseline=baseline,
+                                effect=effect,
+                                sample_size=sample_size,
+                                compliance=compliance,
+                                standard_deviation=standard_deviation,
+                                comparisons_to_compute=comparisons_to_compute,
+                            )
+                            for _ in range(self.nsim)
+                        ),
+                        total=self.nsim,
+                        desc="Simulations",
+                        unit="sim",
+                        leave=False,
+                        disable=not show_progress,
                     )
-                    for _ in range(self.nsim)
                 )
 
             # Aggregate results
@@ -787,7 +819,7 @@ class PowerSim:
             min_sims = 50  # Minimum simulations before considering early stopping
 
             # iterate over simulations
-            for _i in range(self.nsim):
+            for _i in tqdm(range(self.nsim), desc="Simulations", unit="sim", leave=False, disable=not show_progress):
                 significant = self._run_single_power_simulation(
                     baseline=baseline,
                     effect=effect,
@@ -997,49 +1029,138 @@ class PowerSim:
         power_df = power_df[["comparisons", "power"]]
         return power_df
 
+    @staticmethod
+    def _as_scenario_list(values):
+        """Convert a grid parameter to a flat list of per-scenario values.
+
+        Handles:
+        - scalar              → [scalar]
+        - [scalar, ...]       → [scalar, ...] (each element is one scenario)
+        - [[v1,v2], [v3,v4]]  → [[v1,v2], [v3,v4]] (each sub-list is one scenario)
+        Single-element inner lists are unwrapped so ``[[0.33]]`` becomes ``[0.33]``
+        and ``[[1000], [2000]]`` becomes ``[1000, 2000]``.
+        """
+        if values is None:
+            return None
+        if not isinstance(values, list):
+            return [values]
+        return [v[0] if isinstance(v, list | tuple) and len(v) == 1 else v for v in values]
+
     def grid_sim_power(
         self,
-        baseline_rates: list[float] = None,
-        effects: list[float] = None,
-        sample_sizes: list[int] = None,  # noqa: E501
-        compliances: list[list[float]] = None,
-        standard_deviations: list[list[float]] = None,
+        baseline_rates: float | list = None,
+        effects: float | list = None,
+        sample_sizes: int | list = None,
+        compliances: float | list = None,
+        standard_deviations: float | list = None,
+        allocation_ratio: list[float] = None,
         threads: int = 3,
         plot: bool = False,
+        correction: str = None,
+        facet_by: str | None = "comparison",
+        hue: str = "effect",
     ) -> pd.DataFrame:  # noqa: E501
         """
-        Return Pandas DataFrame with parameter combinations and statistical power
+        Return Pandas DataFrame with parameter combinations and statistical power.
+
+        Each parameter can be provided as a scalar, a flat list of scenario values,
+        or a list of lists (one sub-list per scenario).  Single-element inner lists
+        are unwrapped automatically, so both ``[[0.33]]`` and ``[0.33]`` are valid
+        for a single baseline scenario.
 
         Parameters
         ----------
-        baseline_rates : list of float
-            List of baseline rate scenarios to sweep over (e.g., [0.10, 0.20]).
-        effects : list
-            List with effect sizes.
-        sample_sizes : list
-            List with sample for control and variants.
-        compliances : list
-            List with compliance values.
-        standard_deviations : list
-            List of standard deviations of control and variants.
+        baseline_rates : float or list of float
+            Baseline rate scenarios (e.g., ``0.10`` or ``[0.10, 0.20]``).
+        effects : float, list of float, or list of lists
+            Effect size scenarios.  Use a list of lists for multi-variant effects,
+            e.g. ``[[0.01, 0.03], [0.03, 0.05]]`` for two scenarios with two variants.
+        sample_sizes : int, list of int, or list of lists
+            Sample size scenarios, **per group**.  A scalar or flat list such as
+            ``[1000, 2000, 5000]`` assigns that many units to *each* group (control
+            and every variant), so ``5000`` means 5 000 in control *and* 5 000 in
+            each variant (total N = 5 000 × (variants + 1)).  Use a list of lists to
+            set per-group sizes explicitly, e.g. ``[[1000, 500], [2000, 1000]]``.
+        compliances : float, list of float, or list of lists
+            Compliance scenarios.
+        standard_deviations : float, list of float, or list of lists
+            Standard deviation scenarios.
+        allocation_ratio : list of float, optional
+            Proportion of total sample assigned to each group (control + variants).
+            Must sum to 1.0 and have length equal to variants + 1.
+            Defaults to equal allocation. Example: ``[0.5, 0.25, 0.25]`` gives the
+            control group twice as many units as each variant.
         threads : int
             Number of threads for parallelization.
         plot : bool
-            Whether to plot the results.
+            Whether to plot the results after the grid is computed.
+        correction : str, optional
+            Multiple comparison correction method. If provided, overrides the instance
+            correction for this call. Options: 'bonferroni', 'holm', 'hochberg',
+            'sidak', 'fdr', 'none' (or None to use the instance default).
+        facet_by : str or None
+            Column whose unique values each get their own plot when ``plot=True``
+            (default ``"comparison"``).  Pass ``None`` to produce a single combined plot.
+        hue : str
+            Column used to colour lines within each plot when ``plot=True``
+            (default ``"effect"``).
         """
 
+        original_correction = None
+        if correction is not None:
+            original_correction = self.correction
+            self.correction = correction
+
+        baseline_rates = self._as_scenario_list(baseline_rates)
+        effects = self._as_scenario_list(effects)
+        sample_sizes = self._as_scenario_list(sample_sizes)
+
         if compliances is None:
-            compliances = [[1]]
+            compliances = [1]
+        else:
+            compliances = self._as_scenario_list(compliances)
+
         if standard_deviations is None:
-            standard_deviations = [[1]]
+            standard_deviations = [1]
+        else:
+            standard_deviations = self._as_scenario_list(standard_deviations)
+
+        # Validate allocation_ratio
+        num_groups = self.variants + 1
+        custom_allocation = allocation_ratio is not None
+        if custom_allocation:
+            if len(allocation_ratio) != num_groups:
+                log_and_raise_error(
+                    self.logger,
+                    f"allocation_ratio length ({len(allocation_ratio)}) must equal variants + 1 ({num_groups})",
+                )
+            if abs(sum(allocation_ratio) - 1.0) > 1e-6:
+                log_and_raise_error(self.logger, "allocation_ratio must sum to 1.0")
+            # Split scalar totals into per-group lists only for custom allocations.
+            # get_power already expands a scalar total uniformly, so for equal
+            # allocation we keep the original values (cleaner x-axis labels).
+            sample_sizes_for_power = [
+                [int(s * r) for r in allocation_ratio] if isinstance(s, int | float) else s for s in sample_sizes
+            ]
+        else:
+            allocation_ratio = [1.0 / num_groups] * num_groups
+            sample_sizes_for_power = sample_sizes
+
+        # Build the grid using the values passed to get_power, then restore the
+        # original (display-friendly) sample sizes for the output DataFrame.
         pdict = {
             "baseline": baseline_rates,
             "effect": effects,
-            "sample_size": sample_sizes,
+            "sample_size": sample_sizes_for_power,
             "compliance": compliances,
             "standard_deviation": standard_deviations,
         }
         grid = self.__expand_grid(pdict)
+
+        if custom_allocation:
+            # Replace per-group lists with original totals so labels stay readable.
+            display_pdict = {**pdict, "sample_size": sample_sizes}
+            grid["sample_size"] = self.__expand_grid(display_pdict)["sample_size"]
 
         parameters = list(grid.itertuples(index=False, name=None))
 
@@ -1049,6 +1170,8 @@ class PowerSim:
         grid["metric"] = self.metric
         grid["variants"] = self.variants
         grid["comparisons"] = str(self.comparisons)
+        grid["correction"] = self.correction if self.correction is not None else "none"
+        grid["allocation_ratio"] = str(allocation_ratio)
         grid["relative_effect"] = self.relative_effect
         grid = grid.loc[
             :,
@@ -1060,6 +1183,8 @@ class PowerSim:
                 "standard_deviation",
                 "variants",
                 "comparisons",
+                "correction",
+                "allocation_ratio",
                 "nsim",
                 "alpha",
                 "alternative",
@@ -1067,10 +1192,16 @@ class PowerSim:
                 "relative_effect",
             ],
         ]
+        import functools
+
+        _get_power_silent = functools.partial(self.get_power, show_progress=False)
         pool = ThreadPool(processes=threads)
-        results = pool.starmap(self.get_power, parameters)
+        results = pool.starmap(_get_power_silent, parameters)
         pool.close()
         pool.join()
+
+        if original_correction is not None:
+            self.correction = original_correction
 
         results = pd.concat(results)
 
@@ -1086,56 +1217,44 @@ class PowerSim:
         results.columns = [str((i, j)) for i, j in self.comparisons]
 
         grid = pd.concat([grid, results], axis=1)
-        grid.sample_size = grid.sample_size.map(str)
-        grid.effect = grid.effect.map(str)
+        # Keep sample_size and effect as their original types for correct numeric
+        # axis ordering in plots; map to str only when the value is a list
+        # (custom per-group allocation) so it can be stored in the DataFrame cell.
+        grid.sample_size = grid.sample_size.map(lambda v: str(v) if isinstance(v, list) else v)
+        grid.effect = grid.effect.map(lambda v: str(v) if isinstance(v, list) else v)
         if plot:
-            self.plot_power(grid)
+            self.plot_power(grid, facet_by=facet_by, hue=hue)
         return grid
 
-    def plot_power(self, data: pd.DataFrame) -> None:
+    def plot_power(
+        self,
+        data: pd.DataFrame,
+        facet_by: str | None = "comparison",
+        hue: str = "effect",
+    ) -> None:
         """
-        Plot statistical power by scenario
+        Plot statistical power by scenario.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Output of :meth:`grid_sim_power`.
+        facet_by : str or None
+            Column whose unique values each get their own plot
+            (default ``"comparison"``).  Pass ``None`` for a single combined plot.
+        hue : str
+            Column used to colour lines within each plot (default ``"effect"``).
         """
+        from .plotting import plot_power as _plot_power
 
-        value_vars = [str((i, j)) for i, j in self.comparisons]
-
-        cols = [
-            "baseline",
-            "effect",
-            "sample_size",
-            "compliance",
-            "standard_deviation",
-            "variants",
-            "comparisons",
-            "nsim",
-            "alpha",
-            "alternative",
-            "metric",
-            "relative_effect",
-        ]
-
-        temp = pd.melt(data, id_vars=cols, var_name="comparison", value_name="power", value_vars=value_vars)
-
-        d_relative_effect = {True: "relative", False: "absolute"}
-        effects = list(temp.effect.unique())
-        for i in effects:
-            plot = sns.lineplot(
-                x="sample_size",
-                y="power",
-                hue="comparison",
-                errorbar=None,
-                data=temp[temp["effect"] == i],
-                legend="full",
-            )  # noqa: E501
-            plt.hlines(y=0.8, linestyles="dashed", xmin=0, xmax=len(temp.sample_size.unique()) - 1, colors="gray")
-            plt.title(
-                f"Simulated power estimation for {self.metric}s, {d_relative_effect[self.relative_effect]} effects {str(i)}\n (sims per scenario:{self.nsim})"  # noqa: E501
-            )  # noqa: E501
-            plt.legend(bbox_to_anchor=(1.05, 1), title="comparison", loc="upper left")
-            plt.xlabel("\n sample size")
-            plt.ylabel("power\n")
-            plt.setp(plot.get_xticklabels(), rotation=45)
-            plt.show()
+        _plot_power(
+            data=data,
+            comparisons=self.comparisons,
+            alpha=self.alpha,
+            alternative=self.alternative,
+            facet_by=facet_by,
+            hue=hue,
+        )
 
     def __expand_grid(self, dictionary: dict[str, list[float | int]]) -> pd.DataFrame:
         """
@@ -1325,60 +1444,149 @@ class PowerSim:
 
         sorted_comparisons = sorted(target_comparisons, key=get_effect_size)
 
-        # For each comparison, find minimum sample size
-        # Note: We need to test with ALL groups to properly account for multiple comparison corrections
+        # Collect all groups that appear in any comparison (used to floor their sizes)
+        groups_needed = set()
+        for comp in target_comparisons:
+            groups_needed.update(comp)
+
+        # For each comparison, find minimum per-group sample size.
+        # Note: We need to test with ALL groups to properly account for multiple
+        # comparison corrections (e.g. Holm).
         for group1, group2 in sorted_comparisons:
             comp_target_power = power_dict[(group1, group2)]
             comp_result_idx = self.comparisons.index((group1, group2))
 
-            low = min_sample_size
-            high = max_sample_size
-            found_size = None
-
-            current_size = low
-            while current_size <= high:
-                per_group = int(current_size / 2)
-
-                # Test with ALL groups, using current max for groups already processed
-                # and per_group for the groups in this comparison
-                sample_sizes = list(group_samples)  # Start with current max for each group
-                sample_sizes[group1] = max(sample_sizes[group1], per_group)
-                sample_sizes[group2] = max(sample_sizes[group2], per_group)
-
-                # Ensure groups involved in comparisons have minimum samples
-                # Groups not in target_comparisons can be 0
-                groups_needed = set()
-                for comp in target_comparisons:
-                    groups_needed.add(comp[0])
-                    groups_needed.add(comp[1])
-
+            # ---- local helpers ----------------------------------------
+            # Bind loop variables as defaults to avoid B023 (closure over loop var)
+            def _make_sizes(
+                total_for_pair: int,
+                _g1: int = group1,
+                _g2: int = group2,
+            ) -> list[int]:
+                """Build a full sample-size list for a candidate total_for_pair."""
+                per_g = max(100, int(total_for_pair / 2))
+                sizes = list(group_samples)
+                sizes[_g1] = max(sizes[_g1], per_g)
+                sizes[_g2] = max(sizes[_g2], per_g)
                 for i in range(num_groups):
                     if i in groups_needed:
-                        sample_sizes[i] = max(sample_sizes[i], 100)
+                        sizes[i] = max(sizes[i], 100)
+                return sizes
 
+            def _eval_alloc_power(
+                total_for_pair: int,
+                use_early_stopping=None,
+                _idx: int = comp_result_idx,
+            ) -> float:
+                sizes = _make_sizes(total_for_pair)
                 try:
                     with warnings.catch_warnings():
                         warnings.filterwarnings("ignore", category=RuntimeWarning)
-                        power_result = self.get_power(
+                        res = self.get_power(
                             baseline=baseline,
                             effect=effect,
-                            sample_size=sample_sizes,
+                            sample_size=sizes,
                             compliance=compliance,
                             standard_deviation=standard_deviation,
+                            show_progress=False,
+                            use_early_stopping=use_early_stopping,
                         )
-                    current_power = power_result.iloc[comp_result_idx]["power"]
-
-                    if current_power >= comp_target_power - tolerance:
-                        found_size = per_group
-                        break
+                    return res.iloc[_idx]["power"]
                 except Exception:
-                    pass
+                    return 0.0
 
-                current_size += step_size
+            # ---- analytical estimate for initial bracket --------------
+            from scipy.stats import norm as _norm
 
-            if found_size is None:
-                found_size = int(high / 2)
+            z_alpha = _norm.ppf(1 - self.alpha / 2)
+            z_beta = _norm.ppf(comp_target_power)
+            eff_val = (
+                effect[group2 - 1]
+                if (self.metric != "average" and group2 > 0 and group2 - 1 < len(effect))
+                else (effect[0] if effect else 0.1)
+            )
+            sd_val = standard_deviation[group2] if group2 < len(standard_deviation) else standard_deviation[0]
+            n_analytical_pair = None
+            try:
+                if self.metric == "proportion":
+                    p1 = np.clip(baseline, 0.001, 0.999)
+                    p2 = np.clip(baseline + eff_val, 0.001, 0.999)
+                    pp = np.clip((p1 + p2) / 2, 0.001, 0.999)
+                    num = (z_alpha * np.sqrt(2 * pp * (1 - pp)) + z_beta * np.sqrt(p1 * (1 - p1) + p2 * (1 - p2))) ** 2
+                    denom = (p2 - p1) ** 2
+                    if denom > 0:
+                        n_analytical_pair = int(num / denom) * 2  # *2 for total pair
+                elif self.metric == "average":
+                    if eff_val != 0:
+                        n_analytical_pair = int(2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (eff_val**2)) * 2
+                else:
+                    lam1, lam2 = baseline, baseline + eff_val
+                    if lam2 != lam1:
+                        n_analytical_pair = int(((z_alpha + z_beta) ** 2) * (lam1 + lam2) / ((lam2 - lam1) ** 2)) * 2
+            except (ZeroDivisionError, ValueError):
+                pass
 
+            # ---- bracket ----------------------------------------------
+            if n_analytical_pair and min_sample_size <= n_analytical_pair <= max_sample_size:
+                lo = max(min_sample_size, int(n_analytical_pair * 0.5))
+                hi = min(max_sample_size, int(n_analytical_pair * 2.0))
+            else:
+                lo = min_sample_size
+                hi = max_sample_size
+
+            # Verify upper bound
+            p_hi = _eval_alloc_power(hi)
+            if p_hi < comp_target_power - tolerance:
+                while hi < max_sample_size:
+                    lo = hi
+                    hi = min(max_sample_size, hi * 2)
+                    p_hi = _eval_alloc_power(hi)
+                    if p_hi >= comp_target_power - tolerance:
+                        break
+                if p_hi < comp_target_power - tolerance:
+                    group_samples[group1] = max(group_samples[group1], max(100, int(hi / 2)))
+                    group_samples[group2] = max(group_samples[group2], max(100, int(hi / 2)))
+                    continue
+
+            # Contract lower bound if already sufficient
+            p_lo = _eval_alloc_power(lo)
+            if p_lo >= comp_target_power - tolerance:
+                while lo > min_sample_size:
+                    candidate = max(min_sample_size, lo // 2)
+                    p_cand = _eval_alloc_power(candidate)
+                    if p_cand >= comp_target_power - tolerance:
+                        hi, p_hi = lo, p_lo
+                        lo, p_lo = candidate, p_cand
+                    else:
+                        lo = candidate
+                        break
+                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
+                    found_size = max(100, int(lo / 2))
+                    group_samples[group1] = max(group_samples[group1], found_size)
+                    group_samples[group2] = max(group_samples[group2], found_size)
+                    continue
+
+            # ---- binary search ----------------------------------------
+            best_pair_size = hi
+            while hi - lo > step_size:
+                mid = (lo + hi) // 2
+                if _eval_alloc_power(mid) >= comp_target_power - tolerance:
+                    best_pair_size = mid
+                    hi = mid
+                else:
+                    lo = mid
+
+            # ---- post-convergence verification + recovery -------------
+            verified = _eval_alloc_power(best_pair_size, use_early_stopping=False)
+            _recovery = 0
+            while verified < comp_target_power - tolerance and _recovery < 10:
+                if best_pair_size >= max_sample_size:
+                    break
+                best_pair_size = min(max_sample_size, best_pair_size + step_size)
+                verified = _eval_alloc_power(best_pair_size, use_early_stopping=False)
+                _recovery += 1
+
+            found_size = max(100, int(best_pair_size / 2))
             group_samples[group1] = max(group_samples[group1], found_size)
             group_samples[group2] = max(group_samples[group2], found_size)
 
@@ -1611,253 +1819,230 @@ class PowerSim:
 
         results = []
 
-        def _get_analytical_sample_size(metric, baseline_val, effect_val, sd_val, target_power, alpha, allocation):
-            """Get analytical sample size estimate for initial guess."""
+        def _get_analytical_sample_size(metric, baseline_val, effect_val, sd_val, target_pwr, alpha, allocation):
+            """Closed-form sample size estimate — used only to initialise the search bracket."""
             from scipy.stats import norm
 
-            # Get z-scores
-            z_alpha = norm.ppf(1 - alpha / 2)  # two-tailed
-            z_beta = norm.ppf(target_power)
+            z_alpha = norm.ppf(1 - alpha / 2)
+            z_beta = norm.ppf(target_pwr)
 
             try:
                 if metric == "proportion":
-                    # Two-sample proportion test
-                    p1 = baseline_val
-                    p2 = baseline_val + effect_val
-                    p_pooled = (p1 + p2) / 2
-
-                    # Clip to valid range
-                    p1 = np.clip(p1, 0.001, 0.999)
-                    p2 = np.clip(p2, 0.001, 0.999)
-                    p_pooled = np.clip(p_pooled, 0.001, 0.999)
-
-                    # Formula: n = (z_alpha*sqrt(2*p*(1-p)) + z_beta*sqrt(p1*(1-p1) + p2*(1-p2)))^2 / (p1-p2)^2
+                    p1 = np.clip(baseline_val, 0.001, 0.999)
+                    p2 = np.clip(baseline_val + effect_val, 0.001, 0.999)
+                    p_pooled = np.clip((p1 + p2) / 2, 0.001, 0.999)
                     numerator = (
                         z_alpha * np.sqrt(2 * p_pooled * (1 - p_pooled))
                         + z_beta * np.sqrt(p1 * (1 - p1) + p2 * (1 - p2))
                     ) ** 2
-                    denominator = (p2 - p1) ** 2
-                    n_per_group = numerator / denominator if denominator > 0 else None
+                    denom = (p2 - p1) ** 2
+                    n_per_group = numerator / denom if denom > 0 else None
 
                 elif metric == "average":
-                    # Two-sample t-test
-                    # Formula: n = 2 * (z_alpha + z_beta)^2 * sd^2 / effect^2
-                    if effect_val != 0:
-                        n_per_group = 2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (effect_val**2)
-                    else:
-                        n_per_group = None
+                    n_per_group = (
+                        2 * ((z_alpha + z_beta) ** 2) * (sd_val**2) / (effect_val**2) if effect_val != 0 else None
+                    )
 
-                else:  # count
-                    # Poisson test - use similar logic to proportion
-                    lambda1 = baseline_val
-                    lambda2 = baseline_val + effect_val
-                    if lambda2 != lambda1:
-                        n_per_group = ((z_alpha + z_beta) ** 2) * (lambda1 + lambda2) / ((lambda2 - lambda1) ** 2)
-                    else:
-                        n_per_group = None
+                else:  # count / Poisson
+                    lam1, lam2 = baseline_val, baseline_val + effect_val
+                    n_per_group = (
+                        ((z_alpha + z_beta) ** 2) * (lam1 + lam2) / ((lam2 - lam1) ** 2) if lam2 != lam1 else None
+                    )
 
                 if n_per_group and n_per_group > 0:
-                    # Adjust for allocation ratio (n_per_group is for equal allocation)
-                    # Total sample size = n_per_group * 2 for equal allocation
-                    # For unequal, use: n_total = n_per_group / (r1 * r2) where r1, r2 are allocation ratios
                     r1, r2 = allocation[group1], allocation[group2]
                     total_n = n_per_group / (r1 * r2) if (r1 * r2) > 0 else n_per_group * 2
                     return int(total_n)
             except (ZeroDivisionError, ValueError):
                 pass
-
             return None
 
+        # Warn early if nsim is too low for reliable search
+        _RELIABLE_NSIM = 500
+        if self.nsim < _RELIABLE_NSIM:
+            self.logger.warning(
+                f"nsim={self.nsim} is low — power estimates will be noisy (SE ≈ "
+                f"{np.sqrt(0.8 * 0.2 / self.nsim):.3f} per evaluation). "
+                f"Increase nsim to {_RELIABLE_NSIM}+ for more reliable results."
+            )
+
+        def _eval_power(n_total, use_early_stopping=None):
+            """Simulate power at n_total. Suppresses inner progress bars."""
+            sizes = [int(n_total * r) for r in allocation_ratio]
+            try:
+                res = self.get_power(
+                    baseline=baseline,
+                    effect=effect,
+                    sample_size=sizes,
+                    compliance=compliance,
+                    standard_deviation=standard_deviation,
+                    show_progress=False,
+                    use_early_stopping=use_early_stopping,
+                )
+                return res.iloc[comp_result_idx]["power"]
+            except (RuntimeWarning, ZeroDivisionError, ValueError) as exc:
+                if "divide by zero" in str(exc).lower() or "invalid value" in str(exc).lower():
+                    log_and_raise_error(
+                        self.logger,
+                        f"Sample sizes too small causing numerical errors. "
+                        f"Try increasing min_sample_size (current: {min_sample_size}). "
+                        f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
+                    )
+                raise
+
         # For each target comparison, find the required sample size
-        for group1, group2 in target_comparisons:
+        for group1, group2 in tqdm(target_comparisons, desc="Finding sample size", unit="comp"):
             comp_target_power = power_dict[(group1, group2)]
+            # Index into self.comparisons so we extract the right row when get_power
+            # returns results for ALL comparisons (required for sequential corrections
+            # like Holm to be applied across the full family of tests).
+            comp_result_idx = self.comparisons.index((group1, group2))
 
-            # Get analytical estimate for better starting point
+            # Analytical starting estimate (no simulations, O(1))
             baseline_val = baseline
-            if self.metric != "average" and group2 > 0 and group2 - 1 < len(effect):
-                effect_val = effect[group2 - 1]
-            else:
-                effect_val = effect[0] if len(effect) > 0 else 0.1
+            effect_val = (
+                effect[group2 - 1]
+                if (self.metric != "average" and group2 > 0 and group2 - 1 < len(effect))
+                else (effect[0] if effect else 0.1)
+            )
             sd_val = standard_deviation[group2] if group2 < len(standard_deviation) else standard_deviation[0]
-
-            analytical_estimate = _get_analytical_sample_size(
+            n_analytical = _get_analytical_sample_size(
                 self.metric, baseline_val, effect_val, sd_val, comp_target_power, self.alpha, allocation_ratio
             )
 
-            # Start with full range - we'll use analytical estimate to guide initial coarse search
-            low = min_sample_size
-            high = max_sample_size
+            # ----------------------------------------------------------------
+            # Phase 1 — Bracket: find [low, high] where
+            #   power(low) < target - tolerance   (insufficient)
+            #   power(high) >= target - tolerance  (sufficient)
+            #
+            # Strategy (all O(log n), no linear scan):
+            #   a. Seed bracket from analytical estimate (±50 %)
+            #   b. If estimate > max_sample_size, skip directly to max check
+            #   c. Expand upward with doubling if high is still insufficient
+            #   d. Contract downward with halving if low is already sufficient
+            # ----------------------------------------------------------------
+            n_evals = 0
 
-            # Use analytical estimate to set better starting point for coarse search
-            if analytical_estimate and min_sample_size <= analytical_estimate <= max_sample_size:
-                # Start coarse search near analytical estimate, but ensure we check below it too
-                coarse_start = max(min_sample_size, int(analytical_estimate * 0.5))
-                self.logger.debug(
-                    f"Analytical estimate: {analytical_estimate}, starting coarse search at {coarse_start}"
-                )
+            if n_analytical and n_analytical <= max_sample_size:
+                lo = max(min_sample_size, int(n_analytical * 0.5))
+                hi = min(max_sample_size, int(n_analytical * 2.0))
             else:
-                coarse_start = min_sample_size
+                lo = min_sample_size
+                hi = max_sample_size
 
-            best_total_size = None
-            best_power = None
+            self.logger.debug(f"Comparison {(group1, group2)}: analytical={n_analytical}, bracket=[{lo}, {hi}]")
 
-            # First do a coarse search to find a good starting range
-            current_total_size = coarse_start
-            while current_total_size <= max_sample_size:
-                # Distribute total sample size by allocation ratio
-                sample_sizes = [int(current_total_size * ratio) for ratio in allocation_ratio]
+            # Check upper bound of bracket
+            p_hi = _eval_power(hi)
+            n_evals += 1
 
-                try:
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
-                    )
-                    current_power = power_result.iloc[0]["power"]
-                except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                    if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                        log_and_raise_error(
-                            self.logger,
-                            f"Sample sizes too small causing numerical errors. "
-                            f"Try increasing min_sample_size (current: {min_sample_size}). "
-                            f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                        )
-                    raise
-
-                if current_power >= comp_target_power - tolerance:
-                    high = current_total_size
-                    best_total_size = current_total_size
-                    best_power = current_power
-                    break
-
-                low = current_total_size
-                current_total_size += step_size
-
-            # If we didn't find a solution in coarse search
-            if best_total_size is None:
-                # Check if we need to search below coarse_start
-                if coarse_start > min_sample_size:
-                    # The coarse search might have started too high - check min_sample_size first
-                    sample_sizes = [int(min_sample_size * ratio) for ratio in allocation_ratio]
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
-                    )
-                    min_power = power_result.iloc[0]["power"]
-
-                    if min_power >= comp_target_power - tolerance:
-                        # Solution is at or below min_sample_size
-                        best_total_size = min_sample_size
-                        best_power = min_power
-                        low = min_sample_size
-                        high = coarse_start
-                    else:
-                        # Solution is between min_sample_size and coarse_start
-                        low = min_sample_size
-                        high = coarse_start
-                        # Do a coarse search in this range
-                        current_total_size = min_sample_size
-                        while current_total_size < coarse_start:
-                            sample_sizes = [int(current_total_size * ratio) for ratio in allocation_ratio]
-                            try:
-                                power_result = self.get_power(
-                                    baseline=baseline,
-                                    effect=effect,
-                                    sample_size=sample_sizes,
-                                    compliance=compliance,
-                                    standard_deviation=standard_deviation,
-                                    target_comparisons=[(group1, group2)],
-                                )
-                                current_power = power_result.iloc[0]["power"]
-                            except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                                if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                                    log_and_raise_error(
-                                        self.logger,
-                                        f"Sample sizes too small causing numerical errors. "
-                                        f"Try increasing min_sample_size (current: {min_sample_size}). "
-                                        f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                                    )
-                                raise
-
-                            if current_power >= comp_target_power - tolerance:
-                                high = current_total_size
-                                best_total_size = current_total_size
-                                best_power = current_power
-                                break
-
-                            low = current_total_size
-                            current_total_size += step_size
-
-                # If still no solution, truly can't achieve within max_sample_size
-                if best_total_size is None:
-                    self.logger.warning(
-                        f"Could not achieve target power {comp_target_power} for comparison {(group1, group2)} "
-                        f"within max_sample_size {max_sample_size}"
-                    )
-                    best_total_size = max_sample_size
-                    sample_sizes = [int(max_sample_size * ratio) for ratio in allocation_ratio]
-                    power_result = self.get_power(
-                        baseline=baseline,
-                        effect=effect,
-                        sample_size=sample_sizes,
-                        compliance=compliance,
-                        standard_deviation=standard_deviation,
-                        target_comparisons=[(group1, group2)],
-                        use_early_stopping=False,  # Accurate calculation for reporting
-                    )
-                    best_power = power_result.iloc[0]["power"]
-            else:
-                # Refine with binary search
-                while high - low > step_size // 2:
-                    mid = (low + high) // 2
-                    sample_sizes = [int(mid * ratio) for ratio in allocation_ratio]
-
-                    try:
-                        power_result = self.get_power(
-                            baseline=baseline,
-                            effect=effect,
-                            sample_size=sample_sizes,
-                            compliance=compliance,
-                            standard_deviation=standard_deviation,
-                            target_comparisons=[(group1, group2)],
-                        )
-                        current_power = power_result.iloc[0]["power"]
-                    except (RuntimeWarning, ZeroDivisionError, ValueError) as e:
-                        if "divide by zero" in str(e).lower() or "invalid value" in str(e).lower():
-                            log_and_raise_error(
-                                self.logger,
-                                f"Sample sizes too small causing numerical errors. "
-                                f"Try increasing min_sample_size (current: {min_sample_size}). "
-                                f"Suggested: min_sample_size >= {max(100, min_sample_size * 2)}",
-                            )
-                        raise
-
-                    # Accept if we're within tolerance of the target
-                    if abs(current_power - comp_target_power) <= tolerance:
-                        # Prefer solutions closer to target (don't overshoot too much)
-                        if best_total_size is None or abs(current_power - comp_target_power) < abs(
-                            best_power - comp_target_power
-                        ):
-                            best_total_size = mid
-                            best_power = current_power
+            if p_hi < comp_target_power - tolerance:
+                # Insufficient at hi → expand upward with doubling
+                while hi < max_sample_size:
+                    lo = hi
+                    hi = min(max_sample_size, hi * 2)
+                    p_hi = _eval_power(hi)
+                    n_evals += 1
+                    if p_hi >= comp_target_power - tolerance:
                         break
-                    elif current_power < comp_target_power:
-                        low = mid
+
+                if p_hi < comp_target_power - tolerance:
+                    # Cannot reach target within max_sample_size
+                    self.logger.warning(
+                        f"Could not achieve target power {comp_target_power} for comparison "
+                        f"{(group1, group2)} within max_sample_size {max_sample_size} "
+                        f"(achieved {p_hi:.3f} at {max_sample_size:,})"
+                    )
+                    results.append(
+                        {
+                            "comparison": (group1, group2),
+                            "target_power": comp_target_power,
+                            "total_sample_size": max_sample_size,
+                            "allocation_ratio": str(allocation_ratio),
+                            "sample_sizes": str([int(max_sample_size * r) for r in allocation_ratio]),
+                            "achieved_power": p_hi,
+                        }
+                    )
+                    self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations (failed to converge)")
+                    continue
+
+            # Check lower bound — contract downward if already sufficient
+            p_lo = _eval_power(lo)
+            n_evals += 1
+
+            if p_lo >= comp_target_power - tolerance:
+                # Already sufficient at lo → halve downward to find tighter lower bound
+                while lo > min_sample_size:
+                    candidate = max(min_sample_size, lo // 2)
+                    p_candidate = _eval_power(candidate)
+                    n_evals += 1
+                    if p_candidate >= comp_target_power - tolerance:
+                        hi, p_hi = lo, p_lo
+                        lo, p_lo = candidate, p_candidate
                     else:
-                        high = mid
-                        # Update best if this is closer to target than previous best
-                        if best_total_size is None or abs(current_power - comp_target_power) < abs(
-                            best_power - comp_target_power
-                        ):
-                            best_total_size = mid
-                            best_power = current_power
+                        lo = candidate  # insufficient here → good lower bound
+                        break
+                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
+                    # min_sample_size itself is sufficient — done
+                    results.append(
+                        {
+                            "comparison": (group1, group2),
+                            "target_power": comp_target_power,
+                            "total_sample_size": min_sample_size,
+                            "allocation_ratio": str(allocation_ratio),
+                            "sample_sizes": str([int(min_sample_size * r) for r in allocation_ratio]),
+                            "achieved_power": p_lo,
+                        }
+                    )
+                    self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations")
+                    continue
+
+            # ----------------------------------------------------------------
+            # Phase 2 — Binary search in [lo, hi]
+            # Invariant: power(lo) < target, power(hi) >= target
+            # ----------------------------------------------------------------
+            best_total_size = hi
+            best_power = p_hi
+
+            while hi - lo > step_size:
+                mid = (lo + hi) // 2
+                p_mid = _eval_power(mid)
+                n_evals += 1
+                if p_mid >= comp_target_power - tolerance:
+                    best_total_size = mid
+                    best_power = p_mid
+                    hi = mid
+                else:
+                    lo = mid
+
+            self.logger.debug(f"Comparison {(group1, group2)}: converged in {n_evals} evaluations")
+
+            # ------------------------------------------------------------------
+            # Post-convergence verification
+            # Binary search evaluations are intentionally fast (early stopping on,
+            # low nsim is allowed). Re-evaluate the candidate with early stopping
+            # disabled so all nsim simulations run. If power is still below target,
+            # advance by step_size until it passes (max 10 steps).
+            # This catches cases where a single noisy evaluation misled the search.
+            # ------------------------------------------------------------------
+            verified_power = _eval_power(best_total_size, use_early_stopping=False)
+            n_evals += 1
+            _MAX_RECOVERY = 10
+            _recovery = 0
+            while verified_power < comp_target_power - tolerance and _recovery < _MAX_RECOVERY:
+                if best_total_size >= max_sample_size:
+                    break
+                best_total_size = min(max_sample_size, best_total_size + step_size)
+                verified_power = _eval_power(best_total_size, use_early_stopping=False)
+                n_evals += 1
+                _recovery += 1
+
+            if _recovery > 0:
+                self.logger.debug(
+                    f"Comparison {(group1, group2)}: verification recovered to n={best_total_size:,} "
+                    f"in {_recovery} step(s) — consider increasing nsim (current: {self.nsim})"
+                )
+            best_power = verified_power
 
             # Calculate final allocation
             final_sample_sizes = [int(best_total_size * ratio) for ratio in allocation_ratio]
@@ -1900,7 +2085,8 @@ class PowerSim:
             sample_size=final_sample_sizes,
             compliance=compliance,
             standard_deviation=standard_deviation,
-            use_early_stopping=False,  # Disable for final accurate calculation
+            use_early_stopping=False,
+            show_progress=False,
         )
 
         sample_sizes_dict = {"control": final_sample_sizes[0]}
@@ -1925,7 +2111,7 @@ class PowerSim:
             "total_sample_size": max_sample_size_needed,
             "sample_sizes_by_group": sample_sizes_dict,
             "power_criteria": power_criteria,
-            "correction": self.correction,
+            "correction": self.correction if self.correction is not None else "none",
             "limiting_comparison": str(limiting_comparison),
             "target_power_by_comparison": target_power_by_comparison,
             "achieved_power_by_comparison": achieved_power_by_comparison,
@@ -2107,11 +2293,13 @@ class PowerSim:
                 if use_parallel:
                     from joblib import Parallel, delayed
 
+                    _desc = f"Simulations [{h} vs {j}]"
+
                     # Use configured parallel strategy (default: hybrid)
                     if self.parallel_strategy == "hybrid":
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations with hybrid parallelization...")
 
-                        # Stage 1: Generate simulation data (threading)
+                        # Stage 1: Generate simulation data (threading) — fast, no progress bar needed
                         sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
                             delayed(self._generate_simulation_data)(
                                 baseline=baseline,
@@ -2124,45 +2312,66 @@ class PowerSim:
                         )
 
                         # Stage 2: Run tests with retrodesign-specific logic (multiprocessing)
-                        simulation_results = Parallel(n_jobs=-1, backend="loky", batch_size=50)(
-                            delayed(self._run_retrodesign_test_on_data)(
-                                sim_data=sim_data,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
+                                    delayed(self._run_retrodesign_test_on_data)(
+                                        sim_data=sim_data,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for sim_data in sim_datasets
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for sim_data in sim_datasets
                         )
                     elif self.parallel_strategy == "threading":
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel (threading)...")
-                        simulation_results = Parallel(n_jobs=-1, backend="threading")(
-                            delayed(self._run_single_retrodesign_simulation)(
-                                baseline=baseline,
-                                sample_size=sample_size,
-                                true_effect=true_effect,
-                                compliance=compliance,
-                                standard_deviation=standard_deviation,
-                                comp_true_effect=comp_true_effect,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                                    delayed(self._run_single_retrodesign_simulation)(
+                                        baseline=baseline,
+                                        sample_size=sample_size,
+                                        true_effect=true_effect,
+                                        compliance=compliance,
+                                        standard_deviation=standard_deviation,
+                                        comp_true_effect=comp_true_effect,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for _ in range(nsim_val)
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for _ in range(nsim_val)
                         )
                     else:  # "loky" or default
                         self.logger.debug(
                             f"Running {nsim_val} retrodesign simulations in parallel (multiprocessing)..."
                         )
-                        simulation_results = Parallel(n_jobs=-1, backend="loky")(
-                            delayed(self._run_single_retrodesign_simulation)(
-                                baseline=baseline,
-                                sample_size=sample_size,
-                                true_effect=true_effect,
-                                compliance=compliance,
-                                standard_deviation=standard_deviation,
-                                comp_true_effect=comp_true_effect,
-                                h=h,
-                                j=j,
+                        simulation_results = list(
+                            tqdm(
+                                Parallel(n_jobs=-1, backend="loky", return_as="generator")(
+                                    delayed(self._run_single_retrodesign_simulation)(
+                                        baseline=baseline,
+                                        sample_size=sample_size,
+                                        true_effect=true_effect,
+                                        compliance=compliance,
+                                        standard_deviation=standard_deviation,
+                                        comp_true_effect=comp_true_effect,
+                                        h=h,
+                                        j=j,
+                                    )
+                                    for _ in range(nsim_val)
+                                ),
+                                total=nsim_val,
+                                desc=_desc,
+                                unit="sim",
                             )
-                            for _ in range(nsim_val)
                         )
 
                     # Aggregate results
@@ -2188,7 +2397,7 @@ class PowerSim:
                     sign_errors = 0
                     significant_count = 0
 
-                    for _ in range(nsim_val):
+                    for _ in tqdm(range(nsim_val), desc=f"Simulations [{h} vs {j}]", unit="sim"):
                         observed_effect, pvalue, is_significant = self._run_single_retrodesign_simulation(
                             baseline=baseline,
                             sample_size=sample_size,

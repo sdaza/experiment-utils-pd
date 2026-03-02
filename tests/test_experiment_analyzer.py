@@ -1,7 +1,10 @@
+import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import truncnorm
+
+matplotlib.use("Agg")
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
@@ -87,7 +90,7 @@ def test_no_covariates(sample_data):
 
 
 def test_sample_ratio_check(sample_data):
-    """Test get_effects sample ratio check"""
+    """Test get_effects sample ratio check using a column name"""
     outcomes = "conversion"
     treatment_col = "treatment"
     experiment_identifier = "experiment"
@@ -98,7 +101,7 @@ def test_sample_ratio_check(sample_data):
         outcomes=outcomes,
         treatment_col=treatment_col,
         experiment_identifier=experiment_identifier,
-        exp_sample_ratio_col=expected_ratio_col,
+        exp_sample_ratio=expected_ratio_col,
     )
 
     try:
@@ -107,6 +110,27 @@ def test_sample_ratio_check(sample_data):
         assert True
     except Exception as e:
         pytest.fail(f" raised an exception: {e}")
+
+
+def test_sample_ratio_check_float_constant(sample_data):
+    """Test get_effects sample ratio check using a float constant"""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        exp_sample_ratio=0.5,
+    )
+
+    try:
+        analyzer.get_effects()
+        results = analyzer.results
+        assert results is not None
+        assert "srm_detected" in results.columns
+        assert "srm_pvalue" in results.columns
+        assert "sample_ratio" in results.columns
+    except Exception as e:
+        pytest.fail(f"raised an exception: {e}")
 
 
 def test_no_experiment_identifier(sample_data):
@@ -185,7 +209,7 @@ def test_balance_adjustment(sample_data):
         covariates=covariates,
         adjustment="balance",
         balance_method="ps-logistic",
-        target_effect="ATT",
+        estimand="ATT",
     )
 
     try:
@@ -398,3 +422,91 @@ def test_categorical_naming_convention():
                 assert dummy.islower(), f"Tier dummy {dummy} should be lowercase"
                 # No special chars like + should remain
                 assert "+" not in dummy, f"Tier dummy {dummy} should not contain '+'"
+
+
+# ── plot_effects ──────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def simple_analyzer():
+    np.random.seed(0)
+    n = 400
+    df = pd.DataFrame(
+        {
+            "country": np.repeat(["US", "EU"], n),
+            "channel": np.tile(np.repeat(["email", "push"], n // 2), 2),
+            "treatment": np.random.binomial(1, 0.5, n * 2),
+            "revenue": np.random.normal(50, 20, n * 2),
+            "converted": np.random.binomial(1, 0.12, n * 2),
+        }
+    )
+    az = ExperimentAnalyzer(
+        data=df,
+        treatment_col="treatment",
+        outcomes=["revenue", "converted"],
+        experiment_identifier=["country", "channel"],
+        pvalue_adjustment=None,
+    )
+    az.get_effects()
+    return az
+
+
+def test_plot_effects_default(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects()
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_show_values(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(show_values=True)
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_meta_analysis(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(meta_analysis=True)
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_y_outcome(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(y="outcome")
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_panel_titles_list(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(panel_titles=["Revenue ($)", "CVR"])
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_panel_titles_dict(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(panel_titles={"revenue": "Revenue ($)", "converted": "CVR"})
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_row_labels(simple_analyzer):
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(row_labels={"US | email": "Email (US)"})
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_group_by(simple_analyzer):
+    figs = simple_analyzer.plot_effects(group_by="country")
+    assert isinstance(figs, dict)
+    assert len(figs) == 2
+
+
+def test_plot_effects_no_color_by(simple_analyzer):
+    """color_by was removed — must raise TypeError."""
+    with pytest.raises(TypeError, match="color_by"):
+        simple_analyzer.plot_effects(color_by="channel")

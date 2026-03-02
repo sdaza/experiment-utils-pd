@@ -16,6 +16,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
+- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
@@ -35,6 +36,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Checking Covariate Balance](#checking-covariate-balance)
     - [Covariate Adjustment Methods](#covariate-adjustment-methods)
     - [Outcome Models](#outcome-models)
+    - [Ratio Metrics (Delta Method)](#ratio-metrics-delta-method)
     - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)
     - [Bootstrap Inference](#bootstrap-inference)
     - [Multiple Experiments](#multiple-experiments)
@@ -43,6 +45,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
     - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
+    - [Visualizing Effects](#visualizing-effects)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
@@ -82,11 +85,12 @@ pip install git+https://github.com/sdaza/experiment-utils-pd.git
 
 ## Quick Start
 
-All main classes are available directly from the package:
+All main classes and standalone functions are available directly from the package:
 
 ```python
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
+from experiment_utils import plot_effects, plot_power
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -248,7 +252,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
     balance_method="ps-logistic",  # Logistic regression for propensity scores
-    target_effect="ATT",  # Average Treatment Effect on Treated
+    estimand="ATT",  # Average Treatment Effect on Treated
 )
 
 analyzer.get_effects()
@@ -266,11 +270,12 @@ print(weights_df.head())
 - `ps-xgboost`: Propensity score via XGBoost (flexible, non-linear)
 - `entropy`: Entropy balancing (exact moment matching)
 
-**Target effects:**
-- `ATT`: Average Treatment Effect on Treated (most common)
-- `ATE`: Average Treatment Effect (entire population)
-- `ATC`: Average Treatment Effect on Control
-- `ATO`: Average Treatment Effect for the Overlap population (overlap weights — see below)
+Target effects:
+
+    ATT: Average Treatment Effect on Treated (most common)
+    ATE: Average Treatment Effect (entire population)
+    ATC: Average Treatment Effect on Control
+    ATO: Average Treatment Effect for the Overlap population (overlap weights — see below)
 
 **Option 2: Regression Adjustment**
 
@@ -314,7 +319,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income", "is_member"],
     adjustment="balance",
     regression_covariates=["age", "income"],
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -331,7 +336,7 @@ analyzer = ExperimentAnalyzer(
     outcomes=["revenue"],
     balance_covariates=["age", "income", "is_member"],
     adjustment="aipw",
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -356,7 +361,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "income"],
     adjustment="balance",
     balance_method="ps-logistic",  # or "ps-xgboost"
-    target_effect="ATO",           # overlap weights
+    estimand="ATO",                # overlap weights
 )
 
 analyzer.get_effects()
@@ -484,6 +489,100 @@ analyzer = ExperimentAnalyzer(..., compute_marginal_effects=False)
 | `"mean"` | Probability change at mean | Count change at mean |
 | `False` | Odds ratio | Rate ratio |
 
+### Ratio Metrics (Delta Method)
+
+Use `ratio_outcomes` for metrics where both the numerator and denominator include randomness — for example, *leads per converter* or *revenue per session*. Conditioning on the denominator (e.g., analysing only converters) introduces selection bias, so the correct approach is the **delta method linearization** (Deng et al. 2018):
+
+```
+linearized_i = numerator_i  −  R_control × denominator_i
+where  R_control = mean(numerator_control) / mean(denominator_control)
+```
+
+OLS on `linearized_i` estimates the difference in population-average ratios with correct standard errors. `R_control` is computed separately for each `(treatment, control)` comparison pair, so multi-arm experiments work out of the box.
+
+**Basic usage**
+
+```python
+import numpy as np
+import pandas as pd
+from experiment_utils import ExperimentAnalyzer
+
+np.random.seed(42)
+n = 20_000
+treatment = np.random.choice(["control", "variant_1", "variant_2"], n)
+
+# ~30% of users convert; converters generate ~2 leads on average
+converters = np.where(
+    treatment == "variant_2", np.random.binomial(1, 0.32, n),
+    np.where(treatment == "variant_1", np.random.binomial(1, 0.31, n),
+                                       np.random.binomial(1, 0.30, n)),
+)
+leads = np.where(converters == 1, np.random.poisson(2 + 0.1 * (treatment == "variant_2"), n), 0)
+
+df = pd.DataFrame({"treatment": treatment, "converters": converters, "leads": leads})
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["converters", "leads"],           # regular outcomes
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+)
+
+analyzer.get_effects()
+
+cols = ["outcome", "treatment_group", "control_group",
+        "control_value", "absolute_effect", "standard_error",
+        "stat_significance", "effect_type"]
+print(analyzer.results[cols].to_string())
+```
+
+Output:
+```
+               outcome treatment_group control_group  control_value  absolute_effect  standard_error  stat_significance      effect_type
+0           converters       variant_1       control       0.301              0.010        0.006                  1   mean_difference
+1                leads       variant_1       control       0.602              0.046        0.017                  1   mean_difference
+2  leads_per_converter       variant_1       control       1.977              0.022        0.011                  1  ratio_difference
+3           converters       variant_2       control       0.301              0.019        0.006                  1   mean_difference
+4                leads       variant_2       control       0.602              0.076        0.017                  1   mean_difference
+5  leads_per_converter       variant_2       control       1.977              0.037        0.011                  1  ratio_difference
+6           converters       variant_2     variant_1       0.311              0.009        0.007                  0   mean_difference
+7                leads       variant_2     variant_1       0.647              0.030        0.017                  0   mean_difference
+8  leads_per_converter       variant_2     variant_1       2.049              0.014        0.012                  0  ratio_difference
+```
+
+The `control_value` column shows `R_control` (the control arm's ratio), and `absolute_effect` is the estimated difference in ratios. Results integrate normally with `plot_effects`, `calculate_retrodesign`, and MCP correction.
+
+**With bootstrap**
+
+Bootstrap correctly re-estimates `R_control` on each resample, so standard errors fully capture the uncertainty in the ratio baseline:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["leads"],
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+    bootstrap=True,
+    bootstrap_iterations=1000,
+    bootstrap_seed=42,
+)
+
+analyzer.get_effects()
+print(analyzer.results[["outcome", "absolute_effect", "standard_error",
+                         "abs_effect_lower", "abs_effect_upper"]])
+```
+
+> **Why not just subset to converters?** Analysing only users who converted conditions on a post-randomisation variable, creating selection bias. The delta method preserves the full randomised sample and gives an unbiased estimate of the causal effect on the population-average ratio.
+
+**Key result columns for ratio outcomes**
+
+| Column | Meaning |
+|---|---|
+| `control_value` | `R_control = mean(num_control) / mean(den_control)` for this comparison |
+| `absolute_effect` | Estimated difference in population-average ratios |
+| `relative_effect` | `absolute_effect / control_value` |
+| `effect_type` | `"ratio_difference"` |
+
 ### Survival Analysis (Cox Models)
 
 Analyze time-to-event outcomes using Cox proportional hazards:
@@ -531,7 +630,7 @@ analyzer = ExperimentAnalyzer(
     balance_covariates=["age", "comorbidity_score"],
     adjustment="balance",
     regression_covariates=["age", "comorbidity_score"],
-    target_effect="ATE",
+    estimand="ATE",
 )
 
 analyzer.get_effects()
@@ -735,24 +834,39 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 
 ### Non-Inferiority Testing
 
-Test if a new treatment is "not worse" than control:
+Test whether the treatment stays within an acceptable margin of control
+(`test_non_inferiority`).  Given margin M, the question is: *"Is the treatment
+close enough to control to be acceptable?"*
+
+**Intuition** — given `control_value = 0.03` and `margin = 0.01`:
+
+| Direction | Passes when … | In other words … |
+|---|---|---|
+| `higher_is_better` (default) | one-sided lower CI of effect > −M | treatment value is confidently above `control − margin` = 0.02 |
+| `lower_is_better` | one-sided upper CI of effect < +M | treatment value is confidently below `control + margin` = 0.04 |
+
+The test uses a one-sided normal z-test at the specified `alpha` (default 0.05).
 
 ```python
-analyzer = ExperimentAnalyzer(
-    data=df,
-    treatment_col="treatment",
-    outcomes=["conversion"],
-)
-
 analyzer.get_effects()
 
-# Test if treatment is within 10% of control
+# Higher-is-better (e.g. conversion rate): treatment must stay within 1 pp of control
+analyzer.test_non_inferiority(absolute_margin=0.01)
+
+# Margin as a fraction of the control mean — 10% of control rate
 analyzer.test_non_inferiority(relative_margin=0.10)
 
+# Lower-is-better (e.g. error rate, churn): treatment must not increase by more than 1 pp
+analyzer.test_non_inferiority(absolute_margin=0.01, direction="lower_is_better")
+
 results = analyzer.results
-print(results[["outcome", "relative_effect", "is_non_inferior", 
-               "non_inferiority_margin"]])
+print(results[["outcome", "absolute_effect", "margin", "margin_pvalue", "within_margin"]])
 ```
+
+Added columns:
+- `margin` — absolute margin used for each row
+- `margin_pvalue` — one-sided p-value; smaller = stronger evidence the treatment is within the margin
+- `within_margin` — `True` when `margin_pvalue < alpha`
 
 ### Combining Effects (Meta-Analysis)
 
@@ -798,6 +912,139 @@ aggregated = analyzer.aggregate_effects(grouping_cols=["outcome"])
 print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 ```
 
+### Visualizing Effects
+
+`plot_effects` produces a Cleveland dot plot with confidence intervals and optional meta-analysis pooling. It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+
+The two axis roles are controlled by `y`:
+
+| `y` | Rows (y-axis) | Panels (subplots) |
+|---|---|---|
+| `"experiment"` *(default)* | Experiment labels | Outcomes |
+| `"outcome"` | Outcomes | Experiment labels |
+
+**Basic usage — multiple experiments, outcomes as panels (default)**
+
+```python
+analyzer.get_effects()
+
+fig = analyzer.plot_effects(title="Treatment Effects")
+fig.savefig("effects.png", bbox_inches="tight")
+```
+
+**Single experiment, multiple outcomes on the y-axis**
+
+When you have one experiment and several outcomes, flip the axes with `y="outcome"` and customise the panel subtitle with `panel_titles`:
+
+```python
+fig = analyzer.plot_effects(
+    y="outcome",
+    title="My Experiment",
+    panel_titles="Treatment vs Control",   # single string → same for all panels
+)
+```
+
+**Multiple experiments, outcomes on the y-axis**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue", "converted", "orders"],
+    experiment_identifier=["country", "type"],
+)
+analyzer.get_effects()
+
+# One panel per experiment group; rows = outcomes
+fig = analyzer.plot_effects(
+    y="outcome",
+    panel_titles={"US | email": "US — Email", "EU | push": "EU — Push"},  # dict overrides
+)
+```
+
+**Standalone usage**
+
+```python
+from experiment_utils import plot_effects
+
+fig = plot_effects(
+    results=analyzer.results,
+    experiment_identifier="experiment",
+    alpha=0.05,
+    title="Treatment Effects",
+)
+```
+
+**Add a pooled meta-analysis row**
+
+```python
+# Auto-compute pooled estimate
+fig = analyzer.plot_effects(
+    outcomes="revenue",
+    meta_analysis=True,
+    title="Revenue — with Pooled Estimate",
+)
+
+# Pass a pre-computed combine_effects() DataFrame
+pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+fig = analyzer.plot_effects(meta_analysis=pooled)
+```
+
+**Split into one figure per group**
+
+When `experiment_identifier` contains multiple columns (e.g. `["country", "type"]`), `group_by` produces one figure per unique value. Row labels are built from the remaining identifier columns automatically.
+
+```python
+# One figure per country; rows = type
+figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
+for country, fig in figs.items():
+    fig.savefig(f"effects_{country}.png", bbox_inches="tight")
+
+# One figure per experiment type; rows = country
+figs = analyzer.plot_effects(group_by="type")
+```
+
+`group_by` returns `dict[str, Figure]`; without it a single `Figure` is returned.
+
+**Relative effects**
+
+```python
+fig = analyzer.plot_effects(effect="relative", meta_analysis=True)
+```
+
+**Multiple comparison adjustments**
+
+If `adjust_pvalues()` has been called before plotting, the plot automatically uses the adjusted significance column (`stat_significance_mcp`) and updates the legend label accordingly:
+
+```python
+analyzer.get_effects()
+analyzer.adjust_pvalues(method="holm")
+
+# Legend shows "Significant (holm, α=0.05)" and coloring uses adjusted p-values
+fig = analyzer.plot_effects()
+```
+
+**Key parameters**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
+| `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
+| `outcomes` | `None` | Outcome(s) to include; `None` = all |
+| `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
+| `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
+| `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
+| `group_by` | `None` | Column(s) to split into separate figures |
+| `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
+| `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
+| `show_zero_line` | `True` | Vertical reference line at zero |
+| `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
+| `value_decimals` | `2` | Decimal places for value labels when `show_values=True` |
+| `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
+| `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
+| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). With `group_by`, each figure is saved as `"effects_<key>.png"` |
+| `figsize` | auto | `(width, height)` in inches |
+
 ### Retrodesign Analysis
 
 Assess reliability of significant results (post-hoc power analysis):
@@ -817,7 +1064,7 @@ analyzer.get_effects()
 retro = analyzer.calculate_retrodesign(true_effect=0.02)
 
 print(retro[["outcome", "power", "type_s_error", "type_m_error",
-             "relative_bias", "trimmed_effect"]])
+             "relative_bias", "trimmed_abs_effect"]])
 ```
 
 **Metrics explained:**
@@ -825,7 +1072,7 @@ print(retro[["outcome", "power", "type_s_error", "type_m_error",
 - `type_s_error`: Probability of wrong sign when significant (if underpowered)
 - `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
 - `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
-- `trimmed_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
+- `trimmed_abs_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
 
 
 
@@ -1084,7 +1331,9 @@ print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relat
 
 ### Balanced Random Assignment
 
-Generate balanced treatment assignments with optional stratification:
+Generate balanced treatment assignments with optional block randomization.
+Variant distribution and, when covariates are provided, a covariate balance
+summary are always printed.
 
 ```python
 from experiment_utils import balanced_random_assignment
@@ -1097,28 +1346,41 @@ users = pd.DataFrame({
     "user_id": range(1000),
     "age_group": np.random.choice(["18-25", "26-35", "36-45", "46+"], 1000),
     "region": np.random.choice(["North", "South", "East", "West"], 1000),
+    "age": np.random.normal(35, 10, 1000),
 })
 
-# Simple 50/50 split
+# Simple 50/50 split — prints variant distribution automatically
 users["treatment"] = balanced_random_assignment(
-    users, 
+    users,
     allocation_ratio=0.5,
     seed=42
 )
-
-print(users["treatment"].value_counts())
-# Output: control: 500, test: 500
 ```
 
-**Stratified assignment (ensure balance within subgroups):**
+**Block randomization (stratify within subgroups):**
 
 ```python
-# Balance within age_group and region strata
+# Stratify by age_group and region; check balance on the same variables
 users["treatment_stratified"] = balanced_random_assignment(
     users,
     allocation_ratio=0.5,
-    balance_covariates=["age_group", "region"],
-    check_balance=True,  # Print balance diagnostics
+    stratification_covariates=["age_group", "region"],
+    seed=42
+)
+```
+
+Warns automatically if any stratification category has low prevalence (< 5 % by
+default) and suggests not blocking on that variable.
+
+**Check balance on additional covariates:**
+
+```python
+# Stratify by region; check balance on a broader set
+users["treatment_stratified"] = balanced_random_assignment(
+    users,
+    allocation_ratio=0.5,
+    stratification_covariates=["region"],
+    balance_covariates=["age_group", "region", "age"],
     seed=42
 )
 ```
@@ -1132,20 +1394,22 @@ users["assignment"] = balanced_random_assignment(
     variants=["control", "variant_A", "variant_B"]
 )
 
-# Custom allocation ratios
+# Custom allocation ratios with stratification
 users["assignment_custom"] = balanced_random_assignment(
     users,
     variants=["control", "variant_A", "variant_B"],
     allocation_ratio={"control": 0.5, "variant_A": 0.3, "variant_B": 0.2},
-    balance_covariates=["age_group"]
+    stratification_covariates=["age_group"]
 )
 ```
 
-**Parameters:**
-- `allocation_ratio`: Float (for binary) or dict (for multiple variants)
-- `balance_covariates`: List of columns to stratify by
-- `check_balance`: If True, prints balance diagnostics
-- `smd_threshold`: Threshold for balance flag (default 0.1)
+**Key parameters:**
+- `allocation_ratio`: Float (binary) or dict (multiple variants)
+- `stratification_covariates`: Columns to block-randomize on (continuous vars are auto-binned)
+- `balance_covariates`: Columns to check balance for after assignment (defaults to `stratification_covariates`)
+- `smd_threshold`: SMD threshold for balance flag (default `0.1`)
+- `min_stratum_pct`: Minimum category prevalence before a stratification warning is raised (default `0.05`)
+- `min_stratum_n`: Minimum absolute category count before a stratification warning is raised (default `10`)
 - `seed`: Random seed for reproducibility
 
 ### Standalone Balance Checker
@@ -1226,7 +1490,7 @@ print(balance[balance["covariate"].str.contains("region")])
 | CUPED | `None` | `interaction_covariates=["pre_x"]` | Variance reduction with pre-experiment data |
 | IPW | `"balance"` | `balance_covariates=["x1","x2"]` | Many covariates, non-linear confounding |
 | IPW + Regression | `"balance"` | both `balance_covariates` and `regression_covariates` | Extra robustness, survival models |
-| Overlap weights (ATO) | `"balance"` + `target_effect="ATO"` | `balance_covariates=["x1","x2"]` | Poor or moderate overlap, no threshold needed |
+| Overlap weights (ATO) | `"balance"` + `estimand="ATO"` | `balance_covariates=["x1","x2"]` | Poor or moderate overlap, no threshold needed |
 | Trimming | `"balance"` + `trim_ps=True` | `balance_covariates=["x1","x2"]` | Robustness check, restrict to overlap region |
 | AIPW (doubly robust) | `"aipw"` | `balance_covariates=["x1","x2"]` | Best protection against misspecification |
 | IV | `"IV"` | `balance_covariates` optional | Non-compliance, endogenous treatment (requires `instrument_col`) |
@@ -1238,13 +1502,14 @@ print(balance[balance["covariate"].str.contains("region")])
 
 **Choosing an outcome model:**
 
-| Outcome type | Model | `outcome_models` |
-|---|---|---|
-| Continuous (revenue, time) | OLS | `"ols"` (default) |
-| Binary (converted, churned) | Logistic | `"logistic"` |
-| Count (orders, clicks) | Poisson | `"poisson"` |
-| Overdispersed count | Negative binomial | `"negative_binomial"` |
-| Time-to-event | Cox PH | `"cox"` |
+| Outcome type | Parameter |
+|---|---|
+| Continuous (revenue, time) | `outcome_models="ols"` (default) |
+| Binary (converted, churned) | `outcome_models="logistic"` |
+| Count (orders, clicks) | `outcome_models="poisson"` |
+| Overdispersed count | `outcome_models="negative_binomial"` |
+| Time-to-event | `outcome_models="cox"` |
+| Ratio (leads/converter, revenue/session) | `ratio_outcomes={"name": ("num_col", "den_col")}` |
 
 ### Non-Collapsibility of Hazard and Odds Ratios
 
