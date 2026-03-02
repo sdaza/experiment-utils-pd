@@ -1,4 +1,5 @@
 from .experiment_analyzer import ExperimentAnalyzer
+from .plotting import plot_effects, plot_power
 from .power_sim import PowerSim
 from .utils import (
     balanced_random_assignment,
@@ -10,6 +11,8 @@ from .utils import (
 __all__ = [
     "ExperimentAnalyzer",
     "PowerSim",
+    "plot_effects",
+    "plot_power",
     "balanced_random_assignment",
     "check_covariate_balance",
     "generate_comparison_pairs",

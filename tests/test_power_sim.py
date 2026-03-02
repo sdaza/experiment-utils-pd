@@ -140,6 +140,9 @@ def test_find_sample_size_average_metric():
 
 def test_find_sample_size_multiple_variants():
     """Test find_sample_size with multiple variants and different effects"""
+    import numpy as np
+
+    np.random.seed(42)
     p = PowerSim(
         metric="proportion",
         variants=3,
@@ -187,9 +190,12 @@ def test_find_sample_size_multiple_variants():
         # The limiting comparison should be marked
         assert "limiting_comparison" in result.columns
 
-        # All comparisons should achieve at least the target power (with small tolerance for simulation variance)
+        # All comparisons should achieve at least the target power (with tolerance for simulation variance).
+        # With nsim=500, SE ≈ 0.018; allow 10% below target to stay well beyond 5σ deviations.
         for comp_str in achieved_powers:
-            assert achieved_powers[comp_str] >= 0.73  # Allow 0.07 below target due to variance
+            assert achieved_powers[comp_str] >= 0.70, (
+                f"Comparison {comp_str} achieved power {achieved_powers[comp_str]:.3f} < 0.70"
+            )
 
         # Test 2: Different power targets per comparison
         result2 = p.find_sample_size(
@@ -308,3 +314,103 @@ def test_find_sample_size_scalar_inputs_and_correction():
 
     assert isinstance(result_mixed, pd.DataFrame)
     assert len(result_mixed) == 1
+
+
+def test_grid_sim_power():
+    """Test grid_sim_power output shape, column content, and input normalisation."""
+    import numpy as np
+
+    np.random.seed(42)
+
+    p = PowerSim(
+        metric="proportion",
+        relative_effect=False,
+        variants=2,
+        alternative="two-tailed",
+        nsim=200,
+        correction="holm",
+    )
+
+    # ------------------------------------------------------------------ #
+    # 1. Basic call with flat/scalar inputs (new normalised API)
+    # ------------------------------------------------------------------ #
+    result = p.grid_sim_power(
+        baseline_rates=0.33,  # scalar
+        effects=[[0.01, 0.03], [0.03, 0.05]],  # 2 effect scenarios
+        sample_sizes=[1000, 3000, 5000],  # flat list of totals
+        threads=2,
+        plot=False,
+    )
+
+    assert isinstance(result, pd.DataFrame)
+    # 2 effect scenarios × 3 sample sizes × 1 baseline = 6 rows
+    assert len(result) == 6
+
+    # Power columns exist for each comparison
+    comp_cols = [str((i, j)) for i, j in p.comparisons]
+    for col in comp_cols:
+        assert col in result.columns, f"Missing power column: {col}"
+        assert result[col].between(0, 1).all(), f"Power out of [0,1] for {col}"
+
+    # Metadata columns
+    for col in ["baseline", "effect", "sample_size", "correction", "allocation_ratio"]:
+        assert col in result.columns
+
+    assert (result["baseline"] == 0.33).all()
+    assert result["correction"].iloc[0] == "holm"
+
+    # ------------------------------------------------------------------ #
+    # 2. Old nested format still works (backward compat)
+    # ------------------------------------------------------------------ #
+    result_nested = p.grid_sim_power(
+        baseline_rates=[[0.33]],
+        effects=[[0.01, 0.03]],
+        sample_sizes=[[1000], [3000]],
+        threads=2,
+        plot=False,
+    )
+    assert len(result_nested) == 2
+
+    # ------------------------------------------------------------------ #
+    # 3. correction override
+    # ------------------------------------------------------------------ #
+    result_bonf = p.grid_sim_power(
+        baseline_rates=0.33,
+        effects=[[0.03, 0.05]],
+        sample_sizes=[2000, 4000],
+        threads=2,
+        plot=False,
+        correction="bonferroni",
+    )
+    assert (result_bonf["correction"] == "bonferroni").all()
+    # Instance correction must be restored after the call
+    assert p.correction == "holm"
+
+    # ------------------------------------------------------------------ #
+    # 4. allocation_ratio
+    # ------------------------------------------------------------------ #
+    result_alloc = p.grid_sim_power(
+        baseline_rates=0.33,
+        effects=[[0.03, 0.05]],
+        sample_sizes=[3000, 6000],
+        allocation_ratio=[0.5, 0.25, 0.25],  # control gets double
+        threads=2,
+        plot=False,
+    )
+    assert len(result_alloc) == 2
+    assert (result_alloc["allocation_ratio"] == str([0.5, 0.25, 0.25])).all()
+    for col in comp_cols:
+        assert result_alloc[col].between(0, 1).all()
+
+    # ------------------------------------------------------------------ #
+    # 5. Invalid allocation_ratio raises an error
+    # ------------------------------------------------------------------ #
+    with pytest.raises(ValueError):
+        p.grid_sim_power(
+            baseline_rates=0.33,
+            effects=[[0.03, 0.05]],
+            sample_sizes=[3000],
+            allocation_ratio=[0.5, 0.5],  # wrong length (needs 3 for variants=2)
+            threads=2,
+            plot=False,
+        )

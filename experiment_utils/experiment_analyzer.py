@@ -53,10 +53,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         List of columns to identify an experiment
     adjustment : str, optional
         Covariate adjustment method ('balance', 'IV'), by default None
-    exp_sample_ratio_col : str, optional
-        Column name for the expected sample ratio, by default None
-    target_ipw_effect : str, optional
-        Target IPW effect (ATT, ATE, ATC, ATO), by default "ATT".
+    exp_sample_ratio : str or float, optional
+        Expected sample ratio for the SRM test. Either a column name containing
+        per-row expected ratios, or a single float constant (e.g. 0.5), by default None
+    estimand : str, optional
+        Target estimand (ATT, ATE, ATC, ATO), by default "ATT".
         ATO uses overlap weights (Li, Morgan & Zaslavsky 2018): treated units receive weight
         (1 - ps), control units receive weight ps. Naturally downweights extreme-PS units
         without requiring a trimming threshold. Only supported with PS-based balance methods.
@@ -165,6 +166,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Two ways to specify Cox models:
         1. Tuple notation (recommended): outcomes=[("time_col", "event_col")]
         2. Separate parameter: outcomes=["time_col"], event_col="event_col"
+    ratio_outcomes : dict[str, tuple[str, str]], optional
+        Ratio metrics where both numerator and denominator contain randomness (e.g., leads per
+        converter). Specify as ``{"metric_name": ("numerator_col", "denominator_col")}``.
+
+        Uses OLS on the delta-method linearized metric (Deng et al. 2018):
+
+        .. code-block:: text
+
+            linearized_i = numerator_i - R_control * denominator_i
+            where R_control = mean(numerator_control) / mean(denominator_control)
+
+        This gives a statistically valid estimate of the difference in population-average
+        ratios (E[num/den]), avoiding the selection bias of conditioning on converters.
+        R_control is computed separately for each (treatment, control) comparison pair.
+        Results appear alongside regular outcomes with ``effect_type="ratio_difference"``.
+        By default None.
+
+        Example::
+
+            ratio_outcomes={"leads_per_converter": ("leads", "converters")}
+
     interaction_covariates : list[str], optional
         Covariates added to OLS formulas as a CUPED-style treatment interaction:
         ``z_{col} + treatment:z_{col}``. Each covariate is automatically centered and
@@ -199,8 +221,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         balance_covariates: list[str] | None = None,
         covariates: list[str] | None = None,
         adjustment: str | None = None,
-        exp_sample_ratio_col: str | None = None,
-        target_effect: str = "ATT",
+        exp_sample_ratio: str | float | None = None,
+        estimand: str = "ATT",
         balance_method: str = "ps-logistic",
         min_ps_score: float = 0.05,
         max_ps_score: float = 0.95,
@@ -233,6 +255,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         store_fitted_models: bool = True,
         event_col: str | None = None,
         interaction_covariates: list[str] | None = None,
+        ratio_outcomes: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
@@ -263,9 +286,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._treatment_col = treatment_col
         self._experiment_identifier = self.__ensure_list(experiment_identifier)
         self._adjustment = adjustment
-        self._exp_sample_ratio_col = exp_sample_ratio_col
+        self._exp_sample_ratio_col = exp_sample_ratio
         self._balance_method = balance_method
-        self._target_effect = target_effect
+        self._target_effect = estimand
         self._trim_ps = trim_ps
         self._trim_ps_lower = trim_ps_lower
         self._trim_ps_upper = trim_ps_upper
@@ -295,6 +318,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._event_col = event_col
         self._interaction_covariates = self.__ensure_list(interaction_covariates)
         self._all_covariates = list(dict.fromkeys(self._balance_covariates + self._regression_covariates))
+
+        # Validate and store ratio outcomes: {name: (numerator_col, denominator_col)}
+        self._ratio_outcomes: dict[str, tuple[str, str]] = {}
+        if ratio_outcomes:
+            for name, pair in ratio_outcomes.items():
+                if not (isinstance(pair, tuple | list) and len(pair) == 2):
+                    log_and_raise_error(
+                        self._logger,
+                        f"ratio_outcomes['{name}'] must be a (numerator, denominator) tuple.",
+                    )
+                num_col, den_col = pair
+                for col in (num_col, den_col):
+                    if col not in self._data.columns:
+                        log_and_raise_error(
+                            self._logger,
+                            f"Column '{col}' not found in data (required for ratio outcome '{name}').",
+                        )
+                self._ratio_outcomes[name] = (num_col, den_col)
+
         self.__check_input()
         self._alpha = alpha
         self._results = None
@@ -312,16 +354,16 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "ATO": "overlap_weight",
         }  # noqa: E501
 
-        if target_effect == "ATO" and balance_method == "entropy":
+        if estimand == "ATO" and balance_method == "entropy":
             log_and_raise_error(
                 self._logger,
-                "target_effect='ATO' (overlap weights) is not supported with balance_method='entropy'. "
+                "estimand='ATO' (overlap weights) is not supported with balance_method='entropy'. "
                 "Use 'ps-logistic' or 'ps-xgboost'.",
             )
         self._estimator = Estimators(
             treatment_col,
             instrument_col,
-            target_effect,
+            estimand,
             self._target_weights,
             alpha,
             min_ps_score,
@@ -342,6 +384,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             self._experiment_identifier = ["experiment_id"]
             self._logger.warning("No experiment identifier, assuming data is from a single experiment!")
 
+        # Collect numerator and denominator columns for ratio outcomes
+        ratio_raw_cols = [col for pair in self._ratio_outcomes.values() for col in pair]
+
         required_columns = (
             self._experiment_identifier
             + [self._treatment_col]
@@ -349,11 +394,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             + list(self._outcome_event_cols.values())  # Event columns from tuple notation
             + self._all_covariates
             + ([self._instrument_col] if self._instrument_col is not None else [])
-            + ([self._exp_sample_ratio_col] if self._exp_sample_ratio_col is not None else [])
+            + ([self._exp_sample_ratio_col] if isinstance(self._exp_sample_ratio_col, str) else [])
             + ([self._unit_identifier] if self._unit_identifier is not None else [])
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
             + (self._interaction_covariates if self._interaction_covariates else [])
+            + ratio_raw_cols
         )
 
         missing_columns = set(required_columns) - set(self._data.columns)
@@ -970,7 +1016,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         - sample_ratio: The sample ratio of the treatment group to the control group.
         - adjustment: The type of adjustment applied.
         - method: The balance method used (when adjustment is "balance" or "aipw").
-        - target_effect: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
+        - estimand: The target estimand (ATT, ATE, ATC, ATO) when using IPW (only present for "balance" or "aipw").
         - balance: The balance metric for the covariates (when applicable).
         - inference_method: "asymptotic" or "bootstrap"
         - model_type: Type of statistical model used ("ols", "logistic", "poisson", "negative_binomial", "cox")
@@ -1424,7 +1470,33 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         adjustment_label = "regression"
                     adjustment_label += "+interactions"
 
-                for outcome in self._outcomes:
+                # Compute linearized ratio metrics for this comparison (delta method).
+                # For each ratio outcome Y/X, the linearized metric is:
+                #   lin_i = Y_i - R_control * X_i   where R_control = mean(Y_control) / mean(X_control)
+                # OLS on lin_i estimates the difference in ratios with correct variance.
+                _ratio_lin_cols: dict[str, tuple[str, str, str, float]] = {}  # lin_col -> (name, num, den, R)
+                _c_mask = comparison_data[self._treatment_col] == 0
+                for _ratio_name, (_num_col, _den_col) in self._ratio_outcomes.items():
+                    _den_ctrl_mean = comparison_data.loc[_c_mask, _den_col].mean()
+                    if _den_ctrl_mean == 0 or np.isnan(_den_ctrl_mean):
+                        self._logger.warning(
+                            f"Denominator mean is 0 or NaN for ratio outcome '{_ratio_name}' "
+                            f"in comparison {treatment_val} vs {control_val}. Skipping."
+                        )
+                        continue
+                    _R = comparison_data.loc[_c_mask, _num_col].mean() / _den_ctrl_mean
+                    _lin_col = f"__ratio_lin_{_ratio_name}"
+                    # Divide by den_ctrl_mean so OLS coefficient ≈ R_t - R_c.
+                    # Without scaling the coefficient equals (R_t - R_c) * mu_X_t, not the ratio difference.
+                    comparison_data[_lin_col] = (
+                        comparison_data[_num_col] - _R * comparison_data[_den_col]
+                    ) / _den_ctrl_mean
+                    _ratio_lin_cols[_lin_col] = (_ratio_name, _num_col, _den_col, _R)
+
+                _all_outcomes = list(self._outcomes) + list(_ratio_lin_cols.keys())
+
+                for outcome in _all_outcomes:
+                    _is_ratio = outcome in _ratio_lin_cols
                     if not pd.api.types.is_numeric_dtype(comparison_data[outcome]):
                         self._logger.warning(
                             f"Outcome '{outcome}' is not numeric for comparison {treatment_val} vs {control_val}. "
@@ -1438,7 +1510,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         )
                         continue
 
-                    model_types = self._normalized_outcome_models.get(outcome, ["ols"])
+                    # Ratio outcomes always use OLS on the linearized column
+                    model_types = ["ols"] if _is_ratio else self._normalized_outcome_models.get(outcome, ["ols"])
 
                     for model_type in model_types:
                         # Auto-detect binary outcomes: when using AIPW with OLS on a binary outcome,
@@ -1519,6 +1592,34 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
+                            # For ratio outcomes: fix control_value, treatment_value,
+                            # and all relative-effect fields.
+                            # The OLS linearized column has control mean ≈ 0 by
+                            # construction, so the estimator's relative_effect =
+                            # absolute_effect / ~0 is meaningless. Override everything
+                            # with values based on the actual ratio R.
+                            if _is_ratio:
+                                _ratio_name, _num_col, _den_col, _R = _ratio_lin_cols[outcome]
+                                output["effect_type"] = "ratio_difference"
+                                output["control_value"] = _R
+                                output["treatment_value"] = (
+                                    comparison_data.loc[~control_mask, _num_col].mean()
+                                    / comparison_data.loc[~control_mask, _den_col].mean()
+                                )
+                                # Recompute relative effect and CI bounds using R
+                                if _R != 0:
+                                    output["relative_effect"] = output["absolute_effect"] / _R
+                                    for _lo, _hi in (
+                                        ("abs_effect_lower", "rel_effect_lower"),
+                                        ("abs_effect_upper", "rel_effect_upper"),
+                                    ):
+                                        if _lo in output and output[_lo] is not None:
+                                            output[_hi] = output[_lo] / _R
+                                else:
+                                    output["relative_effect"] = np.nan
+                                    output["rel_effect_lower"] = np.nan
+                                    output["rel_effect_upper"] = np.nan
+
                             if self._store_fitted_models and "fitted_model" in output:
                                 if experiment_tuple not in self._fitted_models:
                                     self._fitted_models[experiment_tuple] = {}
@@ -1590,6 +1691,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                         model_type=model_type,
                                         compute_marginal_effects=me_setting,
                                         interaction_covariates=active_int_covs,
+                                        ratio_cols=(_ratio_lin_cols[outcome][1], _ratio_lin_cols[outcome][2])
+                                        if _is_ratio
+                                        else None,
                                     )
                                     bootstrap_results = self._calculate_bootstrap_inference(
                                         bootstrap_abs_effects,
@@ -1626,7 +1730,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
-                                output["target_effect"] = self._target_effect
+                                output["estimand"] = self._target_effect
                             if adjustment in ("balance", "aipw") and not adjusted_balance.empty:
                                 output["balance"] = np.round(adjusted_balance["balance_flag"].mean(), 2)
                             elif not balance.empty:  # Use initial balance if no adjustment or balance failed
@@ -1666,6 +1770,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                             output["srm_detected"] = srm_detected
                             output["srm_pvalue"] = srm_pvalue
                             output["trimmed_units"] = n_trimmed
+
+                            # For ratio outcomes: rename outcome from the temp linearized column
+                            # to the user-specified ratio name
+                            if _is_ratio:
+                                output["outcome"] = _ratio_lin_cols[outcome][0]
+
                             temp_results.append(output)
 
                         except Exception as e:
@@ -1718,8 +1828,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "effect_type",
             "treatment_units",
             "control_units",
-            "control_value",
             "treatment_value",
+            "control_value",
             "absolute_effect",
             "abs_effect_lower",
             "abs_effect_upper",
@@ -1740,8 +1850,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             index_to_insert = result_columns.index("adjustment") + 1
             result_columns.insert(index_to_insert, "method")
             index_to_insert = result_columns.index("method") + 1
-            result_columns.insert(index_to_insert, "target_effect")
-            index_to_insert = result_columns.index("target_effect") + 1
+            result_columns.insert(index_to_insert, "estimand")
+            index_to_insert = result_columns.index("estimand") + 1
             result_columns.insert(index_to_insert, "balance")
             result_columns.extend(
                 [
@@ -1815,58 +1925,89 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             self._bootstrap = original_bootstrap
 
     def test_non_inferiority(
-        self, absolute_margin: float | None = None, relative_margin: float | None = None, alpha: float = 0.05
+        self,
+        absolute_margin: float | None = None,
+        relative_margin: float | None = None,
+        alpha: float = 0.05,
+        direction: str = "higher_is_better",
     ) -> None:
         """
-        Performs a non-inferiority test on the results.
+        Test whether the treatment stays within an acceptable margin of control.
 
-        This test determines if the test group is not unacceptably worse than the control group.
-        You must provide either an absolute or a relative margin.
+        Given margin M, the test asks: "Can we confidently say the treatment
+        is close enough to control to be acceptable?"
+
+        **Higher-is-better metrics** (e.g. conversion rate, revenue):
+            Passes when treatment value is confidently above
+            ``control_value − M``.  Formally: one-sided lower CI of the
+            absolute effect > −M.
+
+        **Lower-is-better metrics** (e.g. error rate, churn, cost):
+            Passes when treatment value is confidently below
+            ``control_value + M``.  Formally: one-sided upper CI of the
+            absolute effect < +M.
 
         Parameters
         ----------
         absolute_margin : float, optional
-            The absolute margin of non-inferiority.
+            Maximum acceptable absolute deviation from control (must be > 0).
         relative_margin : float, optional
-            The relative margin of non-inferiority, calculated as a percentage of the control group's value.
+            Maximum acceptable deviation as a fraction of ``|control_value|``
+            (e.g. ``0.10`` = 10 %).  Must be > 0.
         alpha : float, optional
-            The significance level for the one-sided test, by default 0.05.
+            One-sided significance level (default 0.05).
+        direction : {"higher_is_better", "lower_is_better"}, optional
+            Whether a larger or smaller value of the outcome is preferred.
+            Default ``"higher_is_better"``.
 
         Updates
         -------
         self._results : pd.DataFrame
-            Adds non-inferiority test columns to the results DataFrame.
+            Adds the following columns:
+
+            - ``margin``: the absolute margin used for each row.
+            - ``margin_pvalue``: one-sided p-value; smaller = stronger evidence
+              the treatment is within the margin.
+            - ``within_margin``: ``True`` when ``margin_pvalue < alpha``.
         """
         if self._results is None:
-            log_and_raise_error(self._logger, "Must run get_effects() before testing for non-inferiority.")
+            log_and_raise_error(self._logger, "Must run get_effects() before test_non_inferiority().")
 
         if not (0 < alpha < 1):
-            log_and_raise_error(self._logger, "Alpha must be between 0 and 1 (exclusive).")
+            log_and_raise_error(self._logger, "alpha must be between 0 and 1 (exclusive).")
 
         if absolute_margin is not None and relative_margin is not None:
-            log_and_raise_error(
-                self._logger, "Please provide either an absolute_margin or a relative_margin, not both."
-            )  # noqa: E501
+            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin, not both.")
 
         if absolute_margin is None and relative_margin is None:
-            log_and_raise_error(self._logger, "Please provide either an absolute_margin or a relative_margin.")
+            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin.")
 
         if absolute_margin is not None and absolute_margin <= 0:
-            log_and_raise_error(self._logger, "absolute_margin must be a positive value.")
+            log_and_raise_error(self._logger, "absolute_margin must be > 0.")
 
         if relative_margin is not None and relative_margin <= 0:
-            log_and_raise_error(self._logger, "relative_margin must be a positive value.")
+            log_and_raise_error(self._logger, "relative_margin must be > 0.")
+
+        valid_directions = {"higher_is_better", "lower_is_better"}
+        if direction not in valid_directions:
+            log_and_raise_error(self._logger, f"direction must be one of {valid_directions}.")
 
         results_df = self._results.copy()
+
         if relative_margin is not None:
-            results_df["non_inferiority_margin"] = relative_margin * results_df["control_value"].abs()
+            results_df["margin"] = relative_margin * results_df["control_value"].abs()
         else:
-            results_df["non_inferiority_margin"] = absolute_margin
+            results_df["margin"] = float(absolute_margin)
 
-        z_critical = stats.norm.ppf(1 - alpha)
-        results_df["ci_lower_bound"] = results_df["absolute_effect"] - z_critical * results_df["standard_error"]
+        # higher_is_better: z = (effect + M) / SE  — large z → within margin
+        # lower_is_better:  z = (M - effect) / SE  — large z → within margin
+        if direction == "higher_is_better":
+            z_stat = (results_df["absolute_effect"] + results_df["margin"]) / results_df["standard_error"]
+        else:
+            z_stat = (results_df["margin"] - results_df["absolute_effect"]) / results_df["standard_error"]
 
-        results_df["is_non_inferior"] = results_df["ci_lower_bound"] > -results_df["non_inferiority_margin"]
+        results_df["margin_pvalue"] = 1 - stats.norm.cdf(z_stat)
+        results_df["within_margin"] = results_df["margin_pvalue"] < alpha
 
         self._results = results_df
 
@@ -1913,7 +2054,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             "control_units",
             "treatment_units",
             "absolute_effect",
+            "abs_effect_lower",
+            "abs_effect_upper",
             "relative_effect",
+            "rel_effect_lower",
+            "rel_effect_upper",
             "stat_significance",
             "standard_error",
             "pvalue",
@@ -1927,24 +2072,47 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         return pooled_results[result_columns]
 
     def __get_fixed_meta_analysis_estimate(self, data: pd.DataFrame) -> dict[str, int | float]:
-        weights = 1 / (data["standard_error"] ** 2)
-        absolute_estimate = np.sum(weights * data["absolute_effect"]) / np.sum(weights)
-        pooled_standard_error = np.sqrt(1 / np.sum(weights))
-        relative_estimate = np.sum(weights * data["relative_effect"]) / np.sum(weights)
+        # Absolute effect: IVW with 1/SE_abs²
+        weights_abs = 1 / (data["standard_error"] ** 2)
+        absolute_estimate = np.sum(weights_abs * data["absolute_effect"]) / np.sum(weights_abs)
+        pooled_se_abs = np.sqrt(1 / np.sum(weights_abs))
+
+        # Relative effect: IVW with 1/SE_rel² where SE_rel = SE_abs / |control_mean|
+        # This is the delta-method approximation; using absolute-scale weights would give
+        # wrong CIs (wrong units) when displaying relative effects in the plot.
+        rel_se_pooled = np.nan
+        relative_estimate = np.nan
+        if "control_value" in data.columns:
+            ctrl = data["control_value"].abs()
+            valid = ctrl > 0
+            if valid.any():
+                se_rel = data.loc[valid, "standard_error"] / ctrl[valid]
+                weights_rel = 1 / (se_rel**2)
+                relative_estimate = np.sum(weights_rel * data.loc[valid, "relative_effect"]) / np.sum(weights_rel)
+                rel_se_pooled = float(np.sqrt(1 / np.sum(weights_rel)))
+
+        # Fallback: derive from pooled absolute when relative pooling is not possible
+        if np.isnan(relative_estimate) and "relative_effect" in data.columns:
+            relative_estimate = np.sum(weights_abs * data["relative_effect"]) / np.sum(weights_abs)
 
         np.seterr(invalid="ignore")
         try:
-            pvalue = stats.norm.sf(abs(absolute_estimate / pooled_standard_error)) * 2
+            pvalue = stats.norm.sf(abs(absolute_estimate / pooled_se_abs)) * 2
         except FloatingPointError:
             pvalue = np.nan
 
+        z = stats.norm.ppf(1 - self._alpha / 2)
         meta_results = {
             "experiments": int(data.shape[0]),
             "control_units": int(data["control_units"].sum()),
             "treatment_units": int(data["treatment_units"].sum()),
             "absolute_effect": absolute_estimate,
+            "abs_effect_lower": absolute_estimate - z * pooled_se_abs,
+            "abs_effect_upper": absolute_estimate + z * pooled_se_abs,
             "relative_effect": relative_estimate,
-            "standard_error": pooled_standard_error,
+            "rel_effect_lower": relative_estimate - z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
+            "rel_effect_upper": relative_estimate + z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
+            "standard_error": pooled_se_abs,
             "pvalue": pvalue,
         }
 
@@ -1982,7 +2150,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             if "outcome" not in grouping_cols:
                 grouping_cols.append("outcome")
 
-        aggregate_results = data.groupby(grouping_cols).apply(self.__compute_weighted_effect).reset_index()
+        aggregate_results = (
+            data.groupby(grouping_cols).apply(self.__compute_weighted_effect, include_groups=False).reset_index()
+        )
 
         self._logger.info("Aggregating effects using weighted averages!")
         self._logger.info("For a better standard error estimation, use meta-analysis or `combine_effects`")
@@ -1993,14 +2163,157 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         final_columns = existing_columns + remaining_columns
         return aggregate_results[final_columns]
 
-    def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
-        group["gweight"] = group["treatment_units"].astype(int)
-        absolute_effect = np.sum(group["absolute_effect"] * group["gweight"]) / np.sum(group["gweight"])
-        relative_effect = np.sum(group["relative_effect"] * group["gweight"]) / np.sum(group["gweight"])
-        variance = (group["standard_error"] ** 2) * group["gweight"]
+    def plot_effects(
+        self,
+        outcomes: list[str] | str | None = None,
+        effect: str | list[str] = "absolute",
+        meta_analysis: bool | pd.DataFrame | None = None,
+        comparison: tuple | list[tuple] | None = None,
+        figsize: tuple | None = None,
+        title: str | None = None,
+        show_zero_line: bool = True,
+        sort_by_magnitude: bool = True,
+        group_by: str | list[str] | None = None,
+        y: str = "experiment",
+        panel_titles: str | list | dict | None = None,
+        row_labels: dict | None = None,
+        show_values: bool = False,
+        value_decimals: int = 2,
+        panel_spacing: float | None = None,
+        repeat_ylabels: bool = False,
+        save_path: str | None = None,
+        **kwargs,
+    ) -> "plt.Figure | dict | None":
+        if kwargs:
+            raise TypeError(f"plot_effects() got unexpected keyword argument(s): {list(kwargs.keys())}")
+        """
+        Cleveland dot plot of treatment effects across experiments.
 
-        pooled_variance = np.sum(variance) / np.sum(group["gweight"])
-        combined_se = np.sqrt(pooled_variance)
+        Each outcome gets its own panel.  Experiments are shown as rows with
+        a dot at the point estimate and a bracketed confidence interval.
+        An optional pooled (meta-analysis) row is appended at the bottom.
+
+        Parameters
+        ----------
+        outcomes : str or list[str], optional
+            Outcomes to include.  If None all outcomes in results are shown.
+        effect : {"absolute", "relative"} or list, optional
+            Which effect metric(s) to display (default "absolute").
+            Pass ``["absolute", "relative"]`` to produce a side-by-side figure
+            with one column group per effect type.
+        meta_analysis : bool or pd.DataFrame, optional
+            - True  → compute pooled estimate via ``combine_effects()``
+            - pd.DataFrame → use a pre-computed ``combine_effects()`` result
+            - None (default) → no pooled row
+        comparison : tuple or list of tuple, optional
+            ``(treatment_group, control_group)`` to restrict the plot to one
+            specific comparison, or a list of such tuples to include multiple
+            comparisons, e.g.
+            ``[('variant_1', 'control'), ('variant_1', 'variant_2')]``.
+        figsize : tuple, optional
+            ``(width, height)`` in inches.  Auto-sized when None.
+        title : str, optional
+            Figure-level suptitle.
+        show_zero_line : bool, optional
+            Vertical reference line at zero (default True).
+        sort_by_magnitude : bool, optional
+            Sort rows within each panel by effect value descending (default ``True``).
+        group_by : str or list[str], optional
+            Column(s) to split into separate figures — one figure per unique value.
+            Row labels are built from ``experiment_identifier`` minus these columns.
+            Returns a ``dict`` keyed by group value instead of a single figure.
+        y : {"experiment", "outcome"}, optional
+            What to place on the y-axis rows.
+            ``"experiment"`` (default) — rows = experiments, panels = outcomes.
+            ``"outcome"`` — rows = outcomes, panels = experiment labels.
+        panel_titles : str or list or dict, optional
+            Override the auto-generated panel (subplot) titles.
+
+            - ``None`` (default) — use the panel value as the title.
+            - ``str`` — same string for every panel (``""`` hides all).
+            - ``list`` — titles in panel order, e.g. ``["Revenue ($)", "CVR"]``.
+            - ``dict`` — map each panel value to a display string.
+
+            What counts as a "panel value" depends on *y*:
+
+            - ``y="experiment"`` (default): one panel per **outcome**, so
+              keys are outcome names, e.g.
+              ``{"revenue": "Revenue ($)", "converted": "Conversion rate"}``.
+            - ``y="outcome"``: one panel per **experiment label**, so keys
+              are the ``experiment_identifier`` column values joined with
+              ``" | "``, e.g. ``{"US | email": "US — Email campaign"}``.
+        row_labels : dict, optional
+            Rename individual y-axis row labels.  Keys are the auto-generated
+            labels (``experiment_identifier`` column values joined with ``" | "``);
+            values are the display strings to show instead.
+            e.g. ``{"US | email": "Email (US)", "EU | push": "Push (EU)"}``.
+            Rows not present in the dict keep their auto-generated label.
+        show_values : bool, optional
+            Annotate each dot with its effect value (and ``*`` when significant).
+            Default ``False``.
+        value_decimals : int, optional
+            Number of decimal places for the value labels shown when
+            ``show_values=True``.  Default ``2``.
+        save_path : str or path-like, optional
+            File path to save the figure.  When ``group_by`` produces multiple
+            figures the group key is inserted before the file extension, e.g.
+            ``"effects.png"`` → ``"effects_US.png"``, ``"effects_EU.png"``.
+            Supports any format recognised by matplotlib (``png``, ``pdf``,
+            ``svg``, …).  ``None`` (default) skips saving.
+
+        Returns
+        -------
+        matplotlib.figure.Figure, dict, or None
+        """
+        from .plotting import plot_effects as _plot_effects
+
+        if self._results is None or self._results.empty:
+            self._logger.warning("No results available. Run get_effects() first.")
+            return None
+
+        meta_df = None
+        if meta_analysis is True:
+            meta_df = self.combine_effects(grouping_cols=["outcome"])
+            meta_df["_label"] = "Pooled"
+        elif isinstance(meta_analysis, pd.DataFrame):
+            meta_df = meta_analysis.copy()
+            if "_label" not in meta_df.columns:
+                meta_df["_label"] = "Pooled"
+
+        return _plot_effects(
+            results=self._results,
+            experiment_identifier=self._experiment_identifier,
+            alpha=self._alpha,
+            outcomes=outcomes,
+            effect=effect,
+            meta_df=meta_df,
+            comparison=comparison,
+            figsize=figsize,
+            title=title,
+            show_zero_line=show_zero_line,
+            sort_by_magnitude=sort_by_magnitude,
+            group_by=group_by,
+            y=y,
+            panel_titles=panel_titles,
+            row_labels=row_labels,
+            show_values=show_values,
+            value_decimals=value_decimals,
+            panel_spacing=panel_spacing,
+            repeat_ylabels=repeat_ylabels,
+            save_path=save_path,
+        )
+
+    def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
+        weights = group["treatment_units"].astype(float)
+        group = group.copy()
+        group["gweight"] = weights
+        total_weight = weights.sum()
+
+        absolute_effect = np.sum(weights * group["absolute_effect"]) / total_weight
+        relative_effect = np.sum(weights * group["relative_effect"]) / total_weight
+
+        # SE of a weighted mean: sqrt(Σ(w_i² × SE_i²)) / Σ(w_i)
+        combined_se = np.sqrt(np.sum(weights**2 * group["standard_error"] ** 2)) / total_weight
         z_score = absolute_effect / combined_se
         combined_p_value = 2 * (1 - stats.norm.cdf(abs(z_score)))
 
@@ -2518,13 +2831,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             sample_ratio = None
 
         if self._exp_sample_ratio_col is not None:
-            unique_expected_ratio = df[self._exp_sample_ratio_col].unique()
+            if isinstance(self._exp_sample_ratio_col, float):
+                expected_ratio = self._exp_sample_ratio_col
+            else:
+                unique_expected_ratio = df[self._exp_sample_ratio_col].unique()
+                if len(unique_expected_ratio) > 1:
+                    log_and_raise_error(
+                        self._logger, "Multiple unique values by experiment found in expected ratio column!"
+                    )
+                expected_ratio = unique_expected_ratio[0]
 
-            if len(unique_expected_ratio) > 1:
-                log_and_raise_error(
-                    self._logger, "Multiple unique values by experiment found in expected ratio column!"
-                )  # noqa: E501
-            if not (0 < unique_expected_ratio < 1):
+            if not (0 < expected_ratio < 1):
                 log_and_raise_error(self._logger, "Expected ratio is not between 0 and 1!")
 
             try:
@@ -2532,7 +2849,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 srm_pvalue = None
 
                 z_stat, p_value = proportions_ztest(
-                    count=observed_count, nobs=n_total, value=unique_expected_ratio[0], alternative="two-sided"
+                    count=observed_count, nobs=n_total, value=expected_ratio, alternative="two-sided"
                 )
                 srm_pvalue = p_value
 
@@ -2540,7 +2857,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                     srm_detected = True
                     self._logger.info(
                         f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio."  # noqa: E501
-                    )  # noqa: E501
+                    )
 
                 return sample_ratio, srm_detected, srm_pvalue
 
