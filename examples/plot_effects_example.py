@@ -55,7 +55,7 @@ analyzer = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["revenue", "converted"],
     experiment_identifier=["country", "type"],
-    pvalue_adjustment=None,
+    correction=None,
 )
 analyzer.get_effects()
 
@@ -153,7 +153,7 @@ analyzer_single = ExperimentAnalyzer(
     treatment_col="treatment",
     outcomes=["revenue", "converted", "orders", "sessions"],
     experiment_identifier="experiment",
-    pvalue_adjustment=None,
+    correction=None,
 )
 analyzer_single.get_effects()
 

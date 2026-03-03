@@ -54,21 +54,21 @@ def test_find_sample_size():
     p = PowerSim(metric="proportion", relative_effect=False, variants=1, nsim=500, alpha=0.05, alternative="two-tailed")
     try:
         result = p.find_sample_size(
-            target_power=0.80, baseline=0.10, effect=[0.02], min_sample_size=100, max_sample_size=20000
+            power=0.80, baseline=0.10, effect=[0.02], min_sample_size=100, max_sample_size=20000
         )
 
         # Check that result is a DataFrame with expected columns
         assert isinstance(result, pd.DataFrame)
         assert "total_sample_size" in result.columns
         assert "achieved_power_by_comparison" in result.columns
-        assert "target_power_by_comparison" in result.columns
+        assert "power_by_comparison" in result.columns
 
         # For single comparison, should have just 1 row
         assert len(result) == 1
 
         # Check that dictionaries contain the comparison
         achieved = result.iloc[0]["achieved_power_by_comparison"]
-        target = result.iloc[0]["target_power_by_comparison"]
+        target = result.iloc[0]["power_by_comparison"]
         assert isinstance(achieved, dict)
         assert isinstance(target, dict)
         assert len(achieved) > 0
@@ -93,7 +93,7 @@ def test_find_sample_size_custom_allocation():
     try:
         # Test with 30% control, 70% treatment allocation
         result = p.find_sample_size(
-            target_power=0.80,
+            power=0.80,
             baseline=0.10,
             effect=[0.02],
             allocation_ratio=[0.3, 0.7],
@@ -121,7 +121,7 @@ def test_find_sample_size_average_metric():
     p = PowerSim(metric="average", relative_effect=False, variants=1, nsim=500, alpha=0.05, alternative="two-tailed")
     try:
         result = p.find_sample_size(
-            target_power=0.80,
+            power=0.80,
             baseline=10.0,
             effect=[1.5],
             standard_deviation=[3.0],
@@ -155,7 +155,7 @@ def test_find_sample_size_multiple_variants():
     try:
         # Test 1: Same power for all comparisons (default behavior)
         result = p.find_sample_size(
-            target_power=0.80,
+            power=0.80,
             baseline=0.10,
             effect=[0.05, 0.03, 0.07],  # Different effects for each variant
             min_sample_size=300,
@@ -178,10 +178,10 @@ def test_find_sample_size_multiple_variants():
         assert "variant_3" in sample_dict
 
         # Check that we have power dictionaries
-        assert "target_power_by_comparison" in result.columns
+        assert "power_by_comparison" in result.columns
         assert "achieved_power_by_comparison" in result.columns
 
-        target_powers = result.iloc[0]["target_power_by_comparison"]
+        target_powers = result.iloc[0]["power_by_comparison"]
         achieved_powers = result.iloc[0]["achieved_power_by_comparison"]
         assert isinstance(target_powers, dict)
         assert isinstance(achieved_powers, dict)
@@ -199,7 +199,7 @@ def test_find_sample_size_multiple_variants():
 
         # Test 2: Different power targets per comparison
         result2 = p.find_sample_size(
-            target_power={(0, 1): 0.90, (0, 2): 0.80, (0, 3): 0.70},  # Different targets
+            power={(0, 1): 0.90, (0, 2): 0.80, (0, 3): 0.70},  # Different targets
             baseline=0.10,
             effect=[0.05, 0.03, 0.07],
             min_sample_size=300,
@@ -210,7 +210,7 @@ def test_find_sample_size_multiple_variants():
         assert len(result2) == 1  # Single row
 
         # Check that target powers are different
-        target_powers = result2.iloc[0]["target_power_by_comparison"]
+        target_powers = result2.iloc[0]["power_by_comparison"]
         assert len(set(target_powers.values())) > 1  # Should have different values
         assert 0.90 in target_powers.values()
         assert 0.80 in target_powers.values()
@@ -218,10 +218,10 @@ def test_find_sample_size_multiple_variants():
 
         # Test 3: Only power specific comparisons
         result3 = p.find_sample_size(
-            target_power=0.80,
+            power=0.80,
             baseline=0.10,
             effect=[0.05, 0.03, 0.07],
-            target_comparisons=[(0, 1), (0, 2)],  # Only first two
+            comparisons=[(0, 1), (0, 2)],  # Only first two
             min_sample_size=300,
             max_sample_size=10000,
         )
@@ -235,7 +235,7 @@ def test_find_sample_size_multiple_variants():
 
         # Test 4: Power criteria "any"
         result4 = p.find_sample_size(
-            target_power=0.80,
+            power=0.80,
             baseline=0.10,
             effect=[0.05, 0.03, 0.07],
             power_criteria="any",  # At least one comparison
@@ -267,7 +267,7 @@ def test_find_sample_size_scalar_inputs_and_correction():
 
     # Test 1: Scalar baseline and effect (should apply to all)
     result = p.find_sample_size(
-        target_power=0.80,
+        power=0.80,
         baseline=0.15,  # Scalar - applies to all groups
         effect=0.04,  # Scalar - applies to all variants
         min_sample_size=300,
@@ -286,7 +286,7 @@ def test_find_sample_size_scalar_inputs_and_correction():
 
     # Test 2: Override correction to 'none'
     result_no_correction = p.find_sample_size(
-        target_power=0.80,
+        power=0.80,
         baseline=0.15,
         effect=0.04,
         correction="none",  # Override to no correction
@@ -305,7 +305,7 @@ def test_find_sample_size_scalar_inputs_and_correction():
 
     # Test 4: Mix of scalar and list
     result_mixed = p.find_sample_size(
-        target_power=0.80,
+        power=0.80,
         baseline=0.15,  # Scalar
         effect=[0.04, 0.06],  # List - different effects per variant
         min_sample_size=300,
