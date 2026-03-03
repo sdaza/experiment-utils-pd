@@ -15,11 +15,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
-# ─────────────────────────────────────────────────────────────────────────────
-# plot_effects
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Shared palette — used by both the public function and the internal renderer
+# shared palette — used by both the public function and the internal renderer
 _CLR_SIG = "#1e40af"  # deep indigo-blue — significant
 _CLR_NSIG = "#64748b"  # muted slate — not significant
 _CLR_META_BG = "#fef2f2"  # faint rose — pooled row background
@@ -58,11 +54,11 @@ def _resolve_ci_cols(
     if mcp_cols_exist:
         return _mcp_lo, _mcp_hi, data
 
-    # MCP CI columns are absent — compute them from pvalue ratio or row count.
+    # mcp CI columns are absent — compute them from pvalue ratio or row count.
     if "standard_error" not in data.columns or "pvalue" not in data.columns:
         return lo_col, hi_col, data
 
-    # Estimate n_tests from median pvalue_mcp / pvalue ratio, fall back to row count.
+    # estimate n_tests from median pvalue_mcp / pvalue ratio, fall back to row count.
     n_tests = len(data)
     if "pvalue_mcp" in data.columns:
         valid = data[(data["pvalue"] > 0) & (data["pvalue_mcp"] < 1) & data["pvalue_mcp"].notna()]
@@ -204,7 +200,6 @@ def _draw_panels_into_axes(
         elif isinstance(panel_titles, str):
             ptitle = panel_titles
         else:
-            # Fall back to row_labels when the panel key is an outcome name
             ptitle = row_labels.get(panel_val, str(panel_val)) if row_labels else str(panel_val)
         ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
 
@@ -296,7 +291,7 @@ def _render_effects_figure(
 
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
 
-    # Derive a stable row order from the first panel so all panels share the same
+    # derive a stable row order from the first panel so all panels share the same
     # top-to-bottom sequence regardless of per-panel effect magnitudes.
     row_order: dict | None = None
     if sort_by_magnitude and n_panels > 1:
@@ -308,7 +303,7 @@ def _render_effects_figure(
         for pval in unique_panels:
             row_order[pval] = reference_order
 
-    # By default only the leftmost panel shows y-tick labels; repeat_ylabels shows all.
+    # by default only the leftmost panel shows y-tick labels; repeat_ylabels shows all.
     show_yticklabels = True if repeat_ylabels else [pi == 0 for pi in range(n_panels)]
 
     _draw_panels_into_axes(
@@ -383,7 +378,7 @@ def _render_multi_effect_figure(
 
     fig, all_axes = plt.subplots(1, n_cols, figsize=figsize, squeeze=False)
 
-    # Derive a stable row order from the first effect so all panels share the
+    # derive a stable row order from the first effect so all panels share the
     # same top-to-bottom sequence regardless of which effect is displayed.
     row_order: dict | None = None
     if sort_by_magnitude:
@@ -395,7 +390,7 @@ def _render_multi_effect_figure(
             row_order[pval] = list(sorted_rows[row_col])
 
     for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
-        # Prepare CI columns for this effect type
+        # prepare CI columns for this effect type
         eff_data = data.copy()
         z = stats.norm.ppf(1 - alpha / 2)
         if lc not in eff_data.columns or eff_data[lc].isna().all():
@@ -409,7 +404,7 @@ def _render_multi_effect_figure(
         else:
             _meta = None
 
-        # Columns for this effect: positions [pi * n_effects + eff_idx] for each panel pi
+        # columns for this effect: positions [pi * n_effects + eff_idx] for each panel pi
         panel_axes = [all_axes[0][pi * n_effects + eff_idx] for pi in range(n_panels)]
         show_yticks = eff_idx == 0 or repeat_ylabels
 
@@ -571,7 +566,6 @@ def plot_effects(
 
     data = results.copy()
 
-    # ── filter outcomes ───────────────────────────────────────────────
     if outcomes is not None:
         outcomes_list = [outcomes] if isinstance(outcomes, str) else list(outcomes)
         data = data[data["outcome"].isin(outcomes_list)]
@@ -579,7 +573,6 @@ def plot_effects(
     if not unique_outcomes:
         return None
 
-    # ── filter comparison ─────────────────────────────────────────────
     if comparison is not None:
         pairs = [comparison] if isinstance(comparison, tuple) else list(comparison)
         mask = pd.Series(False, index=data.index)
@@ -589,7 +582,6 @@ def plot_effects(
     if data.empty:
         return None
 
-    # ── normalise effect to a list ────────────────────────────────────
     effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
 
     def _effect_cols(e: str) -> tuple[str, str, str, str]:
@@ -599,7 +591,6 @@ def plot_effects(
 
     z = stats.norm.ppf(1 - alpha / 2)
 
-    # For a single effect: resolve CI columns on the main data now (existing behaviour)
     if len(effects) == 1:
         eff_col, lo_col, hi_col, x_label = _effect_cols(effects[0])
         if lo_col not in data.columns or data[lo_col].isna().all():
@@ -613,14 +604,12 @@ def plot_effects(
                 meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
                 meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
     else:
-        # Multi-effect: CI columns are resolved later inside _render_multi_effect_figure
-        eff_col = lo_col = hi_col = x_label = None  # type: ignore[assignment]
+        eff_col = lo_col = hi_col = x_label = None
         if meta_df is not None:
             meta_df = meta_df.copy()
             if "_label" not in meta_df.columns:
                 meta_df["_label"] = "Pooled"
 
-    # ── resolve group_by and label columns ───────────────────────────
     group_cols: list[str] = []
     if group_by is not None:
         gc = [group_by] if isinstance(group_by, str) else list(group_by)
@@ -652,7 +641,6 @@ def plot_effects(
             )
         return df
 
-    # ── render: grouped or single ─────────────────────────────────────
     if y == "outcome":
         panel_col = "_label"
         row_col = "outcome"
@@ -720,18 +708,13 @@ def plot_effects(
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# plot_power
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def plot_power(
     data: pd.DataFrame,
     comparisons: list[tuple],
     alpha: float = 0.05,
     alternative: str = "two-sided",
     facet_by: str | None = "comparison",
-    hue: str = "effect",
+    color_by: str = "effect",
 ) -> None:
     """
     Plot statistical power by sample size and effect size.
@@ -749,8 +732,9 @@ def plot_power(
     facet_by : str or None, optional
         Column whose unique values each get their own subplot
         (default ``"comparison"``).  Pass ``None`` for a single combined plot.
-    hue : str, optional
+    color_by : str, optional
         Column used to colour lines within each subplot (default ``"effect"``).
+        Any column in the grid output is valid, e.g. ``"baseline"`` or ``"compliance"``.
     """
     from matplotlib.lines import Line2D
 
@@ -789,10 +773,10 @@ def plot_power(
     baselines = sorted(data["baseline"].unique())
     baseline_str = ", ".join(str(b) for b in baselines)
 
-    legend_title = hue.replace("_", " ").title()
+    legend_title = color_by.replace("_", " ").title()
 
-    def _fmt_hue(val):
-        if hue == "effect":
+    def _fmt_color(val):
+        if color_by == "effect":
             try:
                 return f"+{float(val):.3f}"
             except (ValueError, TypeError):
@@ -805,20 +789,20 @@ def plot_power(
         plot_data = subset.copy()
         plot_data["sample_size"] = plot_data["sample_size"].astype(str)
 
-        hue_col = f"__{hue}_fmt"
-        plot_data[hue_col] = plot_data[hue].apply(_fmt_hue)
+        color_col = f"__{color_by}_fmt"
+        plot_data[color_col] = plot_data[color_by].apply(_fmt_color)
         try:
-            hue_order_raw = sorted(subset[hue].unique(), key=float)
+            color_order_raw = sorted(subset[color_by].unique(), key=float)
         except (TypeError, ValueError):
-            hue_order_raw = sorted(subset[hue].unique(), key=str)
-        hue_order = [_fmt_hue(v) for v in hue_order_raw]
+            color_order_raw = sorted(subset[color_by].unique(), key=str)
+        color_order = [_fmt_color(v) for v in color_order_raw]
 
         fig, ax = plt.subplots()
         sns.lineplot(
             x="sample_size",
             y="power",
-            hue=hue_col,
-            hue_order=hue_order,
+            hue=color_col,
+            hue_order=color_order,
             marker="o",
             errorbar=None,
             data=plot_data,

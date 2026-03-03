@@ -92,6 +92,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Checking Covariate Balance](#checking-covariate-balance)
     - [Covariate Adjustment Methods](#covariate-adjustment-methods)
     - [Outcome Models](#outcome-models)
+    - [Ratio Metrics (Delta Method)](#ratio-metrics-delta-method)
     - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)
     - [Bootstrap Inference](#bootstrap-inference)
     - [Multiple Experiments](#multiple-experiments)
@@ -544,6 +545,100 @@ analyzer = ExperimentAnalyzer(..., compute_marginal_effects=False)
 | `"mean"` | Probability change at mean | Count change at mean |
 | `False` | Odds ratio | Rate ratio |
 
+### Ratio Metrics (Delta Method)
+
+Use `ratio_outcomes` for metrics where both the numerator and denominator include randomness — for example, *leads per converter* or *revenue per session*. Conditioning on the denominator (e.g., analysing only converters) introduces selection bias, so the correct approach is the **delta method linearization** (Deng et al. 2018):
+
+```
+linearized_i = numerator_i  −  R_control × denominator_i
+where  R_control = mean(numerator_control) / mean(denominator_control)
+```
+
+OLS on `linearized_i` estimates the difference in population-average ratios with correct standard errors. `R_control` is computed separately for each `(treatment, control)` comparison pair, so multi-arm experiments work out of the box.
+
+**Basic usage**
+
+```python
+import numpy as np
+import pandas as pd
+from experiment_utils import ExperimentAnalyzer
+
+np.random.seed(42)
+n = 20_000
+treatment = np.random.choice(["control", "variant_1", "variant_2"], n)
+
+# ~30% of users convert; converters generate ~2 leads on average
+converters = np.where(
+    treatment == "variant_2", np.random.binomial(1, 0.32, n),
+    np.where(treatment == "variant_1", np.random.binomial(1, 0.31, n),
+                                       np.random.binomial(1, 0.30, n)),
+)
+leads = np.where(converters == 1, np.random.poisson(2 + 0.1 * (treatment == "variant_2"), n), 0)
+
+df = pd.DataFrame({"treatment": treatment, "converters": converters, "leads": leads})
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["converters", "leads"],           # regular outcomes
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+)
+
+analyzer.get_effects()
+
+cols = ["outcome", "treatment_group", "control_group",
+        "control_value", "absolute_effect", "standard_error",
+        "stat_significance", "effect_type"]
+print(analyzer.results[cols].to_string())
+```
+
+Output:
+```
+               outcome treatment_group control_group  control_value  absolute_effect  standard_error  stat_significance      effect_type
+0           converters       variant_1       control       0.301              0.010        0.006                  1   mean_difference
+1                leads       variant_1       control       0.602              0.046        0.017                  1   mean_difference
+2  leads_per_converter       variant_1       control       1.977              0.022        0.011                  1  ratio_difference
+3           converters       variant_2       control       0.301              0.019        0.006                  1   mean_difference
+4                leads       variant_2       control       0.602              0.076        0.017                  1   mean_difference
+5  leads_per_converter       variant_2       control       1.977              0.037        0.011                  1  ratio_difference
+6           converters       variant_2     variant_1       0.311              0.009        0.007                  0   mean_difference
+7                leads       variant_2     variant_1       0.647              0.030        0.017                  0   mean_difference
+8  leads_per_converter       variant_2     variant_1       2.049              0.014        0.012                  0  ratio_difference
+```
+
+The `control_value` column shows `R_control` (the control arm's ratio), and `absolute_effect` is the estimated difference in ratios. Results integrate normally with `plot_effects`, `calculate_retrodesign`, and MCP correction.
+
+**With bootstrap**
+
+Bootstrap correctly re-estimates `R_control` on each resample, so standard errors fully capture the uncertainty in the ratio baseline:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["leads"],
+    ratio_outcomes={"leads_per_converter": ("leads", "converters")},
+    bootstrap=True,
+    bootstrap_iterations=1000,
+    bootstrap_seed=42,
+)
+
+analyzer.get_effects()
+print(analyzer.results[["outcome", "absolute_effect", "standard_error",
+                         "abs_effect_lower", "abs_effect_upper"]])
+```
+
+> **Why not just subset to converters?** Analysing only users who converted conditions on a post-randomisation variable, creating selection bias. The delta method preserves the full randomised sample and gives an unbiased estimate of the causal effect on the population-average ratio.
+
+**Key result columns for ratio outcomes**
+
+| Column | Meaning |
+|---|---|
+| `control_value` | `R_control = mean(num_control) / mean(den_control)` for this comparison |
+| `absolute_effect` | Estimated difference in population-average ratios |
+| `relative_effect` | `absolute_effect / control_value` |
+| `effect_type` | `"ratio_difference"` |
+
 ### Survival Analysis (Cox Models)
 
 Analyze time-to-event outcomes using Cox proportional hazards:
@@ -795,24 +890,39 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 
 ### Non-Inferiority Testing
 
-Test if a new treatment is "not worse" than control:
+Test whether the treatment stays within an acceptable margin of control
+(`test_non_inferiority`).  Given margin M, the question is: *"Is the treatment
+close enough to control to be acceptable?"*
+
+**Intuition** — given `control_value = 0.03` and `margin = 0.01`:
+
+| Direction | Passes when … | In other words … |
+|---|---|---|
+| `higher_is_better` (default) | one-sided lower CI of effect > −M | treatment value is confidently above `control − margin` = 0.02 |
+| `lower_is_better` | one-sided upper CI of effect < +M | treatment value is confidently below `control + margin` = 0.04 |
+
+The test uses a one-sided normal z-test at the specified `alpha` (default 0.05).
 
 ```python
-analyzer = ExperimentAnalyzer(
-    data=df,
-    treatment_col="treatment",
-    outcomes=["conversion"],
-)
-
 analyzer.get_effects()
 
-# Test if treatment is within 10% of control
+# Higher-is-better (e.g. conversion rate): treatment must stay within 1 pp of control
+analyzer.test_non_inferiority(absolute_margin=0.01)
+
+# Margin as a fraction of the control mean — 10% of control rate
 analyzer.test_non_inferiority(relative_margin=0.10)
 
+# Lower-is-better (e.g. error rate, churn): treatment must not increase by more than 1 pp
+analyzer.test_non_inferiority(absolute_margin=0.01, direction="lower_is_better")
+
 results = analyzer.results
-print(results[["outcome", "relative_effect", "is_non_inferior", 
-               "non_inferiority_margin"]])
+print(results[["outcome", "absolute_effect", "margin", "margin_pvalue", "within_margin"]])
 ```
+
+Added columns:
+- `margin` — absolute margin used for each row
+- `margin_pvalue` — one-sided p-value; smaller = stronger evidence the treatment is within the margin
+- `within_margin` — `True` when `margin_pvalue < alpha`
 
 ### Combining Effects (Meta-Analysis)
 
@@ -977,13 +1087,18 @@ fig = analyzer.plot_effects()
 | `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
 | `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
-| `effect` | `"absolute"` | `"absolute"` or `"relative"` |
+| `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
 | `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
 | `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
 | `group_by` | `None` | Column(s) to split into separate figures |
-| `comparison` | `None` | `(treatment, control)` tuple to filter to one comparison |
+| `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
 | `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
 | `show_zero_line` | `True` | Vertical reference line at zero |
+| `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
+| `value_decimals` | `2` | Decimal places for value labels when `show_values=True` |
+| `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
+| `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
+| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). With `group_by`, each figure is saved as `"effects_<key>.png"` |
 | `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis
@@ -1443,13 +1558,14 @@ print(balance[balance["covariate"].str.contains("region")])
 
 **Choosing an outcome model:**
 
-| Outcome type | Model | `outcome_models` |
-|---|---|---|
-| Continuous (revenue, time) | OLS | `"ols"` (default) |
-| Binary (converted, churned) | Logistic | `"logistic"` |
-| Count (orders, clicks) | Poisson | `"poisson"` |
-| Overdispersed count | Negative binomial | `"negative_binomial"` |
-| Time-to-event | Cox PH | `"cox"` |
+| Outcome type | Parameter |
+|---|---|
+| Continuous (revenue, time) | `outcome_models="ols"` (default) |
+| Binary (converted, churned) | `outcome_models="logistic"` |
+| Count (orders, clicks) | `outcome_models="poisson"` |
+| Overdispersed count | `outcome_models="negative_binomial"` |
+| Time-to-event | `outcome_models="cox"` |
+| Ratio (leads/converter, revenue/session) | `ratio_outcomes={"name": ("num_col", "den_col")}` |
 
 ### Non-Collapsibility of Hazard and Odds Ratios
 
