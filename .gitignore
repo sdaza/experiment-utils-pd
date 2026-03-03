@@ -5,7 +5,7 @@ __pycache__
 experiment_utils.egg-info
 .venv
 .*cache
-papers
+/papers
 .cursor
 /build
 /dist
