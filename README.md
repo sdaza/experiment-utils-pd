@@ -1209,7 +1209,7 @@ power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
 
 # Find sample size for 80% power
 sample_result = power_sim.find_sample_size(
-    target_power=0.80,
+    power=0.80,
     baseline=0.10,
     effect=0.02
 )
@@ -1225,7 +1225,7 @@ print(f"Achieved power: {sample_result['achieved_power_by_comparison'].iloc[0]:.
 power_sim = PowerSim(metric="proportion", variants=2, nsim=1000)
 
 sample_result = power_sim.find_sample_size(
-    target_power={(0,1): 0.90, (0,2): 0.80},
+    power={(0,1): 0.90, (0,2): 0.80},
     baseline=0.10,
     effect=[0.05, 0.03]
 )
@@ -1238,7 +1238,7 @@ print(sample_result[["comparison", "sample_size_by_group", "achieved_power"]])
 ```python
 # Find optimal allocation to minimize total sample size
 sample_result = power_sim.find_sample_size(
-    target_power=0.80,
+    power=0.80,
     baseline=0.10,
     effect=0.05,
     optimize_allocation=True
@@ -1253,7 +1253,7 @@ print(f"Total sample size: {sample_result['total_sample_size'].iloc[0]:,.0f}")
 ```python
 # 30% control, 70% treatment
 sample_result = power_sim.find_sample_size(
-    target_power=0.80,
+    power=0.80,
     baseline=0.10,
     effect=0.02,
     allocation_ratio=[0.3, 0.7]
@@ -1321,7 +1321,7 @@ retro = power_sim.simulate_retrodesign(
     true_effect=[0.02, 0.03, 0.04],  # Different effects per variant
     sample_size=1000,
     baseline=0.10,
-    target_comparisons=[(0, 1), (0, 2)]
+    comparisons=[(0, 1), (0, 2)]
 )
 
 print(retro[["comparison", "power", "type_s_error", "exaggeration_ratio", "relative_bias"]])
@@ -1606,7 +1606,7 @@ from experiment_utils import PowerSim
 # Determine required sample size
 power_sim = PowerSim(metric="proportion", variants=1, nsim=1000)
 result = power_sim.find_sample_size(
-    target_power=0.80,
+    power=0.80,
     baseline=0.10,
     effect=0.02
 )

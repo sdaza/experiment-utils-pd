@@ -77,14 +77,12 @@ class PowerSim:
         self.early_stopping_precision = early_stopping_precision
         self.parallel_strategy = parallel_strategy
 
-        # Handle default for variants
         if variants is None:
             self.logger.info("'variants' not specified. Defaulting to 1 (control + 1 variant).")
             self.variants = 1
         else:
             self.variants = variants
 
-        # Validate variants
         if not isinstance(self.variants, int) or self.variants < 1:
             log_and_raise_error(self.logger, "'variants' must be an integer >= 1")
 
@@ -128,7 +126,6 @@ class PowerSim:
         Two vectors with simulated data
         """
 
-        # initial checks
         if effect is None:
             effect = [0.1]
         if standard_deviation is None:
@@ -171,10 +168,7 @@ class PowerSim:
 
         re = list(range(self.variants))
 
-        # outputs
         dd = np.array([])
-
-        # index of condition
         vv = np.array([])
 
         if self.metric == "count":
@@ -236,22 +230,20 @@ class PowerSim:
 
         return dd, vv
 
-    def _normalize_and_validate_comparisons(
-        self, target_comparisons: list[tuple[int, int]] | None
-    ) -> list[tuple[int, int]]:
+    def _normalize_and_validate_comparisons(self, comparisons: list[tuple[int, int]] | None) -> list[tuple[int, int]]:
         """
-        Normalize target_comparisons to canonical order (smaller, larger) and validate
-        against self.comparisons. Returns self.comparisons if target_comparisons is None.
+        Normalize comparisons to canonical order (smaller, larger) and validate
+        against self.comparisons. Returns self.comparisons if comparisons is None.
         """
-        if target_comparisons is None:
+        if comparisons is None:
             return self.comparisons
 
-        normalized = [tuple(sorted(c)) for c in target_comparisons]
+        normalized = [tuple(sorted(c)) for c in comparisons]
         invalid = [c for c in normalized if c not in self.comparisons]
         if invalid:
             log_and_raise_error(
                 self.logger,
-                f"target_comparisons {invalid} are not in defined comparisons {self.comparisons}",
+                f"comparisons {invalid} are not in defined comparisons {self.comparisons}",
             )
         return normalized
 
@@ -310,12 +302,10 @@ class PowerSim:
 
         l_pvalues = []
         for j, h in comparisons_to_compute:
-            # Skip comparison if either group has 0 sample size
             if j >= len(sample_size) or h >= len(sample_size) or sample_size[j] == 0 or sample_size[h] == 0:
                 l_pvalues.append(1.0)
                 continue
 
-            # Run statistical test based on metric type
             if self.metric == "count":
                 ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
                 tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
@@ -337,7 +327,6 @@ class PowerSim:
 
             l_pvalues.append(pvalue)
 
-        # Apply correction and determine significance
         pvalue_adjustment = {"two-tailed": 1, "greater": 0.5, "smaller": 0.5}
         correction_methods = {
             "bonferroni": self.bonferroni,
@@ -358,14 +347,13 @@ class PowerSim:
                     sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
                     significant = [p < sidak_alpha for p in l_pvalues]
                 else:
-                    # Sequential methods (Holm, Hochberg, FDR) need all p-values to rank them;
-                    # with a subset use Bonferroni (full family size) as a conservative fallback.
+                    # sequential methods (holm, hochberg, fdr) need all p-values to rank them;
+                    # with a subset use bonferroni (full family size) as a conservative fallback.
                     significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
             else:
                 correction_func = correction_methods[self.correction]
                 significant = correction_func(l_pvalues, self.alpha / pvalue_adjustment[self.alternative])
         elif self.correction is None or self.correction == "none":
-            # No correction
             significant = [p < self.alpha / pvalue_adjustment[self.alternative] for p in l_pvalues]
         else:
             log_and_raise_error(self.logger, f"Correction method {self.correction} not recognized!")
@@ -404,7 +392,6 @@ class PowerSim:
         list[bool]
             List of significance results (True/False) for each comparison
         """
-        # y = output, x = index of condition
         y, x = self.__run_experiment(
             baseline=baseline,
             effect=effect,
@@ -413,15 +400,12 @@ class PowerSim:
             standard_deviation=standard_deviation,
         )
 
-        # iterate only over comparisons we need to compute
         l_pvalues = []
         for j, h in comparisons_to_compute:
-            # Skip comparison if either group has 0 sample size (bounds check first)
             if j >= len(sample_size) or h >= len(sample_size) or sample_size[j] == 0 or sample_size[h] == 0:
-                l_pvalues.append(1.0)  # p-value of 1.0 (not significant)
+                l_pvalues.append(1.0)
                 continue
 
-            # getting pvalues
             if self.metric == "count":
                 ty = np.append(y[np.isin(x, j)], y[np.isin(x, h)])
                 tx = np.append(x[np.isin(x, j)], x[np.isin(x, h)])
@@ -455,33 +439,24 @@ class PowerSim:
         }
 
         if self.correction in correction_methods:
-            # Apply correction based on total number of comparisons defined, not just computed ones
-            # This ensures consistent power calculation even when only computing subset
+            # apply correction using the full family size, even when computing a subset
             if len(self.comparisons) == 1:
-                # Only one comparison defined total - no correction needed
                 significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
             elif len(l_pvalues) < len(self.comparisons):
-                # Computing subset of comparisons - manually apply correction using total count
-                # to ensure consistency (e.g., Bonferroni: alpha / total_comparisons)
                 adjusted_alpha = self.alpha / pvalue_adjustment[self.alternative]
                 if self.correction == "bonferroni":
-                    # Bonferroni: compare each p-value to alpha / m (where m = total comparisons)
                     significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
                 elif self.correction == "sidak":
-                    # Sidak: 1 - (1-alpha)^(1/m)
                     sidak_alpha = 1 - (1 - adjusted_alpha) ** (1 / len(self.comparisons))
                     significant = [p < sidak_alpha for p in l_pvalues]
                 else:
-                    # For other methods (Holm, Hochberg, FDR), need all p-values
-                    # Use simple Bonferroni as fallback
+                    # sequential methods need full p-value list; fall back to bonferroni
                     significant = [p < adjusted_alpha / len(self.comparisons) for p in l_pvalues]
             else:
-                # Computing all comparisons - use standard correction
                 significant = correction_methods[self.correction](
                     np.array(l_pvalues), self.alpha / pvalue_adjustment[self.alternative]
                 )  # noqa: E501
         else:
-            # No correction - compare each p-value to alpha directly
             significant = [p < self.alpha for p in l_pvalues]
 
         return significant
@@ -636,9 +611,12 @@ class PowerSim:
         sample_size: int | list[int] = None,
         compliance: float | list[float] = None,
         standard_deviation: float | list[float] = None,
-        target_comparisons: list[tuple[int, int]] = None,
+        comparisons: list[tuple[int, int]] = None,
         use_early_stopping: bool = None,
         show_progress: bool = True,
+        alpha: float = None,
+        alternative: str = None,
+        correction: str = None,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate power using simulation.
@@ -656,19 +634,64 @@ class PowerSim:
             Compliance value(s). Provide a single float or list per variant.
         standard_deviation : float or list
             Standard deviation(s) for control and variants. Provide a single float or list per group.
-        target_comparisons : list of tuples, optional
+        comparisons : list of tuples, optional
             Which comparisons to compute power for. Defaults to all comparisons defined in the instance.
             Example: [(0, 1), (0, 2)] to only compute power for control vs variant 1 and 2.
         use_early_stopping : bool, optional
             Override the instance's early_stopping setting. If None, uses instance setting.
+        alpha : float, optional
+            Override the instance significance level for this call only.
+        alternative : str, optional
+            Override the instance alternative hypothesis for this call only
+            ('two-tailed', 'greater', or 'smaller').
+        correction : str, optional
+            Override the instance multiple comparison correction for this call only.
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none' (or None).
 
         Returns
         -------
         power : pd.DataFrame
             DataFrame with comparisons and their power values.
         """
+        _saved = {}
+        if alpha is not None:
+            _saved["alpha"] = self.alpha
+            self.alpha = alpha
+        if alternative is not None:
+            _saved["alternative"] = self.alternative
+            self.alternative = alternative
+        if correction is not None:
+            _saved["correction"] = self.correction
+            self.correction = correction
 
-        # Set default values for mutable arguments
+        try:
+            return self._get_power_impl(
+                baseline=baseline,
+                effect=effect,
+                sample_size=sample_size,
+                compliance=compliance,
+                standard_deviation=standard_deviation,
+                comparisons=comparisons,
+                use_early_stopping=use_early_stopping,
+                show_progress=show_progress,
+            )
+        finally:
+            for k, v in _saved.items():
+                setattr(self, k, v)
+
+    def _get_power_impl(
+        self,
+        baseline: float = None,
+        effect: float | list[float] = None,
+        sample_size: int | list[int] = None,
+        compliance: float | list[float] = None,
+        standard_deviation: float | list[float] = None,
+        comparisons: list[tuple[int, int]] = None,
+        use_early_stopping: bool = None,
+        show_progress: bool = True,
+    ) -> pd.DataFrame:
+        """Internal implementation of get_power — called after overrides are applied."""
+
         if baseline is None:
             baseline = 1.0
         elif isinstance(baseline, list | tuple):
@@ -690,40 +713,28 @@ class PowerSim:
         elif isinstance(standard_deviation, int | float):
             standard_deviation = [float(standard_deviation)]
 
-        # Expand sample_size to match number of groups if needed
         if len(sample_size) == 1:
             sample_size = sample_size * (self.variants + 1)
 
-        # Handle target_comparisons
-        comparisons_to_compute = self._normalize_and_validate_comparisons(target_comparisons)
+        comparisons_to_compute = self._normalize_and_validate_comparisons(comparisons)
 
-        # create empty values for results (only for comparisons we're computing)
         pvalues = {}
         for c in range(len(comparisons_to_compute)):
             pvalues[c] = []
 
-        # Determine if we should use early stopping
         early_stopping_enabled = self.early_stopping if use_early_stopping is None else use_early_stopping
-
-        # Decide whether to use parallel processing
         use_parallel = self.nsim >= 500 and not early_stopping_enabled
 
         if use_parallel:
             from joblib import Parallel, delayed
 
-            # Choose parallelization strategy
             if self.parallel_strategy == "hybrid":
-                # HYBRID: Two-stage pipeline for maximum efficiency
-                # Stage 1: Generate all simulation data (threading - shares memory, fast)
-                # Stage 2: Run statistical tests (multiprocessing - true parallelism, CPU-intensive)
                 if show_progress:
                     self.logger.info(
                         f"Running {self.nsim} power simulations with hybrid parallelization "
                         f"(threading for data generation + multiprocessing for tests)..."
                     )
 
-                # Stage 1: Generate simulation datasets in parallel (threading)
-                self.logger.debug("Stage 1/2: Generating simulation data (threading)...")
                 sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
                     delayed(self._generate_simulation_data)(
                         baseline=baseline,
@@ -735,8 +746,6 @@ class PowerSim:
                     for _ in range(self.nsim)
                 )
 
-                # Stage 2: Run statistical tests in parallel (multiprocessing)
-                self.logger.debug("Stage 2/2: Computing statistical tests (multiprocessing)...")
                 results = list(
                     tqdm(
                         Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
@@ -756,7 +765,7 @@ class PowerSim:
                 )
 
             elif self.parallel_strategy == "threading":
-                # Pure threading approach (memory-efficient but GIL-limited)
+                # threading only (memory-efficient but GIL-limited)
                 if show_progress:
                     self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
                 results = list(
@@ -781,7 +790,7 @@ class PowerSim:
                 )
 
             else:  # "loky" or default
-                # Pure multiprocessing approach (high memory but true parallelism)
+                # multiprocessing only (high memory, true parallelism)
                 if show_progress:
                     self.logger.info(f"Running {self.nsim} power simulations in parallel (multiprocessing)...")
                 results = list(
@@ -805,20 +814,17 @@ class PowerSim:
                     )
                 )
 
-            # Aggregate results
             for significant in results:
                 for v, p in enumerate(significant):
                     pvalues[v].append(p)
         else:
-            # Sequential execution (needed for early stopping or small nsim)
+            # sequential — required when early stopping is active
             if self.nsim >= 500:
                 self.logger.debug(f"Running {self.nsim} power simulations sequentially (early stopping enabled)...")
 
-            # Early stopping parameters
-            check_interval = 20  # Check every 20 simulations
-            min_sims = 50  # Minimum simulations before considering early stopping
+            check_interval = 20
+            min_sims = 50
 
-            # iterate over simulations
             for _i in tqdm(range(self.nsim), desc="Simulations", unit="sim", leave=False, disable=not show_progress):
                 significant = self._run_single_power_simulation(
                     baseline=baseline,
@@ -832,27 +838,22 @@ class PowerSim:
                 for v, p in enumerate(significant):
                     pvalues[v].append(p)
 
-                # Early stopping check
                 if early_stopping_enabled and (_i + 1) >= min_sims and (_i + 1) % check_interval == 0:
-                    # Check if all comparisons have stabilized
                     all_stable = True
                     for comp_idx in range(len(comparisons_to_compute)):
                         results_so_far = pvalues[comp_idx]
                         n = len(results_so_far)
                         if n > 0:
                             p_hat = np.mean(results_so_far)
-                            # Standard error of proportion: sqrt(p*(1-p)/n)
-                            # Clip p_hat to avoid division issues at boundaries
+                            # se of proportion; clip to avoid boundary issues
                             p_hat_clipped = np.clip(p_hat, 0.01, 0.99)
                             se = np.sqrt(p_hat_clipped * (1 - p_hat_clipped) / n)
 
-                            # Be more conservative near boundaries (power near 0 or 1)
-                            # to avoid premature stopping when power is marginal
+                            # tighter threshold near 0/1 to prevent premature stopping
                             precision_threshold = self.early_stopping_precision
-                            if 0.3 < p_hat < 0.95:  # Only use aggressive stopping when power is clearly high or low
+                            if 0.3 < p_hat < 0.95:
                                 precision_threshold = self.early_stopping_precision
                             else:
-                                # Need more precision near boundaries
                                 precision_threshold = self.early_stopping_precision / 2
 
                             if se > precision_threshold:
@@ -901,7 +902,6 @@ class PowerSim:
         pd.DataFrame
             DataFrame with each comparison (as defined in self.comparisons) and the corresponding estimated power.
         """
-        # Set default values for mutable arguments
         if sample_size is None:
             sample_size = [100]
         elif isinstance(sample_size, int | float):
@@ -915,11 +915,9 @@ class PowerSim:
         elif isinstance(compliance, int | float):
             compliance = [float(compliance)]
 
-        # Verify metric column exists
         if metric_col not in df.columns:
             log_and_raise_error(self.logger, f"Column '{metric_col}' not found in dataframe.")
 
-            # initial checks
         if len(effect) != self.variants:
             if len(effect) > 1:
                 log_and_raise_error(
@@ -934,7 +932,6 @@ class PowerSim:
                 )  # noqa: E501
             compliance = list(itertools.repeat(compliance[0], self.variants))
 
-        # compliance cannot be higher than 1 or lower than 0
         if any([c > 1 or c < 0 for c in compliance]):
             log_and_raise_error(self.logger, "Compliance rates should be between 0 and 1!")
 
@@ -945,22 +942,17 @@ class PowerSim:
                 )  # noqa: E501
             sample_size = list(itertools.repeat(sample_size[0], self.variants + 1))
 
-        # The sum of sample size cannot be higher than the number of rows in the dataframe
         if sum(sample_size) > df.shape[0]:
             log_and_raise_error(
                 self.logger, "Sum of sample sizes cannot be higher than the number of rows in the dataframe!"
             )  # noqa: E501
 
-        # Adjust sample size by compliance
         sample_size = [int(np.round(s * c)) for s, c in zip(sample_size, [1] + compliance, strict=False)]
 
-        # Initialize storage for significance results over simulation iterations
         pvalues_dict = {c: [] for c in range(len(self.comparisons))}
-        n_iter = self.nsim  # number of bootstrap iterations
+        n_iter = self.nsim
 
         for _i in range(n_iter):
-            # Create a bootstrap sample per group (sampling with replacement) for each variant and sample size
-
             boot_samples = {}
             remaining = None
 
@@ -979,18 +971,15 @@ class PowerSim:
                     effects = [0] + effect
                     boot_samples[j] = temp[metric_col].values + effects[j]
 
-            # For each comparison defined in self.comparisons, perform the appropriate test
             iter_pvals = []
             for j, h in self.comparisons:
                 if self.metric == "average":
-                    # Two-sample t-test (unequal variance)
                     try:
                         t_stat, pval = stats.ttest_ind(boot_samples[j], boot_samples[h], equal_var=False)
                     except Exception as e:
                         self.logger.error(f"Error while performing t-test: {e}")
                         pval = np.nan
                 elif self.metric == "proportion":
-                    # Assume binary data (0/1)
                     count = [np.sum(boot_samples[h]), np.sum(boot_samples[j])]
                     nobs = [len(boot_samples[h]), len(boot_samples[j])]
                     try:
@@ -1000,7 +989,6 @@ class PowerSim:
                         pval = np.nan
                 iter_pvals.append(pval)
 
-            # Adjust multiple comparisons for this iteration
             pvalue_adjustment = {"two-tailed": 1, "greater": 0.5, "smaller": 0.5}
             correction_methods = {
                 "bonferroni": self.bonferroni,
@@ -1014,17 +1002,13 @@ class PowerSim:
                     np.array(iter_pvals), self.alpha / pvalue_adjustment[self.alternative]
                 )
             else:
-                # No adjustment provided; simply check p < alpha
                 significances = np.array(np.array(iter_pvals) < self.alpha)
 
-            # Save boolean outcomes for each comparison
             for idx, sig in enumerate(significances):
                 pvalues_dict[idx].append(sig)
 
-        # Compute power as the mean rejection rate for each comparison
         power_estimates = {idx: np.mean(sig_arr) for idx, sig_arr in pvalues_dict.items()}
         power_df = pd.DataFrame(list(power_estimates.items()), columns=["comparison_index", "power"])
-        # Map index to actual comparison tuple
         power_df["comparisons"] = power_df["comparison_index"].map(dict(enumerate(self.comparisons)))
         power_df = power_df[["comparisons", "power"]]
         return power_df
@@ -1057,8 +1041,10 @@ class PowerSim:
         threads: int = 3,
         plot: bool = False,
         correction: str = None,
+        alpha: float = None,
+        alternative: str = None,
         facet_by: str | None = "comparison",
-        hue: str = "effect",
+        color_by: str = "effect",
     ) -> pd.DataFrame:  # noqa: E501
         """
         Return Pandas DataFrame with parameter combinations and statistical power.
@@ -1095,21 +1081,63 @@ class PowerSim:
         plot : bool
             Whether to plot the results after the grid is computed.
         correction : str, optional
-            Multiple comparison correction method. If provided, overrides the instance
-            correction for this call. Options: 'bonferroni', 'holm', 'hochberg',
-            'sidak', 'fdr', 'none' (or None to use the instance default).
+            Override the instance multiple comparison correction for this call only.
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none'
+            (or None to use the instance default).
+        alpha : float, optional
+            Override the instance significance level for this call only.
+        alternative : str, optional
+            Override the instance alternative hypothesis for this call only
+            ('two-tailed', 'greater', or 'smaller').
         facet_by : str or None
             Column whose unique values each get their own plot when ``plot=True``
             (default ``"comparison"``).  Pass ``None`` to produce a single combined plot.
-        hue : str
+        color_by : str
             Column used to colour lines within each plot when ``plot=True``
-            (default ``"effect"``).
+            (default ``"effect"``). Any column in the grid output is valid,
+            e.g. ``"baseline"`` or ``"compliance"``.
         """
-
-        original_correction = None
+        _saved = {}
         if correction is not None:
-            original_correction = self.correction
+            _saved["correction"] = self.correction
             self.correction = correction
+        if alpha is not None:
+            _saved["alpha"] = self.alpha
+            self.alpha = alpha
+        if alternative is not None:
+            _saved["alternative"] = self.alternative
+            self.alternative = alternative
+        try:
+            return self._grid_sim_power_impl(
+                baseline_rates=baseline_rates,
+                effects=effects,
+                sample_sizes=sample_sizes,
+                compliances=compliances,
+                standard_deviations=standard_deviations,
+                allocation_ratio=allocation_ratio,
+                threads=threads,
+                plot=plot,
+                facet_by=facet_by,
+                color_by=color_by,
+            )
+        finally:
+            for k, v in _saved.items():
+                setattr(self, k, v)
+
+    def _grid_sim_power_impl(
+        self,
+        baseline_rates=None,
+        effects=None,
+        sample_sizes=None,
+        compliances=None,
+        standard_deviations=None,
+        allocation_ratio=None,
+        threads: int = 3,
+        plot: bool = False,
+        facet_by: str | None = "comparison",
+        color_by: str = "effect",
+    ) -> pd.DataFrame:
+        """Internal implementation of grid_sim_power — called after overrides are applied."""
 
         baseline_rates = self._as_scenario_list(baseline_rates)
         effects = self._as_scenario_list(effects)
@@ -1200,9 +1228,6 @@ class PowerSim:
         pool.close()
         pool.join()
 
-        if original_correction is not None:
-            self.correction = original_correction
-
         results = pd.concat(results)
 
         # create index
@@ -1223,14 +1248,14 @@ class PowerSim:
         grid.sample_size = grid.sample_size.map(lambda v: str(v) if isinstance(v, list) else v)
         grid.effect = grid.effect.map(lambda v: str(v) if isinstance(v, list) else v)
         if plot:
-            self.plot_power(grid, facet_by=facet_by, hue=hue)
+            self.plot_power(grid, facet_by=facet_by, color_by=color_by)
         return grid
 
     def plot_power(
         self,
         data: pd.DataFrame,
         facet_by: str | None = "comparison",
-        hue: str = "effect",
+        color_by: str = "effect",
     ) -> None:
         """
         Plot statistical power by scenario.
@@ -1242,8 +1267,9 @@ class PowerSim:
         facet_by : str or None
             Column whose unique values each get their own plot
             (default ``"comparison"``).  Pass ``None`` for a single combined plot.
-        hue : str
+        color_by : str
             Column used to colour lines within each plot (default ``"effect"``).
+            Any column in the grid output is valid, e.g. ``"baseline"`` or ``"compliance"``.
         """
         from .plotting import plot_power as _plot_power
 
@@ -1253,7 +1279,7 @@ class PowerSim:
             alpha=self.alpha,
             alternative=self.alternative,
             facet_by=facet_by,
-            hue=hue,
+            color_by=color_by,
         )
 
     def __expand_grid(self, dictionary: dict[str, list[float | int]]) -> pd.DataFrame:
@@ -1388,7 +1414,7 @@ class PowerSim:
     def _optimize_allocation(
         self,
         power_dict: dict,
-        target_comparisons: list,
+        target_comparisons: list,  # kept as positional/keyword arg name for internal use
         baseline: float,
         effect: list,
         compliance: list,
@@ -1411,26 +1437,23 @@ class PowerSim:
         """
         import warnings
 
-        # Check for symmetric case: all effects equal and all power targets equal
-        # For control vs variants comparisons only
-        control_comparisons = [(g1, g2) for g1, g2 in target_comparisons if 0 in (g1, g2)]
+        comps = target_comparisons
 
-        if len(control_comparisons) == len(target_comparisons):
-            # All comparisons involve control
-            variant_effects = [abs(effect[max(g1, g2) - 1]) for g1, g2 in target_comparisons]
-            power_targets = [power_dict[comp] for comp in target_comparisons]
+        control_comparisons = [(g1, g2) for g1, g2 in comps if 0 in (g1, g2)]
 
-            # Check if all effects are the same (within tolerance) and all power targets are the same
+        if len(control_comparisons) == len(comps):
+            variant_effects = [abs(effect[max(g1, g2) - 1]) for g1, g2 in comps]
+            power_targets = [power_dict[comp] for comp in comps]
+
             if (len(set(variant_effects)) == 1 or max(variant_effects) - min(variant_effects) < 0.001) and (
                 len(set(power_targets)) == 1
             ):
-                # Symmetric case - use equal allocation
                 self.logger.info("Symmetric effects and power targets detected - using equal allocation")
                 return [1.0 / num_groups] * num_groups
 
         group_samples = [0] * num_groups
 
-        # Sort comparisons by absolute effect size (smallest = hardest to detect)
+        # sort comparisons by absolute effect size (smallest = hardest to detect)
         def get_effect_size(comp):
             g1, g2 = comp
             if g1 == 0:
@@ -1442,22 +1465,18 @@ class PowerSim:
                 e2 = effect[g2 - 1] if g2 > 0 else 0
                 return abs(e2 - e1)
 
-        sorted_comparisons = sorted(target_comparisons, key=get_effect_size)
+        sorted_comparisons = sorted(comps, key=get_effect_size)
 
-        # Collect all groups that appear in any comparison (used to floor their sizes)
         groups_needed = set()
-        for comp in target_comparisons:
+        for comp in comps:
             groups_needed.update(comp)
 
-        # For each comparison, find minimum per-group sample size.
-        # Note: We need to test with ALL groups to properly account for multiple
-        # comparison corrections (e.g. Holm).
+        # test with ALL groups so sequential corrections (e.g. holm) use the full family
         for group1, group2 in sorted_comparisons:
-            comp_target_power = power_dict[(group1, group2)]
+            comp_power = power_dict[(group1, group2)]
             comp_result_idx = self.comparisons.index((group1, group2))
 
-            # ---- local helpers ----------------------------------------
-            # Bind loop variables as defaults to avoid B023 (closure over loop var)
+            # bind loop variables to avoid B023 closure issue
             def _make_sizes(
                 total_for_pair: int,
                 _g1: int = group1,
@@ -1495,11 +1514,11 @@ class PowerSim:
                 except Exception:
                     return 0.0
 
-            # ---- analytical estimate for initial bracket --------------
+            # analytical estimate for bracket seed
             from scipy.stats import norm as _norm
 
             z_alpha = _norm.ppf(1 - self.alpha / 2)
-            z_beta = _norm.ppf(comp_target_power)
+            z_beta = _norm.ppf(comp_power)
             eff_val = (
                 effect[group2 - 1]
                 if (self.metric != "average" and group2 > 0 and group2 - 1 < len(effect))
@@ -1526,7 +1545,7 @@ class PowerSim:
             except (ZeroDivisionError, ValueError):
                 pass
 
-            # ---- bracket ----------------------------------------------
+            # set search bracket
             if n_analytical_pair and min_sample_size <= n_analytical_pair <= max_sample_size:
                 lo = max(min_sample_size, int(n_analytical_pair * 0.5))
                 hi = min(max_sample_size, int(n_analytical_pair * 2.0))
@@ -1534,52 +1553,52 @@ class PowerSim:
                 lo = min_sample_size
                 hi = max_sample_size
 
-            # Verify upper bound
+            # verify upper bound
             p_hi = _eval_alloc_power(hi)
-            if p_hi < comp_target_power - tolerance:
+            if p_hi < comp_power - tolerance:
                 while hi < max_sample_size:
                     lo = hi
                     hi = min(max_sample_size, hi * 2)
                     p_hi = _eval_alloc_power(hi)
-                    if p_hi >= comp_target_power - tolerance:
+                    if p_hi >= comp_power - tolerance:
                         break
-                if p_hi < comp_target_power - tolerance:
+                if p_hi < comp_power - tolerance:
                     group_samples[group1] = max(group_samples[group1], max(100, int(hi / 2)))
                     group_samples[group2] = max(group_samples[group2], max(100, int(hi / 2)))
                     continue
 
-            # Contract lower bound if already sufficient
+            # contract lower bound if already sufficient
             p_lo = _eval_alloc_power(lo)
-            if p_lo >= comp_target_power - tolerance:
+            if p_lo >= comp_power - tolerance:
                 while lo > min_sample_size:
                     candidate = max(min_sample_size, lo // 2)
                     p_cand = _eval_alloc_power(candidate)
-                    if p_cand >= comp_target_power - tolerance:
+                    if p_cand >= comp_power - tolerance:
                         hi, p_hi = lo, p_lo
                         lo, p_lo = candidate, p_cand
                     else:
                         lo = candidate
                         break
-                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
+                if lo == min_sample_size and p_lo >= comp_power - tolerance:
                     found_size = max(100, int(lo / 2))
                     group_samples[group1] = max(group_samples[group1], found_size)
                     group_samples[group2] = max(group_samples[group2], found_size)
                     continue
 
-            # ---- binary search ----------------------------------------
+            # binary search in [lo, hi]
             best_pair_size = hi
             while hi - lo > step_size:
                 mid = (lo + hi) // 2
-                if _eval_alloc_power(mid) >= comp_target_power - tolerance:
+                if _eval_alloc_power(mid) >= comp_power - tolerance:
                     best_pair_size = mid
                     hi = mid
                 else:
                     lo = mid
 
-            # ---- post-convergence verification + recovery -------------
+            # re-verify with full nsim; recover by stepping up if needed
             verified = _eval_alloc_power(best_pair_size, use_early_stopping=False)
             _recovery = 0
-            while verified < comp_target_power - tolerance and _recovery < 10:
+            while verified < comp_power - tolerance and _recovery < 10:
                 if best_pair_size >= max_sample_size:
                     break
                 best_pair_size = min(max_sample_size, best_pair_size + step_size)
@@ -1590,7 +1609,6 @@ class PowerSim:
             group_samples[group1] = max(group_samples[group1], found_size)
             group_samples[group2] = max(group_samples[group2], found_size)
 
-        # Convert to allocation ratios
         total_samples = sum(group_samples)
 
         if total_samples == 0:
@@ -1602,13 +1620,13 @@ class PowerSim:
 
     def find_sample_size(
         self,
-        target_power: float | dict[tuple[int, int], float] = 0.80,
+        power: float | dict[tuple[int, int], float] = 0.80,
         baseline: float = None,
         effect: float | list[float] = None,
         compliance: float | list[float] = None,
         standard_deviation: float | list[float] = None,
         allocation_ratio: list[float] = None,
-        target_comparisons: list[tuple[int, int]] = None,
+        comparisons: list[tuple[int, int]] = None,
         power_criteria: str = "all",
         optimize_allocation: bool = False,
         min_sample_size: int = 100,
@@ -1616,6 +1634,8 @@ class PowerSim:
         tolerance: float = 0.01,
         step_size: int = 100,
         correction: str = None,
+        alpha: float = None,
+        alternative: str = None,
     ) -> pd.DataFrame:
         """
         Find the minimum total sample size needed to achieve target power level(s).
@@ -1631,7 +1651,7 @@ class PowerSim:
 
         Parameters
         ----------
-        target_power : float or dict
+        power : float or dict
             The desired power level. Can be either:
             - A single float (e.g., 0.80) to apply the same target to all comparisons
             - A dict mapping comparisons to their specific power targets
@@ -1651,15 +1671,15 @@ class PowerSim:
             Proportion of total sample size for each group (control + variants).
             Must sum to 1.0. Default is equal allocation across all groups.
             Example: [0.3, 0.7] for 30% control, 70% treatment.
-        target_comparisons : list of tuples, optional
+        comparisons : list of tuples, optional
             Which comparisons to power for. Defaults to all comparisons defined in the instance.
             Example: [(0, 1), (0, 2)] to only consider control vs variant 1 and 2.
         power_criteria : str
-            How to handle multiple target comparisons:
-            - "all": All target comparisons must reach their target power (conservative).
+            How to handle multiple comparisons:
+            - "all": All comparisons must reach their target power (conservative).
               Uses the sample size required by the most demanding comparison.
               NOTE: Other comparisons will likely EXCEED their target power.
-            - "any": At least one target comparison reaches its target power (liberal)
+            - "any": At least one comparison reaches its target power (liberal)
         optimize_allocation : bool
             If True, automatically finds the optimal allocation ratio that minimizes
             total sample size while meeting all power targets. Ignores allocation_ratio
@@ -1673,59 +1693,108 @@ class PowerSim:
         step_size : int
             Step size for initial coarse search (default: 100).
         correction : str, optional
-            Multiple comparison correction method. If provided, overrides the instance correction.
+            Override the instance multiple comparison correction for this call only.
             Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none' (or None).
+        alpha : float, optional
+            Override the instance significance level for this call only.
+        alternative : str, optional
+            Override the instance alternative hypothesis for this call only
+            ('two-tailed', 'greater', or 'smaller').
 
         Returns
         -------
         pd.DataFrame
-            DataFrame with comparison, target_power, sample_size, allocation, and achieved_power columns.
+            DataFrame with comparison, power, sample_size, allocation, and achieved_power columns.
 
         Examples
         --------
         # Basic usage: same power target for all comparisons (scalar values)
         >>> p = PowerSim(metric='proportion', variants=1, nsim=500)
-        >>> result = p.find_sample_size(target_power=0.80, baseline=0.10, effect=0.02)
+        >>> result = p.find_sample_size(power=0.80, baseline=0.10, effect=0.02)
 
         # Different power targets per comparison
         >>> p = PowerSim(metric='proportion', variants=2, nsim=500)
         >>> result = p.find_sample_size(
-        ...     target_power={(0,1): 0.90, (0,2): 0.80},  # Primary comparison needs 90% power
-        ...     baseline=0.10,  # Same baseline for all groups
-        ...     effect=[0.05, 0.03]  # Different effects per variant
+        ...     power={(0,1): 0.90, (0,2): 0.80},  # primary comparison needs 90% power
+        ...     baseline=0.10,
+        ...     effect=[0.05, 0.03]
         ... )
 
         # Optimize allocation with same effect for all variants
         >>> p = PowerSim(metric='proportion', variants=3, nsim=500)
         >>> result = p.find_sample_size(
-        ...     target_power=0.80,
+        ...     power=0.80,
         ...     baseline=0.10,
-        ...     effect=0.05,  # Same effect for all variants
-        ...     optimize_allocation=True  # Find optimal allocation!
+        ...     effect=0.05,
+        ...     optimize_allocation=True
         ... )
 
         # Power only specific comparisons
         >>> p = PowerSim(metric='proportion', variants=3, nsim=500)
         >>> result = p.find_sample_size(
-        ...     target_power=0.80,
+        ...     power=0.80,
         ...     baseline=0.10,
         ...     effect=[0.05, 0.03, 0.07],
-        ...     target_comparisons=[(0, 1), (0, 2)]  # Only power first two variants
+        ...     comparisons=[(0, 1), (0, 2)]
         ... )
 
         # Override correction method and use custom allocation
         >>> result = p.find_sample_size(
-        ...     target_power=0.80,
+        ...     power=0.80,
         ...     baseline=0.10,
         ...     effect=0.02,
-        ...     allocation_ratio=[0.3, 0.7],  # 30% control, 70% treatment
-        ...     correction='none'  # Override instance correction
+        ...     allocation_ratio=[0.3, 0.7],
+        ...     correction='none'
         ... )
         """
-        original_correction = None
+        _saved = {}
         if correction is not None:
-            original_correction = self.correction
+            _saved["correction"] = self.correction
             self.correction = correction
+        if alpha is not None:
+            _saved["alpha"] = self.alpha
+            self.alpha = alpha
+        if alternative is not None:
+            _saved["alternative"] = self.alternative
+            self.alternative = alternative
+
+        try:
+            return self._find_sample_size_impl(
+                power=power,
+                baseline=baseline,
+                effect=effect,
+                compliance=compliance,
+                standard_deviation=standard_deviation,
+                allocation_ratio=allocation_ratio,
+                comparisons=comparisons,
+                power_criteria=power_criteria,
+                optimize_allocation=optimize_allocation,
+                min_sample_size=min_sample_size,
+                max_sample_size=max_sample_size,
+                tolerance=tolerance,
+                step_size=step_size,
+            )
+        finally:
+            for k, v in _saved.items():
+                setattr(self, k, v)
+
+    def _find_sample_size_impl(
+        self,
+        power: float | dict[tuple[int, int], float] = 0.80,
+        baseline: float = None,
+        effect: float | list[float] = None,
+        compliance: float | list[float] = None,
+        standard_deviation: float | list[float] = None,
+        allocation_ratio: list[float] = None,
+        comparisons: list[tuple[int, int]] = None,
+        power_criteria: str = "all",
+        optimize_allocation: bool = False,
+        min_sample_size: int = 100,
+        max_sample_size: int = 100000,
+        tolerance: float = 0.01,
+        step_size: int = 100,
+    ) -> pd.DataFrame:
+        """Internal implementation of find_sample_size — called after overrides are applied."""
 
         if baseline is None:
             baseline = 1.0
@@ -1746,7 +1815,7 @@ class PowerSim:
 
         num_groups = self.variants + 1
         if allocation_ratio is None or optimize_allocation:
-            target_comps = target_comparisons if target_comparisons is not None else self.comparisons
+            target_comps = comparisons if comparisons is not None else self.comparisons
             control_needed = any(0 in comp for comp in target_comps)
 
             if not control_needed:
@@ -1768,7 +1837,7 @@ class PowerSim:
             if any(r < 0 for r in allocation_ratio):
                 log_and_raise_error(self.logger, "All allocation_ratio values must be non-negative")
 
-            target_comps = target_comparisons if target_comparisons is not None else self.comparisons
+            target_comps = comparisons if comparisons is not None else self.comparisons
             groups_used = set()
             for g1, g2 in target_comps:
                 groups_used.add(g1)
@@ -1776,31 +1845,29 @@ class PowerSim:
 
             for group in groups_used:
                 if group < len(allocation_ratio) and allocation_ratio[group] == 0:
-                    log_and_raise_error(
-                        self.logger, f"Group {group} is used in target_comparisons but has zero allocation"
-                    )
+                    log_and_raise_error(self.logger, f"Group {group} is used in comparisons but has zero allocation")
 
-        target_comparisons = self._normalize_and_validate_comparisons(target_comparisons)
+        comparisons = self._normalize_and_validate_comparisons(comparisons)
 
         if power_criteria not in ["all", "any"]:
             log_and_raise_error(self.logger, "power_criteria must be 'all' or 'any'")
 
-        if isinstance(target_power, dict):
-            invalid_keys = [k for k in target_power.keys() if k not in target_comparisons]
+        if isinstance(power, dict):
+            invalid_keys = [k for k in power.keys() if k not in comparisons]
             if invalid_keys:
-                log_and_raise_error(self.logger, f"target_power dict contains invalid comparisons: {invalid_keys}")
-            if any(not (0 < p < 1) for p in target_power.values()):
-                log_and_raise_error(self.logger, "All target_power values must be between 0 and 1")
-            power_dict = target_power
+                log_and_raise_error(self.logger, f"power dict contains invalid comparisons: {invalid_keys}")
+            if any(not (0 < p < 1) for p in power.values()):
+                log_and_raise_error(self.logger, "all power values must be between 0 and 1")
+            power_dict = power
         else:
-            if not 0 < target_power < 1:
-                log_and_raise_error(self.logger, "target_power must be between 0 and 1")
-            power_dict = {comp: target_power for comp in target_comparisons}
+            if not 0 < power < 1:
+                log_and_raise_error(self.logger, "power must be between 0 and 1")
+            power_dict = {comp: power for comp in comparisons}
 
         if optimize_allocation:
             allocation_ratio = self._optimize_allocation(
                 power_dict=power_dict,
-                target_comparisons=target_comparisons,
+                target_comparisons=comparisons,
                 baseline=baseline,
                 effect=effect,
                 compliance=compliance,
@@ -1813,8 +1880,7 @@ class PowerSim:
             )
 
         self.logger.info(
-            f"Finding sample size for {len(target_comparisons)} comparison(s) "
-            f"using {self.nsim} simulations per evaluation..."
+            f"Finding sample size for {len(comparisons)} comparison(s) using {self.nsim} simulations per evaluation..."
         )
 
         results = []
@@ -1857,7 +1923,6 @@ class PowerSim:
                 pass
             return None
 
-        # Warn early if nsim is too low for reliable search
         _RELIABLE_NSIM = 500
         if self.nsim < _RELIABLE_NSIM:
             self.logger.warning(
@@ -1890,15 +1955,11 @@ class PowerSim:
                     )
                 raise
 
-        # For each target comparison, find the required sample size
-        for group1, group2 in tqdm(target_comparisons, desc="Finding sample size", unit="comp"):
-            comp_target_power = power_dict[(group1, group2)]
-            # Index into self.comparisons so we extract the right row when get_power
-            # returns results for ALL comparisons (required for sequential corrections
-            # like Holm to be applied across the full family of tests).
+        for group1, group2 in tqdm(comparisons, desc="Finding sample size", unit="comp"):
+            comp_power = power_dict[(group1, group2)]
+            # index into all comparisons so sequential corrections (e.g. holm) use the full family
             comp_result_idx = self.comparisons.index((group1, group2))
 
-            # Analytical starting estimate (no simulations, O(1))
             baseline_val = baseline
             effect_val = (
                 effect[group2 - 1]
@@ -1907,20 +1968,10 @@ class PowerSim:
             )
             sd_val = standard_deviation[group2] if group2 < len(standard_deviation) else standard_deviation[0]
             n_analytical = _get_analytical_sample_size(
-                self.metric, baseline_val, effect_val, sd_val, comp_target_power, self.alpha, allocation_ratio
+                self.metric, baseline_val, effect_val, sd_val, comp_power, self.alpha, allocation_ratio
             )
 
-            # ----------------------------------------------------------------
-            # Phase 1 — Bracket: find [low, high] where
-            #   power(low) < target - tolerance   (insufficient)
-            #   power(high) >= target - tolerance  (sufficient)
-            #
-            # Strategy (all O(log n), no linear scan):
-            #   a. Seed bracket from analytical estimate (±50 %)
-            #   b. If estimate > max_sample_size, skip directly to max check
-            #   c. Expand upward with doubling if high is still insufficient
-            #   d. Contract downward with halving if low is already sufficient
-            # ----------------------------------------------------------------
+            # phase 1: bracket — find [lo, hi] where power(lo) < target <= power(hi)
             n_evals = 0
 
             if n_analytical and n_analytical <= max_sample_size:
@@ -1932,31 +1983,28 @@ class PowerSim:
 
             self.logger.debug(f"Comparison {(group1, group2)}: analytical={n_analytical}, bracket=[{lo}, {hi}]")
 
-            # Check upper bound of bracket
             p_hi = _eval_power(hi)
             n_evals += 1
 
-            if p_hi < comp_target_power - tolerance:
-                # Insufficient at hi → expand upward with doubling
+            if p_hi < comp_power - tolerance:
                 while hi < max_sample_size:
                     lo = hi
                     hi = min(max_sample_size, hi * 2)
                     p_hi = _eval_power(hi)
                     n_evals += 1
-                    if p_hi >= comp_target_power - tolerance:
+                    if p_hi >= comp_power - tolerance:
                         break
 
-                if p_hi < comp_target_power - tolerance:
-                    # Cannot reach target within max_sample_size
+                if p_hi < comp_power - tolerance:
                     self.logger.warning(
-                        f"Could not achieve target power {comp_target_power} for comparison "
+                        f"Could not achieve target power {comp_power} for comparison "
                         f"{(group1, group2)} within max_sample_size {max_sample_size} "
                         f"(achieved {p_hi:.3f} at {max_sample_size:,})"
                     )
                     results.append(
                         {
                             "comparison": (group1, group2),
-                            "target_power": comp_target_power,
+                            "power": comp_power,
                             "total_sample_size": max_sample_size,
                             "allocation_ratio": str(allocation_ratio),
                             "sample_sizes": str([int(max_sample_size * r) for r in allocation_ratio]),
@@ -1966,28 +2014,25 @@ class PowerSim:
                     self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations (failed to converge)")
                     continue
 
-            # Check lower bound — contract downward if already sufficient
             p_lo = _eval_power(lo)
             n_evals += 1
 
-            if p_lo >= comp_target_power - tolerance:
-                # Already sufficient at lo → halve downward to find tighter lower bound
+            if p_lo >= comp_power - tolerance:
                 while lo > min_sample_size:
                     candidate = max(min_sample_size, lo // 2)
                     p_candidate = _eval_power(candidate)
                     n_evals += 1
-                    if p_candidate >= comp_target_power - tolerance:
+                    if p_candidate >= comp_power - tolerance:
                         hi, p_hi = lo, p_lo
                         lo, p_lo = candidate, p_candidate
                     else:
-                        lo = candidate  # insufficient here → good lower bound
+                        lo = candidate
                         break
-                if lo == min_sample_size and p_lo >= comp_target_power - tolerance:
-                    # min_sample_size itself is sufficient — done
+                if lo == min_sample_size and p_lo >= comp_power - tolerance:
                     results.append(
                         {
                             "comparison": (group1, group2),
-                            "target_power": comp_target_power,
+                            "power": comp_power,
                             "total_sample_size": min_sample_size,
                             "allocation_ratio": str(allocation_ratio),
                             "sample_sizes": str([int(min_sample_size * r) for r in allocation_ratio]),
@@ -1997,10 +2042,7 @@ class PowerSim:
                     self.logger.debug(f"Comparison {(group1, group2)}: {n_evals} evaluations")
                     continue
 
-            # ----------------------------------------------------------------
-            # Phase 2 — Binary search in [lo, hi]
-            # Invariant: power(lo) < target, power(hi) >= target
-            # ----------------------------------------------------------------
+            # phase 2: binary search — invariant: power(lo) < target <= power(hi)
             best_total_size = hi
             best_power = p_hi
 
@@ -2008,7 +2050,7 @@ class PowerSim:
                 mid = (lo + hi) // 2
                 p_mid = _eval_power(mid)
                 n_evals += 1
-                if p_mid >= comp_target_power - tolerance:
+                if p_mid >= comp_power - tolerance:
                     best_total_size = mid
                     best_power = p_mid
                     hi = mid
@@ -2017,19 +2059,13 @@ class PowerSim:
 
             self.logger.debug(f"Comparison {(group1, group2)}: converged in {n_evals} evaluations")
 
-            # ------------------------------------------------------------------
-            # Post-convergence verification
-            # Binary search evaluations are intentionally fast (early stopping on,
-            # low nsim is allowed). Re-evaluate the candidate with early stopping
-            # disabled so all nsim simulations run. If power is still below target,
-            # advance by step_size until it passes (max 10 steps).
-            # This catches cases where a single noisy evaluation misled the search.
-            # ------------------------------------------------------------------
+            # re-verify with full nsim; binary search uses early stopping so a noisy
+            # eval can mislead the result — step up at most 10 times to recover
             verified_power = _eval_power(best_total_size, use_early_stopping=False)
             n_evals += 1
             _MAX_RECOVERY = 10
             _recovery = 0
-            while verified_power < comp_target_power - tolerance and _recovery < _MAX_RECOVERY:
+            while verified_power < comp_power - tolerance and _recovery < _MAX_RECOVERY:
                 if best_total_size >= max_sample_size:
                     break
                 best_total_size = min(max_sample_size, best_total_size + step_size)
@@ -2044,13 +2080,12 @@ class PowerSim:
                 )
             best_power = verified_power
 
-            # Calculate final allocation
             final_sample_sizes = [int(best_total_size * ratio) for ratio in allocation_ratio]
 
             results.append(
                 {
                     "comparison": (group1, group2),
-                    "target_power": comp_target_power,
+                    "target_power": comp_power,
                     "total_sample_size": best_total_size,
                     "allocation_ratio": str(allocation_ratio),
                     "sample_sizes": str(final_sample_sizes),
@@ -2096,13 +2131,13 @@ class PowerSim:
         if optimize_allocation:
             self.logger.info(f"Optimized sample sizes: {sample_sizes_dict}")
 
-        target_power_by_comparison = {}
+        power_by_comparison = {}
         achieved_power_by_comparison = {}
 
         for _idx, row in power_result.iterrows():
             comp = row["comparisons"]
-            if comp in target_comparisons:
-                target_power_by_comparison[str(comp)] = round(power_dict[comp], 3)
+            if comp in comparisons:
+                power_by_comparison[str(comp)] = round(power_dict[comp], 3)
                 achieved_power_by_comparison[str(comp)] = round(row["power"], 3)
 
         self.logger.info(f"Achieved power: {achieved_power_by_comparison}")
@@ -2113,12 +2148,9 @@ class PowerSim:
             "power_criteria": power_criteria,
             "correction": self.correction if self.correction is not None else "none",
             "limiting_comparison": str(limiting_comparison),
-            "target_power_by_comparison": target_power_by_comparison,
+            "power_by_comparison": power_by_comparison,
             "achieved_power_by_comparison": achieved_power_by_comparison,
         }
-
-        if original_correction is not None:
-            self.correction = original_correction
 
         return pd.DataFrame([result])
 
@@ -2130,7 +2162,7 @@ class PowerSim:
         compliance: float | list[float] = None,
         standard_deviation: float | list[float] = None,
         allocation_ratio: list[float] = None,
-        target_comparisons: list[tuple[int, int]] = None,
+        comparisons: list[tuple[int, int]] = None,
         nsim: int | None = None,
         round_decimals: int = 4,
     ) -> pd.DataFrame:
@@ -2164,7 +2196,7 @@ class PowerSim:
             Proportion of total sample size for each group (control + variants).
             Must sum to 1.0. Default is equal allocation across all groups.
             Example: [0.3, 0.7] for 30% control, 70% treatment.
-        target_comparisons : list of tuples, optional
+        comparisons : list of tuples, optional
             Which comparisons to simulate for. Defaults to all comparisons defined in the instance.
             Example: [(0, 1), (0, 2)] to only consider control vs variant 1 and 2.
         nsim : int, optional
@@ -2225,7 +2257,7 @@ class PowerSim:
         ...     true_effect=[0.02, 0.03, 0.04],
         ...     sample_size=1000,
         ...     baseline=0.10,
-        ...     target_comparisons=[(0, 1), (0, 2)]  # Only first two variants
+        ...     comparisons=[(0, 1), (0, 2)]  # Only first two variants
         ... )
         """
         nsim_val = nsim if nsim is not None else self.nsim
@@ -2264,7 +2296,7 @@ class PowerSim:
             if len(sample_size) == 1:
                 sample_size = sample_size * num_groups
 
-        target_comparisons = self._normalize_and_validate_comparisons(target_comparisons)
+        comparisons = self._normalize_and_validate_comparisons(comparisons)
 
         if len(true_effect) != self.variants:
             if len(true_effect) == 1:
@@ -2281,10 +2313,9 @@ class PowerSim:
         results = []
 
         try:
-            # Decide whether to use parallel processing
             use_parallel = nsim_val >= 500
 
-            for h, j in target_comparisons:
+            for h, j in comparisons:
                 if h == 0:
                     comp_true_effect = true_effect[j - 1]
                 else:
@@ -2295,11 +2326,9 @@ class PowerSim:
 
                     _desc = f"Simulations [{h} vs {j}]"
 
-                    # Use configured parallel strategy (default: hybrid)
                     if self.parallel_strategy == "hybrid":
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations with hybrid parallelization...")
 
-                        # Stage 1: Generate simulation data (threading) — fast, no progress bar needed
                         sim_datasets = Parallel(n_jobs=-1, backend="threading", batch_size=50)(
                             delayed(self._generate_simulation_data)(
                                 baseline=baseline,
@@ -2311,7 +2340,6 @@ class PowerSim:
                             for _ in range(nsim_val)
                         )
 
-                        # Stage 2: Run tests with retrodesign-specific logic (multiprocessing)
                         simulation_results = list(
                             tqdm(
                                 Parallel(n_jobs=-1, backend="loky", batch_size=50, return_as="generator")(
@@ -2374,7 +2402,6 @@ class PowerSim:
                             )
                         )
 
-                    # Aggregate results
                     significant_effects = []
                     all_effects = []
                     sign_errors = 0
@@ -2391,7 +2418,6 @@ class PowerSim:
                                 if np.sign(observed_effect) != np.sign(comp_true_effect):
                                     sign_errors += 1
                 else:
-                    # Sequential execution for small nsim
                     significant_effects = []
                     all_effects = []
                     sign_errors = 0
