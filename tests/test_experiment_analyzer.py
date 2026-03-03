@@ -445,7 +445,7 @@ def simple_analyzer():
         treatment_col="treatment",
         outcomes=["revenue", "converted"],
         experiment_identifier=["country", "channel"],
-        pvalue_adjustment=None,
+        correction=None,
     )
     az.get_effects()
     return az

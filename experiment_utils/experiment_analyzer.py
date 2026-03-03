@@ -121,7 +121,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         (unlike PowerSim which uses threading+multiprocessing) because: (1) DataFrames
         benefit from shared memory, (2) statsmodels releases the GIL, (3) avoids
         expensive serialization. Use 'hybrid' for potentially better cache utilization.
-    pvalue_adjustment : str, optional
+    correction : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
         Maximum number of unique values for numeric columns to be treated as categorical.
@@ -246,7 +246,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         bootstrap_fixed_weights: bool = False,
         bootstrap_backend: str = "threading",
         treatment_comparisons: list[tuple] | None = None,
-        pvalue_adjustment: str | None = None,
+        correction: str | None = None,
         categorical_max_unique: int = 2,
         outcome_models: dict[str, str | list[str]] | str | list[str] | None = None,
         cluster_col: str | None = None,
@@ -307,7 +307,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._skip_bootstrap_for_survival = skip_bootstrap_for_survival
         self._bootstrap_fixed_weights = bootstrap_fixed_weights
         self._bootstrap_backend = bootstrap_backend
-        self._pvalue_adjustment = pvalue_adjustment
+        self._correction = correction
         self._treatment_comparisons = treatment_comparisons
         self._categorical_max_unique = categorical_max_unique
         self._outcome_models = outcome_models
@@ -1099,8 +1099,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             else:
                 self._logger.info(f"Processing experiment: {experiment_tuple}")
 
-            if self._pvalue_adjustment:
-                self._logger.info(f"P-value adjustment: {self._pvalue_adjustment}")
+            if self._correction:
+                self._logger.info(f"P-value adjustment: {self._correction}")
             final_covariates = []
 
             temp_pd, missing_summary = self.__handle_missing_data(temp_pd)
@@ -1709,7 +1709,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                     output["rel_effect_upper"] = bootstrap_results["rel_effect_upper"]
                                     output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
 
-                                    if self._pvalue_adjustment:
+                                    if self._correction:
                                         if experiment_tuple not in self._bootstrap_distributions:
                                             self._bootstrap_distributions[experiment_tuple] = {}
                                         comp_key = (treatment_val, control_val)
@@ -1917,9 +1917,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                 self._logger.debug(f"Removing columns with all NaN values: {cols_to_drop}")
                 self._results = self._results.drop(columns=cols_to_drop)
 
-        if self._pvalue_adjustment:
-            self._logger.info(f"Applying {self._pvalue_adjustment} p-value adjustment")
-            self.adjust_pvalues(method=self._pvalue_adjustment)
+        if self._correction:
+            self._logger.info(f"Applying {self._correction} p-value adjustment")
+            self.adjust_pvalues(method=self._correction)
 
         if original_bootstrap is not None:
             self._bootstrap = original_bootstrap

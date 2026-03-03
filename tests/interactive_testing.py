@@ -332,7 +332,7 @@ result = p.find_sample_size(
     target_power=0.80,
     baseline=[0.10],
     effect=[0.05, 0.03, 0.07],
-    target_comparisons=[(1, 2), (3, 2), (1, 3)],  # Only care about first two variants
+    comparisons=[(1, 2), (3, 2), (1, 3)],  # Only care about first two variants
     min_sample_size=300,
     optimize_allocation=True,
     max_sample_size=10000,
@@ -496,7 +496,7 @@ analyzer = ExperimentAnalyzer(
         treatment_col='new_treatment',
         experiment_identifier='experiment_id', 
         bootstrap=False,
-        pvalue_adjustment=None,
+        correction=None,
         # covariates=['baseline_conversion'],
         # regression_covariates=['baseline_conversion'],
     )
@@ -540,7 +540,7 @@ exp = ExperimentAnalyzer(
     treatment_col="treatment",
     covariates=["city", "tier"],
     adjustment="balance",
-    pvalue_adjustment=None,
+    correction=None,
     regression_covariates=["city", "tier"],
 )
 # %%
@@ -683,7 +683,7 @@ analyzer_balance_check = ExperimentAnalyzer(
     experiment_identifier='experiment_id',
     covariates=['age', 'prior_purchase', 'platform'],  # Include covariates for balance check
     bootstrap=False,
-    pvalue_adjustment=None
+    correction=None
 )
 
 # %%
@@ -741,7 +741,7 @@ analyzer_with_balance_adj = ExperimentAnalyzer(
     adjustment='balance',
     balance_method='ps-logistic',  # Propensity score weighting
     bootstrap=False,
-    pvalue_adjustment=None
+    correction=None
 )
 
 # %%
@@ -827,7 +827,7 @@ analyzer_no_boot = ExperimentAnalyzer(
     treatment_col='treatment',
     experiment_identifier='experiment_id',
     bootstrap=False,
-    pvalue_adjustment=None  # We'll apply adjustments manually to compare methods
+    correction=None  # We'll apply adjustments manually to compare methods
 )
 
 # %%
@@ -855,7 +855,7 @@ analyzer_boot = ExperimentAnalyzer(
     experiment_identifier='experiment_id',
     bootstrap=True,
     bootstrap_iterations=1000,
-    pvalue_adjustment=None
+    correction=None
 )
 
 # %%
@@ -1028,7 +1028,7 @@ for method in adjustment_methods:
         treatment_col='treatment',
         experiment_identifier='experiment_id',
         bootstrap=False,
-        pvalue_adjustment=None
+        correction=None
     )
     analyzer_no_boot_copy.get_effects()
     analyzer_no_boot_copy.adjust_pvalues(method=method)
@@ -1171,7 +1171,7 @@ for method in adjustment_methods:
         experiment_identifier='experiment_id',
         bootstrap=True,
         bootstrap_iterations=1000,
-        pvalue_adjustment=None
+        correction=None
     )
     analyzer_boot_copy.get_effects()
     analyzer_boot_copy.adjust_pvalues(method=method)
@@ -1236,7 +1236,7 @@ analyzer_adjusted_alpha = ExperimentAnalyzer(
     experiment_identifier='experiment_id',
     bootstrap=False,
     alpha=alpha_adjusted,  # Use adjusted alpha
-    pvalue_adjustment=None
+    correction=None
 )
 
 # %%
