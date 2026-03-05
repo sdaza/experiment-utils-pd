@@ -928,8 +928,8 @@ The two axis roles are controlled by `y`:
 ```python
 analyzer.get_effects()
 
-fig = analyzer.plot_effects(title="Treatment Effects")
-fig.savefig("effects.png", bbox_inches="tight")
+# save_path writes the file automatically
+fig = analyzer.plot_effects(title="Treatment Effects", save_path="effects.png")
 ```
 
 **Single experiment, multiple outcomes on the y-axis**
@@ -972,6 +972,7 @@ fig = plot_effects(
     experiment_identifier="experiment",
     alpha=0.05,
     title="Treatment Effects",
+    save_path="effects.png",   # optional; supports png, pdf, svg, ...
 )
 ```
 
@@ -996,9 +997,9 @@ When `experiment_identifier` contains multiple columns (e.g. `["country", "type"
 
 ```python
 # One figure per country; rows = type
-figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
-for country, fig in figs.items():
-    fig.savefig(f"effects_{country}.png", bbox_inches="tight")
+# save_path inserts the group key before the extension:
+#   "effects.png" → "effects_US.png", "effects_EU.png", ...
+figs = analyzer.plot_effects(group_by="country", meta_analysis=True, save_path="effects.png")
 
 # One figure per experiment type; rows = country
 figs = analyzer.plot_effects(group_by="type")
@@ -1042,7 +1043,8 @@ fig = analyzer.plot_effects()
 | `value_decimals` | `2` | Decimal places for value labels when `show_values=True` |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
-| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). With `group_by`, each figure is saved as `"effects_<key>.png"` |
+| `row_labels` | `None` | Rename individual y-axis row labels. `dict` mapping auto-generated labels to display strings, e.g. `{"US \| email": "Email (US)"}`. Unlisted rows keep their auto-generated label |
+| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). Supports `png`, `pdf`, `svg`, and any other matplotlib-supported format. With `group_by`, the group key is inserted before the extension: `"effects.png"` → `"effects_US.png"`, `"effects_EU.png"`, etc. |
 | `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis
