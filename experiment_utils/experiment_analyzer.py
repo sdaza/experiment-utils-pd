@@ -2113,6 +2113,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         return pooled_results[result_columns]
 
     def __get_fixed_meta_analysis_estimate(self, data: pd.DataFrame) -> dict[str, int | float]:
+        # Drop rows with invalid SE (zero, NaN, inf) — these are degenerate experiments
+        # (e.g. all-zero outcomes) that would receive infinite IVW weight and corrupt the pooled estimate.
+        valid_se = data["standard_error"].notna() & np.isfinite(data["standard_error"]) & (data["standard_error"] > 0)
+        data = data[valid_se]
+
+        if data.empty:
+            return {
+                "experiments": 0,
+                "control_units": 0,
+                "treatment_units": 0,
+                "absolute_effect": np.nan,
+                "abs_effect_lower": np.nan,
+                "abs_effect_upper": np.nan,
+                "relative_effect": np.nan,
+                "rel_effect_lower": np.nan,
+                "rel_effect_upper": np.nan,
+                "standard_error": np.nan,
+                "pvalue": np.nan,
+                "stat_significance": 0,
+            }
+
         # Absolute effect: IVW with 1/SE_abs²
         weights_abs = 1 / (data["standard_error"] ** 2)
         absolute_estimate = np.sum(weights_abs * data["absolute_effect"]) / np.sum(weights_abs)
@@ -2212,10 +2233,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         y: str = "experiment",
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
-        show_values: bool = False,
-        value_decimals: int = 2,
+        show_values: bool = True,
+        value_decimals: int | None = None,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
+        pct_points: bool = False,
+        combine_values: bool = False,
+        relative_cap: float = 5.0,
         save_path: str | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":
@@ -2285,10 +2309,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             Rows not present in the dict keep their auto-generated label.
         show_values : bool, optional
             Annotate each dot with its effect value (and ``*`` when significant).
-            Default ``False``.
+            Default ``True``.
         value_decimals : int, optional
             Number of decimal places for the value labels shown when
-            ``show_values=True``.  Default ``2``.
+            ``show_values=True``.  Defaults to ``1`` when ``pct_points=True``
+            or a relative effect is shown, otherwise ``2``.
+        pct_points : bool, optional
+            Multiply absolute effect values by 100 for display, expressing them
+            as percentage points (pp).  The x-axis label becomes
+            ``"Absolute Effect (pp)"`` and annotations gain a ``"pp"`` suffix.
+            Default ``False``.
+        combine_values : bool, optional
+            When ``True`` and ``show_values=True``, append the secondary effect
+            in parentheses to each dot annotation — e.g. ``+3.0pp (+15.4%)``
+            when plotting absolute, or ``+15.4% (+3.0pp)`` when plotting
+            relative.  Default ``False``.
         save_path : str or path-like, optional
             File path to save the figure.  When ``group_by`` produces multiple
             figures the group key is inserted before the file extension, e.g.
@@ -2335,6 +2370,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             value_decimals=value_decimals,
             panel_spacing=panel_spacing,
             repeat_ylabels=repeat_ylabels,
+            pct_points=pct_points,
+            combine_values=combine_values,
+            relative_cap=relative_cap,
             save_path=save_path,
         )
 
