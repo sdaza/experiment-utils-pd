@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.2...v0.3.3) (2026-03-13)
+
+
+### Bug Fixes
+
+* add environment and permissions for PyPI publishing job ([ea7c13b](https://github.com/sdaza/experiment-utils-pd/commit/ea7c13b4aca0723c91762de1d49cb0863522e2af))
+* add environment and permissions for PyPI publishing job ([12e674f](https://github.com/sdaza/experiment-utils-pd/commit/12e674f5f6531e2e1fcd2edda5eb54911c700e23))
+
 ## [0.3.2](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.1...v0.3.2) (2026-03-13)
 
 
