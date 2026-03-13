@@ -11,6 +11,7 @@ from __future__ import annotations
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
@@ -24,10 +25,24 @@ _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
 
 
-def _fmt_label(value: float, significant: int, eff_col: str, decimals: int = 2) -> str:
+def _fmt_label(
+    value: float,
+    significant: int,
+    eff_col: str,
+    decimals: int = 2,
+    pct_points: bool = False,
+    relative_cap: float = 5.0,
+) -> str:
     """Format an effect value as a label, appending '*' when significant."""
     if "relative" in eff_col:
-        text = f"{value:+.{decimals}%}"
+        if value > relative_cap:
+            text = f">100.{'0' * decimals}%"
+        elif value < -relative_cap:
+            text = f"<-100.{'0' * decimals}%"
+        else:
+            text = f"{value:+.{decimals}%}"
+    elif pct_points:
+        text = f"{value:+.{decimals}f}pp"
     else:
         text = f"{value:+.{decimals}f}"
     return text + ("*" if significant else "")
@@ -98,6 +113,9 @@ def _draw_panels_into_axes(
     value_decimals: int = 2,
     show_yticklabels: bool | list[bool] = True,
     row_order: dict | None = None,
+    pct_points: bool = False,
+    combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -124,6 +142,9 @@ def _draw_panels_into_axes(
         los = list(od[_lo_col])
         his = list(od[_hi_col])
         sigs = list(od[sig_col]) if sig_col in od.columns else [0] * len(od)
+        # secondary effect for combine_values: the column that is NOT being plotted
+        _secondary_col = "absolute_effect" if "relative" in eff_col else "relative_effect"
+        secondary_effs = list(od[_secondary_col]) if _secondary_col in od.columns else [None] * len(od)
 
         has_meta = False
         meta_label = None
@@ -142,6 +163,8 @@ def _draw_panels_into_axes(
                 meta_sig_col = "stat_significance_mcp" if "stat_significance_mcp" in mo.columns else "stat_significance"
                 meta_sig = int(mo[meta_sig_col].iloc[0]) if meta_sig_col in mo.columns else 0
                 sigs = sigs + [meta_sig]
+                meta_secondary = float(mo[_secondary_col].iloc[0]) if _secondary_col in mo.columns else None
+                secondary_effs = secondary_effs + [meta_secondary]
 
         n_rows = len(labels)
         n_exp = n_rows - (1 if has_meta else 0)
@@ -155,8 +178,10 @@ def _draw_panels_into_axes(
             ax.axhspan(meta_y - 0.48, meta_y + 0.48, color=_CLR_META_BG, zorder=0)
             ax.axhline(meta_y - 0.52, color=_CLR_SPINE, linewidth=1.2, linestyle=(0, (6, 3)), zorder=1)
 
-        for i, (label, eff, lo, hi, sig) in enumerate(zip(labels, effs, los, his, sigs, strict=False)):
-            if eff is None:
+        for i, (label, eff, lo, hi, sig, secondary_eff) in enumerate(
+            zip(labels, effs, los, his, sigs, secondary_effs, strict=False)
+        ):
+            if eff is None or not pd.notna(eff) or not np.isfinite(eff):
                 continue
             is_meta_row = has_meta and label == meta_label
             if is_meta_row:
@@ -167,13 +192,46 @@ def _draw_panels_into_axes(
             else:
                 color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
 
+            ci_valid = (
+                lo is not None
+                and hi is not None
+                and pd.notna(lo)
+                and pd.notna(hi)
+                and np.isfinite(lo)
+                and np.isfinite(hi)
+            )
+            if not ci_valid:
+                continue
             ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
             ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_values:
-                lbl = _fmt_label(eff, sig, eff_col, decimals=value_decimals)
+                lbl = _fmt_label(
+                    eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points, relative_cap=relative_cap
+                )
+                if (
+                    combine_values
+                    and secondary_eff is not None
+                    and pd.notna(secondary_eff)
+                    and np.isfinite(secondary_eff)
+                ):
+                    if "relative" in eff_col:
+                        # plotting relative → append absolute (pp or raw)
+                        if pct_points:
+                            lbl = f"{lbl} ({secondary_eff * 100:+.{value_decimals}f}pp)"
+                        else:
+                            lbl = f"{lbl} ({secondary_eff:+.{value_decimals}f})"
+                    else:
+                        # plotting absolute → append relative %
+                        if secondary_eff > relative_cap:
+                            rel_str = f">100.{'0' * value_decimals}%"
+                        elif secondary_eff < -relative_cap:
+                            rel_str = f"<-100.{'0' * value_decimals}%"
+                        else:
+                            rel_str = f"{secondary_eff:+.{value_decimals}%}"
+                        lbl = f"{lbl} ({rel_str})"
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
         ax.set_yticks(y_pos)
@@ -251,6 +309,87 @@ def _add_legend_and_title(
     plt.close(fig)
 
 
+def _make_pooled_meta(
+    data: pd.DataFrame,
+    panel_col: str,
+    eff_col: str,
+    lo_col: str,
+    hi_col: str,
+    sig_col: str,
+    alpha: float,
+) -> pd.DataFrame | None:
+    """Compute IVW pooled estimate per panel from the visible plot data.
+
+    Always derives the pooled row from the same rows shown in the figure,
+    so it can never be inconsistent with external pre-computed meta DataFrames.
+    Returns None when no panel has at least two valid experiments.
+    """
+    if "standard_error" not in data.columns:
+        return None
+    z = stats.norm.ppf(1 - alpha / 2)
+    rows = []
+    for panel_val in data[panel_col].unique():
+        od = data[data[panel_col] == panel_val]
+        valid = (
+            od["standard_error"].notna()
+            & od["standard_error"].apply(np.isfinite)
+            & (od["standard_error"] > 0)
+            & od[eff_col].notna()
+            & od[eff_col].apply(np.isfinite)
+        )
+        od = od[valid]
+        if len(od) < 2:
+            continue
+        w = 1.0 / (od["standard_error"] ** 2)
+        eff = float((w * od[eff_col]).sum() / w.sum())
+        se = float(np.sqrt(1.0 / w.sum()))
+        pvalue = float(2 * stats.norm.sf(abs(eff / se)))
+        row: dict = {
+            panel_col: panel_val,
+            "_label": "Pooled",
+            eff_col: eff,
+            lo_col: eff - z * se,
+            hi_col: eff + z * se,
+            "standard_error": se,
+            "pvalue": pvalue,
+            sig_col: 1 if pvalue < alpha else 0,
+        }
+        # also pool the secondary effect so combine_values can annotate the pooled row
+        for sec_col in ("relative_effect", "absolute_effect"):
+            if sec_col != eff_col and sec_col in od.columns:
+                sec_valid = od[sec_col].notna() & od[sec_col].apply(np.isfinite)
+                if sec_valid.any():
+                    row[sec_col] = float((w[sec_valid] * od.loc[sec_valid, sec_col]).sum() / w[sec_valid].sum())
+        rows.append(row)
+    return pd.DataFrame(rows) if rows else None
+
+
+def _fill_missing_panel_rows(
+    data: pd.DataFrame,
+    panel_col: str,
+    row_col: str,
+) -> pd.DataFrame:
+    """Add NaN rows for every panel × row-label combination absent from *data*.
+
+    This guarantees that all panels share the same y-positions so dots in
+    different panels are vertically aligned.  Missing entries have NaN for
+    every column except *panel_col* and *row_col*; the draw loop already
+    skips NaN effect rows while keeping the guide-line and tick-label.
+    """
+    unique_panels = list(data[panel_col].unique())
+    # Preserve first-appearance order across all panels
+    all_labels = list(dict.fromkeys(data[row_col].tolist()))
+    rows_to_add = []
+    for panel_val in unique_panels:
+        existing = set(data[data[panel_col] == panel_val][row_col])
+        for label in all_labels:
+            if label not in existing:
+                rows_to_add.append({panel_col: panel_val, row_col: label})
+    if rows_to_add:
+        data = pd.concat([data, pd.DataFrame(rows_to_add)], ignore_index=True)
+    return data
+
+
 def _render_effects_figure(
     data: pd.DataFrame,
     unique_outcomes: list[str],
@@ -272,6 +411,9 @@ def _render_effects_figure(
     value_decimals: int = 2,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
+    combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -280,6 +422,7 @@ def _render_effects_figure(
 
     unique_panels = list(data[panel_col].unique())
     n_panels = len(unique_panels)
+    data = _fill_missing_panel_rows(data, panel_col, row_col)
     max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
     if meta_df is not None and panel_col == "outcome":
         max_rows += 1
@@ -294,11 +437,14 @@ def _render_effects_figure(
     # derive a stable row order from the first panel so all panels share the same
     # top-to-bottom sequence regardless of per-panel effect magnitudes.
     row_order: dict | None = None
-    if sort_by_magnitude and n_panels > 1:
+    if n_panels > 1:
         row_order = {}
         first_panel = unique_panels[0]
         pdata = data[data[panel_col] == first_panel]
-        sorted_rows = pdata.sort_values(by=eff_col, ascending=False)
+        if sort_by_magnitude:
+            sorted_rows = pdata.sort_values(by=eff_col, ascending=False)
+        else:
+            sorted_rows = pdata  # preserve natural order of first panel
         reference_order = list(sorted_rows[row_col])
         for pval in unique_panels:
             row_order[pval] = reference_order
@@ -326,6 +472,9 @@ def _render_effects_figure(
         value_decimals=value_decimals,
         show_yticklabels=show_yticklabels,
         row_order=row_order,
+        pct_points=pct_points,
+        combine_values=combine_values,
+        relative_cap=relative_cap,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -349,6 +498,9 @@ def _render_multi_effect_figure(
     value_decimals: int = 2,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
+    combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -365,7 +517,7 @@ def _render_multi_effect_figure(
     n_panels = len(unique_panels)
     n_effects = len(effect_specs)
     n_cols = n_panels * n_effects
-
+    data = _fill_missing_panel_rows(data, panel_col, row_col)
     max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
     if meta_df is not None and panel_col == "outcome":
         max_rows += 1
@@ -378,16 +530,21 @@ def _render_multi_effect_figure(
 
     fig, all_axes = plt.subplots(1, n_cols, figsize=figsize, squeeze=False)
 
-    # derive a stable row order from the first effect so all panels share the
+    # derive a stable row order from the first panel so all panels share the
     # same top-to-bottom sequence regardless of which effect is displayed.
     row_order: dict | None = None
-    if sort_by_magnitude:
-        first_ec = effect_specs[0][0]
+    if n_panels > 1:
         row_order = {}
-        for pval in unique_panels:
-            pdata = data[data[panel_col] == pval]
+        first_panel = unique_panels[0]
+        pdata = data[data[panel_col] == first_panel]
+        if sort_by_magnitude:
+            first_ec = effect_specs[0][0]
             sorted_rows = pdata.sort_values(by=first_ec, ascending=False)
-            row_order[pval] = list(sorted_rows[row_col])
+        else:
+            sorted_rows = pdata  # preserve natural order of first panel
+        reference_order = list(sorted_rows[row_col])
+        for pval in unique_panels:
+            row_order[pval] = reference_order
 
     for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
         # prepare CI columns for this effect type
@@ -428,6 +585,9 @@ def _render_multi_effect_figure(
             value_decimals=value_decimals,
             show_yticklabels=show_yticks,
             row_order=row_order,
+            pct_points=(pct_points and ec == "absolute_effect"),
+            combine_values=combine_values,
+            relative_cap=relative_cap,
         )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -450,10 +610,13 @@ def plot_effects(
     y: str = "experiment",
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
-    show_values: bool = False,
-    value_decimals: int = 2,
+    show_values: bool = True,
+    value_decimals: int | None = None,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
+    combine_values: bool = False,
+    relative_cap: float = 5.0,
     save_path: str | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
@@ -535,10 +698,12 @@ def plot_effects(
 
     show_values : bool, optional
         Annotate each dot with its effect value (and ``*`` when significant).
-        Default ``False``.
+        Default ``True``.
     value_decimals : int, optional
         Number of decimal places for the value labels shown when
-        ``show_values=True``.  Default ``2`` (e.g. ``+0.03`` / ``+3.14%``).
+        ``show_values=True``.  Defaults to ``1`` when ``pct_points=True``
+        or when any relative effect is shown (e.g. ``+3.0pp``, ``+15.4%``),
+        and ``2`` otherwise (e.g. ``+0.03``).
     panel_spacing : float, optional
         Horizontal whitespace between panels as a fraction of the average axes
         width (passed to ``subplots_adjust(wspace=...)``).  Larger values add
@@ -548,6 +713,31 @@ def plot_effects(
         When ``True``, show y-axis tick labels on every panel instead of only
         the leftmost one.  Useful when panels are far apart or when saving
         individual panels.  Default ``False``.
+    pct_points : bool, optional
+        When ``True``, multiply absolute effect values (and their confidence
+        intervals and standard errors) by 100 for display, expressing them as
+        **percentage points** (pp).  The x-axis label becomes
+        ``"Absolute Effect (pp)"`` and ``show_values`` annotations gain a
+        ``"pp"`` suffix.  Has no effect on relative effect columns.
+        Default ``False``.
+    relative_cap : float, optional
+        When displaying relative effects (as standalone labels or in
+        ``combine_values`` parentheses), values whose absolute size exceeds
+        this threshold are shown as ``>100%`` or ``<-100%`` instead of the
+        raw number.  The threshold is expressed as a multiplier (e.g. ``5.0``
+        means 500%).  Default ``5.0``.
+    combine_values : bool, optional
+        When ``True`` and ``show_values=True``, append the *secondary* effect
+        in parentheses to each dot annotation.  The secondary effect is the
+        one not being plotted:
+
+        - ``effect="absolute"`` → ``+3.0pp (+15.4%)``  (relative in parens)
+        - ``effect="relative"`` → ``+15.4% (+3.0pp)``  (absolute pp in parens)
+
+        Also updates the x-axis label to reflect both metrics, e.g.
+        ``"Absolute (Relative) Effect (pp)"`` or
+        ``"Relative (Absolute) Effect"``.
+        Default ``False``.
     save_path : str or path-like, optional
         File path to save the figure.  When ``group_by`` produces multiple
         figures the group key is inserted before the file extension, e.g.
@@ -582,12 +772,37 @@ def plot_effects(
     if data.empty:
         return None
 
+    # Suppress rows with degenerate SE (zero, NaN, inf) so the plot is consistent
+    # with the pooled estimate, which applies the same validity filter.
+    if "standard_error" in data.columns:
+        bad_se = ~(data["standard_error"].notna() & np.isfinite(data["standard_error"]) & (data["standard_error"] > 0))
+        data.loc[bad_se, "absolute_effect"] = np.nan
+        data.loc[bad_se, "relative_effect"] = np.nan
+
+    # Scale absolute effect columns to percentage points for display.
+    if pct_points:
+        abs_scale_cols = ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "standard_error"]
+        for col in abs_scale_cols:
+            if col in data.columns:
+                data[col] = data[col] * 100
+        if meta_df is not None:
+            meta_df = meta_df.copy()
+            for col in abs_scale_cols:
+                if col in meta_df.columns:
+                    meta_df[col] = meta_df[col] * 100
+
+    if value_decimals is None:
+        has_relative = any(e == "relative" for e in ([effect] if isinstance(effect, str) else list(effect)))
+        value_decimals = 1 if (pct_points or has_relative or combine_values) else 2
+
     effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
 
     def _effect_cols(e: str) -> tuple[str, str, str, str]:
         if e == "relative":
-            return "relative_effect", "rel_effect_lower", "rel_effect_upper", "Relative Effect"
-        return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect"
+            lbl = "Relative (Absolute) Effect" if combine_values else "Relative Effect"
+            return "relative_effect", "rel_effect_lower", "rel_effect_upper", lbl
+        lbl = "Absolute (Relative) Effect" if combine_values else "Absolute Effect"
+        return "absolute_effect", "abs_effect_lower", "abs_effect_upper", lbl
 
     z = stats.norm.ppf(1 - alpha / 2)
 
@@ -662,9 +877,24 @@ def plot_effects(
         value_decimals=value_decimals,
         panel_spacing=panel_spacing,
         repeat_ylabels=repeat_ylabels,
+        pct_points=pct_points,
+        combine_values=combine_values,
+        relative_cap=relative_cap,
     )
 
-    def _render(labelled: pd.DataFrame, fig_title: str | None) -> plt.Figure:
+    def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
+        # Always recompute the pooled row from the visible data so it is
+        # guaranteed to be the IVW of the individual rows shown, regardless
+        # of how (or on what dataset) the external meta_df was computed.
+        if group_meta is not None and len(effects) == 1:
+            sig_col_local = (
+                "stat_significance_mcp" if "stat_significance_mcp" in labelled.columns else "stat_significance"
+            )
+            effective_meta = _make_pooled_meta(labelled, panel_col, eff_col, lo_col, hi_col, sig_col_local, alpha)
+        else:
+            effective_meta = group_meta  # None or multi-effect passthrough
+
+        kw = {**shared_kw, "meta_df": effective_meta}
         if len(effects) == 1:
             return _render_effects_figure(
                 labelled,
@@ -674,15 +904,29 @@ def plot_effects(
                 hi_col=hi_col,
                 x_label=x_label,
                 title=fig_title,
-                **shared_kw,
+                **kw,
             )
         effect_specs = [_effect_cols(e) for e in effects]
         return _render_multi_effect_figure(
             labelled,
             effect_specs=effect_specs,
             title=fig_title,
-            **shared_kw,
+            **kw,
         )
+
+    def _filter_meta_for_group(group_key, cols: list[str]) -> pd.DataFrame | None:
+        """Return the slice of meta_df relevant to this group, or None if not filterable."""
+        if meta_df is None:
+            return None
+        matching_cols = [c for c in cols if c in meta_df.columns]
+        if not matching_cols:
+            return None  # meta_df has no group cols — it's a global pool, suppress it
+        key_vals = list(group_key) if isinstance(group_key, tuple) else [group_key]
+        mask = pd.Series(True, index=meta_df.index)
+        for col, val in zip(matching_cols, key_vals[: len(matching_cols)], strict=False):
+            mask &= meta_df[col] == val
+        filtered = meta_df[mask]
+        return filtered if not filtered.empty else None
 
     if group_cols:
         figures: dict[str, plt.Figure] = {}
@@ -690,7 +934,8 @@ def plot_effects(
             key_str = " | ".join(str(v) for v in group_key) if isinstance(group_key, tuple) else str(group_key)
             fig_title = title if title is not None else key_str
             labelled = _build_labels(group_data)
-            figures[key_str] = _render(labelled, fig_title)
+            group_meta = _filter_meta_for_group(group_key, group_cols)
+            figures[key_str] = _render(labelled, fig_title, group_meta=group_meta)
         if save_path is not None:
             import os
 
@@ -702,7 +947,7 @@ def plot_effects(
         return figures
 
     labelled = _build_labels(data)
-    fig = _render(labelled, title)
+    fig = _render(labelled, title, group_meta=meta_df)
     if save_path is not None and fig is not None:
         fig.savefig(save_path, bbox_inches="tight")
     return fig
