@@ -11,6 +11,7 @@ from __future__ import annotations
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
@@ -156,7 +157,7 @@ def _draw_panels_into_axes(
             ax.axhline(meta_y - 0.52, color=_CLR_SPINE, linewidth=1.2, linestyle=(0, (6, 3)), zorder=1)
 
         for i, (label, eff, lo, hi, sig) in enumerate(zip(labels, effs, los, his, sigs, strict=False)):
-            if eff is None:
+            if eff is None or not pd.notna(eff) or not np.isfinite(eff):
                 continue
             is_meta_row = has_meta and label == meta_label
             if is_meta_row:
@@ -167,9 +168,18 @@ def _draw_panels_into_axes(
             else:
                 color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
 
-            ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
-            ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
-            ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+            ci_valid = (
+                lo is not None
+                and hi is not None
+                and pd.notna(lo)
+                and pd.notna(hi)
+                and np.isfinite(lo)
+                and np.isfinite(hi)
+            )
+            if ci_valid:
+                ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
+                ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+                ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_values:
