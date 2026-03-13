@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.1...v0.3.2) (2026-03-13)
+
+
+### Bug Fixes
+
+* update workflow triggers for manual publishing to PyPI ([8aad234](https://github.com/sdaza/experiment-utils-pd/commit/8aad2340d47f64ae10ed43c401343b2c2f5d302b))
+* update workflow triggers for manual publishing to PyPI ([a016a5f](https://github.com/sdaza/experiment-utils-pd/commit/a016a5fff2231075185251f32c37d12a7f235394))
+
 ## [0.3.1](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.0...v0.3.1) (2026-03-13)
 
 
