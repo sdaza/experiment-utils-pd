@@ -2239,6 +2239,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         repeat_ylabels: bool = False,
         pct_points: bool = False,
         combine_values: bool = False,
+        relative_cap: float = 5.0,
         save_path: str | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":
@@ -2371,6 +2372,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             repeat_ylabels=repeat_ylabels,
             pct_points=pct_points,
             combine_values=combine_values,
+            relative_cap=relative_cap,
             save_path=save_path,
         )
 
