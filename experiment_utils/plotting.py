@@ -25,10 +25,12 @@ _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
 
 
-def _fmt_label(value: float, significant: int, eff_col: str, decimals: int = 2) -> str:
+def _fmt_label(value: float, significant: int, eff_col: str, decimals: int = 2, pct_points: bool = False) -> str:
     """Format an effect value as a label, appending '*' when significant."""
     if "relative" in eff_col:
         text = f"{value:+.{decimals}%}"
+    elif pct_points:
+        text = f"{value:+.{decimals}f}pp"
     else:
         text = f"{value:+.{decimals}f}"
     return text + ("*" if significant else "")
@@ -99,6 +101,7 @@ def _draw_panels_into_axes(
     value_decimals: int = 2,
     show_yticklabels: bool | list[bool] = True,
     row_order: dict | None = None,
+    pct_points: bool = False,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -184,7 +187,7 @@ def _draw_panels_into_axes(
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_values:
-                lbl = _fmt_label(eff, sig, eff_col, decimals=value_decimals)
+                lbl = _fmt_label(eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points)
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
         ax.set_yticks(y_pos)
@@ -359,6 +362,7 @@ def _render_effects_figure(
     value_decimals: int = 2,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -417,6 +421,7 @@ def _render_effects_figure(
         value_decimals=value_decimals,
         show_yticklabels=show_yticklabels,
         row_order=row_order,
+        pct_points=pct_points,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -440,6 +445,7 @@ def _render_multi_effect_figure(
     value_decimals: int = 2,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -524,6 +530,7 @@ def _render_multi_effect_figure(
             value_decimals=value_decimals,
             show_yticklabels=show_yticks,
             row_order=row_order,
+            pct_points=(pct_points and ec == "absolute_effect"),
         )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -547,9 +554,10 @@ def plot_effects(
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
     show_values: bool = False,
-    value_decimals: int = 2,
+    value_decimals: int | None = None,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
+    pct_points: bool = False,
     save_path: str | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
@@ -634,7 +642,9 @@ def plot_effects(
         Default ``False``.
     value_decimals : int, optional
         Number of decimal places for the value labels shown when
-        ``show_values=True``.  Default ``2`` (e.g. ``+0.03`` / ``+3.14%``).
+        ``show_values=True``.  Defaults to ``1`` when ``pct_points=True``
+        or when any relative effect is shown (e.g. ``+3.0pp``, ``+15.4%``),
+        and ``2`` otherwise (e.g. ``+0.03``).
     panel_spacing : float, optional
         Horizontal whitespace between panels as a fraction of the average axes
         width (passed to ``subplots_adjust(wspace=...)``).  Larger values add
@@ -644,6 +654,13 @@ def plot_effects(
         When ``True``, show y-axis tick labels on every panel instead of only
         the leftmost one.  Useful when panels are far apart or when saving
         individual panels.  Default ``False``.
+    pct_points : bool, optional
+        When ``True``, multiply absolute effect values (and their confidence
+        intervals and standard errors) by 100 for display, expressing them as
+        **percentage points** (pp).  The x-axis label becomes
+        ``"Absolute Effect (pp)"`` and ``show_values`` annotations gain a
+        ``"pp"`` suffix.  Has no effect on relative effect columns.
+        Default ``False``.
     save_path : str or path-like, optional
         File path to save the figure.  When ``group_by`` produces multiple
         figures the group key is inserted before the file extension, e.g.
@@ -685,11 +702,29 @@ def plot_effects(
         data.loc[bad_se, "absolute_effect"] = np.nan
         data.loc[bad_se, "relative_effect"] = np.nan
 
+    # Scale absolute effect columns to percentage points for display.
+    if pct_points:
+        abs_scale_cols = ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "standard_error"]
+        for col in abs_scale_cols:
+            if col in data.columns:
+                data[col] = data[col] * 100
+        if meta_df is not None:
+            meta_df = meta_df.copy()
+            for col in abs_scale_cols:
+                if col in meta_df.columns:
+                    meta_df[col] = meta_df[col] * 100
+
+    if value_decimals is None:
+        has_relative = any(e == "relative" for e in ([effect] if isinstance(effect, str) else list(effect)))
+        value_decimals = 1 if (pct_points or has_relative) else 2
+
     effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
 
     def _effect_cols(e: str) -> tuple[str, str, str, str]:
         if e == "relative":
             return "relative_effect", "rel_effect_lower", "rel_effect_upper", "Relative Effect"
+        if pct_points:
+            return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect (pp)"
         return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect"
 
     z = stats.norm.ppf(1 - alpha / 2)
@@ -765,6 +800,7 @@ def plot_effects(
         value_decimals=value_decimals,
         panel_spacing=panel_spacing,
         repeat_ylabels=repeat_ylabels,
+        pct_points=pct_points,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
