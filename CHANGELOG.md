@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.2.1...v0.3.0) (2026-03-13)
+
+
+### Features
+
+* enhance bootstrap functionality with standard error and p-value methods ([c470ca7](https://github.com/sdaza/experiment-utils-pd/commit/c470ca78bd6e5e946859f5176709d7bec91fa3a7))
+* enhance bootstrap functionality with standard error and p-value methods ([9eca547](https://github.com/sdaza/experiment-utils-pd/commit/9eca54746391ff07b5f6f93a8a7ac7f8e551875a))
+
 ## [0.2.1](https://github.com/sdaza/experiment-utils-pd/compare/v0.2.0...v0.2.1) (2026-03-05)
 
 
