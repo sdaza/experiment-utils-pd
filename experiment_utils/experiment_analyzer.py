@@ -2233,12 +2233,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         y: str = "experiment",
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
-        show_values: bool = False,
+        show_values: bool = True,
         value_decimals: int | None = None,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
         pct_points: bool = False,
-        combined_label: bool = False,
+        combine_values: bool = False,
         save_path: str | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":
@@ -2308,10 +2308,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             Rows not present in the dict keep their auto-generated label.
         show_values : bool, optional
             Annotate each dot with its effect value (and ``*`` when significant).
-            Default ``False``.
+            Default ``True``.
         value_decimals : int, optional
             Number of decimal places for the value labels shown when
-            ``show_values=True``.  Default ``2``.
+            ``show_values=True``.  Defaults to ``1`` when ``pct_points=True``
+            or a relative effect is shown, otherwise ``2``.
+        pct_points : bool, optional
+            Multiply absolute effect values by 100 for display, expressing them
+            as percentage points (pp).  The x-axis label becomes
+            ``"Absolute Effect (pp)"`` and annotations gain a ``"pp"`` suffix.
+            Default ``False``.
+        combine_values : bool, optional
+            When ``True`` and ``show_values=True``, append the secondary effect
+            in parentheses to each dot annotation — e.g. ``+3.0pp (+15.4%)``
+            when plotting absolute, or ``+15.4% (+3.0pp)`` when plotting
+            relative.  Default ``False``.
         save_path : str or path-like, optional
             File path to save the figure.  When ``group_by`` produces multiple
             figures the group key is inserted before the file extension, e.g.
@@ -2358,6 +2369,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             value_decimals=value_decimals,
             panel_spacing=panel_spacing,
             repeat_ylabels=repeat_ylabels,
+            pct_points=pct_points,
+            combine_values=combine_values,
             save_path=save_path,
         )
 

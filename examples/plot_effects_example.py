@@ -1,7 +1,5 @@
 # %% Imports
-import matplotlib
-
-matplotlib.use("Agg")  # non-interactive backend — swap to "TkAgg" or remove for interactive use
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -60,61 +58,61 @@ analyzer.get_effects()
 
 print(
     analyzer.results[
-        ["country", "type", "outcome", "absolute_effect", "relative_effect", "standard_error", "pvalue", "stat_significance"]
+        [
+            "country",
+            "type",
+            "outcome",
+            "absolute_effect",
+            "relative_effect",
+            "standard_error",
+            "pvalue",
+            "stat_significance",
+        ]
     ].to_string(index=False)
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 1 — absolute effects, sorted by magnitude
+# Case 1 — absolute effects, sorted by magnitude (defaults)
+#           show_values=True and sort_by_magnitude=True are on by default
 # ─────────────────────────────────────────────────────────────────────────────
-analyzer.plot_effects(
-    title="Treatment Effects — Revenue & Conversion",
-    sort_by_magnitude=True,
-    show_values=True,
-)
+analyzer.plot_effects(title="Treatment Effects — Revenue & Conversion")
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 2 — conversion rate in percentage points (pct_points=True)
-#           values shown as "+3.0pp" instead of "+0.03"
+# Case 2 — conversion rate as percentage points
+#           "+3.0pp" instead of "+0.03"
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="converted",
     title="Conversion Rate — Percentage Points",
     pct_points=True,
-    show_values=True,
-    sort_by_magnitude=True,
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 3 — combined label: absolute (pp) with relative % in parentheses
-#           "+3.0pp (+15.4%)" in a single absolute-effect panel
+# Case 3 — combine_values=True: absolute (pp) + relative % in one annotation
+#           "+3.0pp (+15.4%)" — x-axis: "Absolute (Relative) Effect"
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="converted",
-    title="Conversion Rate — pp with Relative in Parentheses",
+    title="Conversion Rate — Absolute (Relative) Effect",
     effect="absolute",
     pct_points=True,
-    show_values=True,
-    combined_label=True,
-    sort_by_magnitude=True,
+    combine_values=True,
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 4 — combined label starting from relative:
-#           "+15.4% (+3.0pp)" — relative panel, absolute in parentheses
+# Case 4 — combine_values=True starting from relative
+#           "+15.4% (+3.0pp)" — x-axis: "Relative (Absolute) Effect"
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="converted",
-    title="Conversion Rate — Relative with pp in Parentheses",
+    title="Conversion Rate — Relative (Absolute) Effect",
     effect="relative",
     pct_points=True,
-    show_values=True,
-    combined_label=True,
-    sort_by_magnitude=True,
+    combine_values=True,
 )
 
 # %%
@@ -122,46 +120,43 @@ analyzer.plot_effects(
 # Case 5 — side-by-side absolute (pp) and relative panels
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
-    title="Conversion Rate — Absolute (pp) & Relative Side-by-Side",
+    title="Effects — Absolute & Relative Side-by-Side",
     effect=["absolute", "relative"],
     pct_points=True,
-    show_values=True,
-    sort_by_magnitude=True,
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 6 — group by country (one figure per country, rows = type)
-#           with pooled meta-analysis row
+# Case 6 — group by country, pooled meta-analysis row
+#           one figure per country; rows = experiment type
 # ─────────────────────────────────────────────────────────────────────────────
 figs_by_country = analyzer.plot_effects(
     group_by="country",
     pct_points=True,
-    show_values=True,
-    sort_by_magnitude=True,
+    combine_values=True,
     meta_analysis=True,
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 7 — group by type (one figure per experiment type, rows = country)
+# Case 7 — group by experiment type
+#           one figure per type; rows = country
 # ─────────────────────────────────────────────────────────────────────────────
 figs_by_type = analyzer.plot_effects(
     group_by="type",
     pct_points=True,
-    show_values=True,
-    sort_by_magnitude=True,
 )
+
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 8 — single outcome with pooled meta-analysis row
+# Case 8 — single outcome with pooled meta-analysis row + combine_values
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="revenue",
     meta_analysis=True,
-    show_values=True,
-    sort_by_magnitude=True,
+    combine_values=True,
     title="Revenue Effect — with Pooled Estimate",
 )
 
@@ -173,7 +168,6 @@ analyzer.plot_effects(
 analyzer.plot_effects(
     y="outcome",
     title="Effects by Experiment",
-    show_values=True,
 )
 
 # %%
@@ -189,7 +183,7 @@ df_single = pd.DataFrame(
         "experiment": "email_campaign",
         "treatment": t_single,
         "revenue": np.random.normal(50, 20, n_single) + 5.5 * t_single,
-        "converted": np.random.binomial(1, np.clip(0.12 + 0.04 * t_single, 0, 1), n_single),
+        "converted": np.random.binomial(1, np.clip(0.12 + 01.04 * t_single, 0, 1), n_single),
         "orders": np.random.poisson(2 + t_single, n_single),
         "sessions": np.random.normal(3, 1, n_single) + 0.3 * t_single,
     }
@@ -208,21 +202,19 @@ analyzer_single.plot_effects(
     y="outcome",
     title="Email Campaign Results",
     panel_titles="Treatment vs Control",
-    show_values=True,
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 11 — single experiment, conversion in pp + combined label
+# Case 11 — single experiment, conversion in pp + combine_values
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer_single.plot_effects(
     outcomes="converted",
     y="outcome",
-    title="Email Campaign — Conversion (pp + relative)",
+    title="Email Campaign — Conversion (Absolute + Relative)",
     panel_titles="Treatment vs Control",
     pct_points=True,
-    show_values=True,
-    combined_label=True,
+    combine_values=True,
 )
 
-print("\nAll examples rendered (no files saved).")
+# %%
