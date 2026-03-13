@@ -28,7 +28,12 @@ _CLR_SPINE = "#cbd5e1"  # spine / tick color
 def _fmt_label(value: float, significant: int, eff_col: str, decimals: int = 2, pct_points: bool = False) -> str:
     """Format an effect value as a label, appending '*' when significant."""
     if "relative" in eff_col:
-        text = f"{value:+.{decimals}%}"
+        if value > 1:
+            text = f">100.{'0' * decimals}%"
+        elif value < -1:
+            text = f"<-100.{'0' * decimals}%"
+        else:
+            text = f"{value:+.{decimals}%}"
     elif pct_points:
         text = f"{value:+.{decimals}f}pp"
     else:
@@ -210,7 +215,13 @@ def _draw_panels_into_axes(
                             lbl = f"{lbl} ({secondary_eff:+.{value_decimals}f})"
                     else:
                         # plotting absolute → append relative %
-                        lbl = f"{lbl} ({secondary_eff:+.{value_decimals}%})"
+                        if secondary_eff > 1:
+                            rel_str = f">100.{'0' * value_decimals}%"
+                        elif secondary_eff < -1:
+                            rel_str = f"<-100.{'0' * value_decimals}%"
+                        else:
+                            rel_str = f"{secondary_eff:+.{value_decimals}%}"
+                        lbl = f"{lbl} ({rel_str})"
                 ax.text(eff, i - 0.14, lbl, ha="center", va="bottom", fontsize=7.5, color=color, zorder=6)
 
         ax.set_yticks(y_pos)
