@@ -628,6 +628,13 @@ def plot_effects(
     if data.empty:
         return None
 
+    # Suppress rows with degenerate SE (zero, NaN, inf) so the plot is consistent
+    # with the pooled estimate, which applies the same validity filter.
+    if "standard_error" in data.columns:
+        bad_se = ~(data["standard_error"].notna() & np.isfinite(data["standard_error"]) & (data["standard_error"] > 0))
+        data.loc[bad_se, "absolute_effect"] = np.nan
+        data.loc[bad_se, "relative_effect"] = np.nan
+
     effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
 
     def _effect_cols(e: str) -> tuple[str, str, str, str]:
