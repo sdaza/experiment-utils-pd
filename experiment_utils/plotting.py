@@ -102,7 +102,7 @@ def _draw_panels_into_axes(
     show_yticklabels: bool | list[bool] = True,
     row_order: dict | None = None,
     pct_points: bool = False,
-    combined_label: bool = False,
+    combine_values: bool = False,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -129,7 +129,7 @@ def _draw_panels_into_axes(
         los = list(od[_lo_col])
         his = list(od[_hi_col])
         sigs = list(od[sig_col]) if sig_col in od.columns else [0] * len(od)
-        # secondary effect for combined_label: the column that is NOT being plotted
+        # secondary effect for combine_values: the column that is NOT being plotted
         _secondary_col = "absolute_effect" if "relative" in eff_col else "relative_effect"
         secondary_effs = list(od[_secondary_col]) if _secondary_col in od.columns else [None] * len(od)
 
@@ -197,7 +197,7 @@ def _draw_panels_into_axes(
             if show_values:
                 lbl = _fmt_label(eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points)
                 if (
-                    combined_label
+                    combine_values
                     and secondary_eff is not None
                     and pd.notna(secondary_eff)
                     and np.isfinite(secondary_eff)
@@ -222,12 +222,7 @@ def _draw_panels_into_axes(
 
         ax.tick_params(axis="y", length=0, pad=8 if show_yticks else 2)
         ax.tick_params(axis="x", labelsize=8.5, colors="#64748b", pad=4)
-        if combined_label:
-            _note = "Absolute effect in parentheses" if "relative" in eff_col else "Relative effect in parentheses"
-            _xlabel = f"{x_label}\n{_note}"
-        else:
-            _xlabel = x_label
-        ax.set_xlabel(_xlabel, fontsize=9.5, color="#64748b", labelpad=6)
+        ax.set_xlabel(x_label, fontsize=9.5, color="#64748b", labelpad=6)
         ax.set_ylim(-0.6, n_rows - 0.4)
         ax.invert_yaxis()
         for spine in ("top", "right", "left"):
@@ -328,18 +323,23 @@ def _make_pooled_meta(
         eff = float((w * od[eff_col]).sum() / w.sum())
         se = float(np.sqrt(1.0 / w.sum()))
         pvalue = float(2 * stats.norm.sf(abs(eff / se)))
-        rows.append(
-            {
-                panel_col: panel_val,
-                "_label": "Pooled",
-                eff_col: eff,
-                lo_col: eff - z * se,
-                hi_col: eff + z * se,
-                "standard_error": se,
-                "pvalue": pvalue,
-                sig_col: 1 if pvalue < alpha else 0,
-            }
-        )
+        row: dict = {
+            panel_col: panel_val,
+            "_label": "Pooled",
+            eff_col: eff,
+            lo_col: eff - z * se,
+            hi_col: eff + z * se,
+            "standard_error": se,
+            "pvalue": pvalue,
+            sig_col: 1 if pvalue < alpha else 0,
+        }
+        # also pool the secondary effect so combine_values can annotate the pooled row
+        for sec_col in ("relative_effect", "absolute_effect"):
+            if sec_col != eff_col and sec_col in od.columns:
+                sec_valid = od[sec_col].notna() & od[sec_col].apply(np.isfinite)
+                if sec_valid.any():
+                    row[sec_col] = float((w[sec_valid] * od.loc[sec_valid, sec_col]).sum() / w[sec_valid].sum())
+        rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
@@ -391,7 +391,7 @@ def _render_effects_figure(
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
     pct_points: bool = False,
-    combined_label: bool = False,
+    combine_values: bool = False,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -451,7 +451,7 @@ def _render_effects_figure(
         show_yticklabels=show_yticklabels,
         row_order=row_order,
         pct_points=pct_points,
-        combined_label=combined_label,
+        combine_values=combine_values,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -476,7 +476,7 @@ def _render_multi_effect_figure(
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
     pct_points: bool = False,
-    combined_label: bool = False,
+    combine_values: bool = False,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -562,7 +562,7 @@ def _render_multi_effect_figure(
             show_yticklabels=show_yticks,
             row_order=row_order,
             pct_points=(pct_points and ec == "absolute_effect"),
-            combined_label=combined_label,
+            combine_values=combine_values,
         )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -585,12 +585,12 @@ def plot_effects(
     y: str = "experiment",
     panel_titles: str | list | dict | None = None,
     row_labels: dict | None = None,
-    show_values: bool = False,
+    show_values: bool = True,
     value_decimals: int | None = None,
     panel_spacing: float | None = None,
     repeat_ylabels: bool = False,
     pct_points: bool = False,
-    combined_label: bool = False,
+    combine_values: bool = False,
     save_path: str | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
@@ -672,7 +672,7 @@ def plot_effects(
 
     show_values : bool, optional
         Annotate each dot with its effect value (and ``*`` when significant).
-        Default ``False``.
+        Default ``True``.
     value_decimals : int, optional
         Number of decimal places for the value labels shown when
         ``show_values=True``.  Defaults to ``1`` when ``pct_points=True``
@@ -694,11 +694,17 @@ def plot_effects(
         ``"Absolute Effect (pp)"`` and ``show_values`` annotations gain a
         ``"pp"`` suffix.  Has no effect on relative effect columns.
         Default ``False``.
-    combined_label : bool, optional
-        When ``True`` and ``show_values=True``, append the relative effect in
-        parentheses to each dot annotation, e.g. ``+3.0pp (+15.4%)``.
-        Requires ``relative_effect`` to be present in the data.
-        Pairs naturally with ``pct_points=True`` and ``effect="absolute"``.
+    combine_values : bool, optional
+        When ``True`` and ``show_values=True``, append the *secondary* effect
+        in parentheses to each dot annotation.  The secondary effect is the
+        one not being plotted:
+
+        - ``effect="absolute"`` → ``+3.0pp (+15.4%)``  (relative in parens)
+        - ``effect="relative"`` → ``+15.4% (+3.0pp)``  (absolute pp in parens)
+
+        Also updates the x-axis label to reflect both metrics, e.g.
+        ``"Absolute (Relative) Effect (pp)"`` or
+        ``"Relative (Absolute) Effect"``.
         Default ``False``.
     save_path : str or path-like, optional
         File path to save the figure.  When ``group_by`` produces multiple
@@ -755,16 +761,16 @@ def plot_effects(
 
     if value_decimals is None:
         has_relative = any(e == "relative" for e in ([effect] if isinstance(effect, str) else list(effect)))
-        value_decimals = 1 if (pct_points or has_relative or combined_label) else 2
+        value_decimals = 1 if (pct_points or has_relative or combine_values) else 2
 
     effects: list[str] = [effect] if isinstance(effect, str) else list(effect)
 
     def _effect_cols(e: str) -> tuple[str, str, str, str]:
         if e == "relative":
-            return "relative_effect", "rel_effect_lower", "rel_effect_upper", "Relative Effect"
-        if pct_points:
-            return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect (pp)"
-        return "absolute_effect", "abs_effect_lower", "abs_effect_upper", "Absolute Effect"
+            lbl = "Relative (Absolute) Effect" if combine_values else "Relative Effect"
+            return "relative_effect", "rel_effect_lower", "rel_effect_upper", lbl
+        lbl = "Absolute (Relative) Effect" if combine_values else "Absolute Effect"
+        return "absolute_effect", "abs_effect_lower", "abs_effect_upper", lbl
 
     z = stats.norm.ppf(1 - alpha / 2)
 
@@ -840,7 +846,7 @@ def plot_effects(
         panel_spacing=panel_spacing,
         repeat_ylabels=repeat_ylabels,
         pct_points=pct_points,
-        combined_label=combined_label,
+        combine_values=combine_values,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:

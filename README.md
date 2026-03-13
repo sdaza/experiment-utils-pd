@@ -16,7 +16,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
-- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
+- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with percentage-point scaling, combined absolute/relative annotations, optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
@@ -928,8 +928,67 @@ The two axis roles are controlled by `y`:
 ```python
 analyzer.get_effects()
 
-# save_path writes the file automatically
-fig = analyzer.plot_effects(title="Treatment Effects", save_path="effects.png")
+# show_values=True is the default — each dot is annotated with its effect value
+fig = analyzer.plot_effects(title="Treatment Effects")
+plt.show()
+```
+
+**Percentage points (`pct_points=True`)**
+
+For rate/proportion outcomes, display absolute effects as percentage points instead of raw decimals (e.g. `+3.0pp` instead of `+0.030`):
+
+```python
+fig = analyzer.plot_effects(
+    outcomes="converted",
+    pct_points=True,
+    title="Conversion Rate (pp)",
+)
+plt.show()
+```
+
+**Combined label — absolute (pp) + relative in one annotation**
+
+Show both metrics on a single panel with `combine_values=True`. The x-axis label updates automatically:
+
+```python
+# "+3.0pp (+15.4%)" on the absolute panel
+fig = analyzer.plot_effects(
+    outcomes="converted",
+    effect="absolute",
+    pct_points=True,
+    combine_values=True,
+    title="Conversion Rate",
+)
+plt.show()
+
+# "+15.4% (+3.0pp)" on the relative panel
+fig = analyzer.plot_effects(
+    outcomes="converted",
+    effect="relative",
+    pct_points=True,
+    combine_values=True,
+    title="Conversion Rate",
+)
+plt.show()
+```
+
+X-axis labels when `combine_values=True`:
+
+| `effect` | `pct_points` | x-axis label |
+|---|---|---|
+| `"absolute"` | `False` | `Absolute (Relative) Effect` |
+| `"absolute"` | `True` | `Absolute (Relative) Effect (pp)` |
+| `"relative"` | — | `Relative (Absolute) Effect` |
+
+**Side-by-side absolute (pp) and relative panels**
+
+```python
+fig = analyzer.plot_effects(
+    effect=["absolute", "relative"],
+    pct_points=True,
+    title="Effects — Absolute & Relative",
+)
+plt.show()
 ```
 
 **Single experiment, multiple outcomes on the y-axis**
@@ -942,6 +1001,7 @@ fig = analyzer.plot_effects(
     title="My Experiment",
     panel_titles="Treatment vs Control",   # single string → same for all panels
 )
+plt.show()
 ```
 
 **Multiple experiments, outcomes on the y-axis**
@@ -958,8 +1018,9 @@ analyzer.get_effects()
 # One panel per experiment group; rows = outcomes
 fig = analyzer.plot_effects(
     y="outcome",
-    panel_titles={"US | email": "US — Email", "EU | push": "EU — Push"},  # dict overrides
+    panel_titles={"US | email": "US — Email", "EU | push": "EU — Push"},
 )
+plt.show()
 ```
 
 **Standalone usage**
@@ -974,21 +1035,24 @@ fig = plot_effects(
     title="Treatment Effects",
     save_path="effects.png",   # optional; supports png, pdf, svg, ...
 )
+plt.show()
 ```
 
 **Add a pooled meta-analysis row**
 
 ```python
-# Auto-compute pooled estimate
+# Auto-compute pooled estimate (IVW of visible rows)
 fig = analyzer.plot_effects(
     outcomes="revenue",
     meta_analysis=True,
     title="Revenue — with Pooled Estimate",
 )
+plt.show()
 
 # Pass a pre-computed combine_effects() DataFrame
 pooled = analyzer.combine_effects(grouping_cols=["outcome"])
 fig = analyzer.plot_effects(meta_analysis=pooled)
+plt.show()
 ```
 
 **Split into one figure per group**
@@ -997,21 +1061,17 @@ When `experiment_identifier` contains multiple columns (e.g. `["country", "type"
 
 ```python
 # One figure per country; rows = type
+figs = analyzer.plot_effects(group_by="country", meta_analysis=True)
+for fig in figs.values():
+    plt.figure(fig.number)
+    plt.show()
+
 # save_path inserts the group key before the extension:
 #   "effects.png" → "effects_US.png", "effects_EU.png", ...
-figs = analyzer.plot_effects(group_by="country", meta_analysis=True, save_path="effects.png")
-
-# One figure per experiment type; rows = country
-figs = analyzer.plot_effects(group_by="type")
+figs = analyzer.plot_effects(group_by="country", save_path="effects.png")
 ```
 
 `group_by` returns `dict[str, Figure]`; without it a single `Figure` is returned.
-
-**Relative effects**
-
-```python
-fig = analyzer.plot_effects(effect="relative", meta_analysis=True)
-```
 
 **Multiple comparison adjustments**
 
@@ -1023,6 +1083,7 @@ analyzer.adjust_pvalues(method="holm")
 
 # Legend shows "Significant (holm, α=0.05)" and coloring uses adjusted p-values
 fig = analyzer.plot_effects()
+plt.show()
 ```
 
 **Key parameters**
@@ -1033,18 +1094,20 @@ fig = analyzer.plot_effects()
 | `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
 | `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
-| `meta_analysis` | `None` | `True` (auto-compute), `DataFrame` (pre-computed), or `None` |
+| `meta_analysis` | `None` | `True` (auto-compute IVW from visible rows), `DataFrame` (pre-computed), or `None` |
 | `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
 | `group_by` | `None` | Column(s) to split into separate figures |
 | `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
 | `title` | `None` | Figure suptitle (group value used automatically when `group_by` is set) |
 | `show_zero_line` | `True` | Vertical reference line at zero |
-| `show_values` | `False` | Annotate each dot with its effect value (`*` when significant) |
-| `value_decimals` | `2` | Decimal places for value labels when `show_values=True` |
+| `show_values` | `True` | Annotate each dot with its effect value (`*` when significant) |
+| `value_decimals` | auto | Decimal places for value labels. Defaults to `1` when `pct_points=True` or relative effect shown; `2` otherwise |
+| `pct_points` | `False` | Multiply absolute effects by 100 for display as percentage points (pp). Updates axis label and annotations |
+| `combine_values` | `False` | Append the secondary effect in parentheses to each annotation: `+3.0pp (+15.4%)` or `+15.4% (+3.0pp)`. Also updates the x-axis label |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
-| `row_labels` | `None` | Rename individual y-axis row labels. `dict` mapping auto-generated labels to display strings, e.g. `{"US \| email": "Email (US)"}`. Unlisted rows keep their auto-generated label |
-| `save_path` | `None` | File path to save the figure (e.g. `"effects.png"`). Supports `png`, `pdf`, `svg`, and any other matplotlib-supported format. With `group_by`, the group key is inserted before the extension: `"effects.png"` → `"effects_US.png"`, `"effects_EU.png"`, etc. |
+| `row_labels` | `None` | Rename individual y-axis row labels. `dict` mapping auto-generated labels to display strings, e.g. `{"US \| email": "Email (US)"}` |
+| `save_path` | `None` | File path to save the figure. With `group_by`, the group key is inserted before the extension: `"effects.png"` → `"effects_US.png"`, etc. |
 | `figsize` | auto | `(width, height)` in inches |
 
 ### Retrodesign Analysis
