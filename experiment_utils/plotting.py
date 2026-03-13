@@ -261,6 +261,32 @@ def _add_legend_and_title(
     plt.close(fig)
 
 
+def _fill_missing_panel_rows(
+    data: pd.DataFrame,
+    panel_col: str,
+    row_col: str,
+) -> pd.DataFrame:
+    """Add NaN rows for every panel × row-label combination absent from *data*.
+
+    This guarantees that all panels share the same y-positions so dots in
+    different panels are vertically aligned.  Missing entries have NaN for
+    every column except *panel_col* and *row_col*; the draw loop already
+    skips NaN effect rows while keeping the guide-line and tick-label.
+    """
+    unique_panels = list(data[panel_col].unique())
+    # Preserve first-appearance order across all panels
+    all_labels = list(dict.fromkeys(data[row_col].tolist()))
+    rows_to_add = []
+    for panel_val in unique_panels:
+        existing = set(data[data[panel_col] == panel_val][row_col])
+        for label in all_labels:
+            if label not in existing:
+                rows_to_add.append({panel_col: panel_val, row_col: label})
+    if rows_to_add:
+        data = pd.concat([data, pd.DataFrame(rows_to_add)], ignore_index=True)
+    return data
+
+
 def _render_effects_figure(
     data: pd.DataFrame,
     unique_outcomes: list[str],
@@ -290,6 +316,7 @@ def _render_effects_figure(
 
     unique_panels = list(data[panel_col].unique())
     n_panels = len(unique_panels)
+    data = _fill_missing_panel_rows(data, panel_col, row_col)
     max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
     if meta_df is not None and panel_col == "outcome":
         max_rows += 1
@@ -375,7 +402,7 @@ def _render_multi_effect_figure(
     n_panels = len(unique_panels)
     n_effects = len(effect_specs)
     n_cols = n_panels * n_effects
-
+    data = _fill_missing_panel_rows(data, panel_col, row_col)
     max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
     if meta_df is not None and panel_col == "outcome":
         max_rows += 1
