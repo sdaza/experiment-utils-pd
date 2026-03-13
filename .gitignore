@@ -2,6 +2,7 @@
 testing
 notebooks
 __pycache__
+/experiment_utils.egg-info
 experiment_utils.egg-info
 .venv
 .*cache
