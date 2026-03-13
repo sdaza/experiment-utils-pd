@@ -101,6 +101,16 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         Number of bootstrap iterations, by default 1000
     bootstrap_ci_method : str, optional
         Bootstrap CI method ('percentile', 'basic'), by default 'percentile'
+    bootstrap_pvalue_method : str, optional
+        Method for computing the bootstrap p-value ('percentile' or 'studentized'),
+        by default 'studentized'.
+
+        - ``'percentile'``: ``P(|β* − mean(β*)| ≥ |β_obs|)``. Fast and always available.
+        - ``'studentized'``: Studentized bootstrap-t. Uses each resample's analytical SE to
+          pivot the statistic: ``t* = (β* − β_obs) / SE*``, then ``P(|t*| ≥ |t_obs|)``.
+          Better Type I error control for non-normal distributions and small samples because
+          it accounts for SE variability across resamples. Recommended when data is clearly
+          non-normal or N < 100 per group.
     bootstrap_stratify : bool, optional
         Whether to stratify bootstrap resampling by treatment group, by default True
     bootstrap_seed : int, optional
@@ -240,6 +250,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         bootstrap: bool = False,
         bootstrap_iterations: int = 1000,
         bootstrap_ci_method: str = "percentile",
+        bootstrap_pvalue_method: str = "studentized",
         bootstrap_stratify: bool = True,
         bootstrap_seed: int | None = None,
         skip_bootstrap_for_survival: bool = False,
@@ -302,6 +313,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._bootstrap = bootstrap
         self._bootstrap_iterations = bootstrap_iterations
         self._bootstrap_ci_method = bootstrap_ci_method
+        self._bootstrap_pvalue_method = bootstrap_pvalue_method
         self._bootstrap_stratify = bootstrap_stratify
         self._bootstrap_seed = bootstrap_seed
         self._skip_bootstrap_for_survival = skip_bootstrap_for_survival
@@ -1679,27 +1691,31 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                             )
 
                                 if not skip_bootstrap:
-                                    bootstrap_abs_effects, bootstrap_rel_effects = self._bootstrap_single_effect(
-                                        data=comparison_data,
-                                        outcome=outcome,
-                                        adjustment=adjustment,
-                                        model_func=estimator_func,
-                                        relevant_covariates=list(relevant_covariates),
-                                        numeric_covariates=comp_numeric_covariates,
-                                        binary_covariates=comp_binary_covariates,
-                                        min_binary_count=min_binary_count,
-                                        model_type=model_type,
-                                        compute_marginal_effects=me_setting,
-                                        interaction_covariates=active_int_covs,
-                                        ratio_cols=(_ratio_lin_cols[outcome][1], _ratio_lin_cols[outcome][2])
-                                        if _is_ratio
-                                        else None,
+                                    bootstrap_abs_effects, bootstrap_rel_effects, bootstrap_ses = (
+                                        self._bootstrap_single_effect(
+                                            data=comparison_data,
+                                            outcome=outcome,
+                                            adjustment=adjustment,
+                                            model_func=estimator_func,
+                                            relevant_covariates=list(relevant_covariates),
+                                            numeric_covariates=comp_numeric_covariates,
+                                            binary_covariates=comp_binary_covariates,
+                                            min_binary_count=min_binary_count,
+                                            model_type=model_type,
+                                            compute_marginal_effects=me_setting,
+                                            interaction_covariates=active_int_covs,
+                                            ratio_cols=(_ratio_lin_cols[outcome][1], _ratio_lin_cols[outcome][2])
+                                            if _is_ratio
+                                            else None,
+                                        )
                                     )
                                     bootstrap_results = self._calculate_bootstrap_inference(
                                         bootstrap_abs_effects,
                                         bootstrap_rel_effects,
                                         output["absolute_effect"],
                                         output["relative_effect"],
+                                        bootstrap_ses=bootstrap_ses,
+                                        observed_se=output.get("standard_error"),
                                     )
                                     output["standard_error"] = bootstrap_results["standard_error"]
                                     output["pvalue"] = bootstrap_results["pvalue"]
@@ -2011,6 +2027,37 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         self._results = results_df
 
+    def _resolve_grouping_cols(self, data: pd.DataFrame, grouping_cols: list[str] | None) -> list[str]:
+        """
+        Resolve grouping columns for meta-analysis and aggregation methods.
+
+        When grouping_cols is explicitly provided, ensures 'outcome' is included.
+        When None, defaults to ['outcome'] and auto-appends 'treatment_group' /
+        'control_group' whenever those columns exist with more than one unique value.
+        Logs the final grouping so callers can verify the behaviour.
+        """
+        if grouping_cols is not None:
+            cols = list(grouping_cols)
+            if "outcome" not in cols:
+                cols.append("outcome")
+            self._logger.info(f"Grouping by: {cols}")
+            return cols
+
+        cols = ["outcome"]
+        auto_added = []
+        for col in ["treatment_group", "control_group"]:
+            if col in data.columns and data[col].nunique() > 1:
+                cols.append(col)
+                auto_added.append(col)
+
+        if auto_added:
+            self._logger.warning(
+                f"Multiple treatment/control groups detected — auto-grouping by {cols}. "
+                "Pass grouping_cols explicitly to override."
+            )
+        self._logger.info(f"Grouping by: {cols}")
+        return cols
+
     def combine_effects(self, data: pd.DataFrame | None = None, grouping_cols: list[str] | None = None) -> pd.DataFrame:
         """
         Combine effects across experiments using fixed effects meta-analysis.
@@ -2032,13 +2079,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if data is None:
             data = self._results
 
-        if grouping_cols is None:
-            self._logger.warning("No grouping columns specified, using only outcome!")
-            grouping_cols = ["outcome"]
-        else:
-            grouping_cols = self.__ensure_list(grouping_cols)
-            if "outcome" not in grouping_cols:
-                grouping_cols.append("outcome")
+        grouping_cols = self._resolve_grouping_cols(data, grouping_cols)
 
         if any(data.groupby(grouping_cols).size() < 2):
             self._logger.warning("There are some combinations with only one experiment!")
@@ -2142,13 +2183,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         if data is None:
             data = self._results
 
-        if grouping_cols is None:
-            self._logger.warning("No grouping columns specified, using only outcome!")
-            grouping_cols = ["outcome"]
-        else:
-            grouping_cols = self.__ensure_list(grouping_cols)
-            if "outcome" not in grouping_cols:
-                grouping_cols.append("outcome")
+        grouping_cols = self._resolve_grouping_cols(data, grouping_cols)
 
         aggregate_results = (
             data.groupby(grouping_cols).apply(self.__compute_weighted_effect, include_groups=False).reset_index()
@@ -2273,7 +2308,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         meta_df = None
         if meta_analysis is True:
-            meta_df = self.combine_effects(grouping_cols=["outcome"])
+            meta_df = self.combine_effects(grouping_cols=self._resolve_grouping_cols(self._results, None))
             meta_df["_label"] = "Pooled"
         elif isinstance(meta_analysis, pd.DataFrame):
             meta_df = meta_analysis.copy()
