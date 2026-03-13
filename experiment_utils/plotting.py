@@ -25,12 +25,19 @@ _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
 
 
-def _fmt_label(value: float, significant: int, eff_col: str, decimals: int = 2, pct_points: bool = False) -> str:
+def _fmt_label(
+    value: float,
+    significant: int,
+    eff_col: str,
+    decimals: int = 2,
+    pct_points: bool = False,
+    relative_cap: float = 5.0,
+) -> str:
     """Format an effect value as a label, appending '*' when significant."""
     if "relative" in eff_col:
-        if value > 1:
+        if value > relative_cap:
             text = f">100.{'0' * decimals}%"
-        elif value < -1:
+        elif value < -relative_cap:
             text = f"<-100.{'0' * decimals}%"
         else:
             text = f"{value:+.{decimals}%}"
@@ -108,6 +115,7 @@ def _draw_panels_into_axes(
     row_order: dict | None = None,
     pct_points: bool = False,
     combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -200,7 +208,9 @@ def _draw_panels_into_axes(
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_values:
-                lbl = _fmt_label(eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points)
+                lbl = _fmt_label(
+                    eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points, relative_cap=relative_cap
+                )
                 if (
                     combine_values
                     and secondary_eff is not None
@@ -215,9 +225,9 @@ def _draw_panels_into_axes(
                             lbl = f"{lbl} ({secondary_eff:+.{value_decimals}f})"
                     else:
                         # plotting absolute → append relative %
-                        if secondary_eff > 1:
+                        if secondary_eff > relative_cap:
                             rel_str = f">100.{'0' * value_decimals}%"
-                        elif secondary_eff < -1:
+                        elif secondary_eff < -relative_cap:
                             rel_str = f"<-100.{'0' * value_decimals}%"
                         else:
                             rel_str = f"{secondary_eff:+.{value_decimals}%}"
@@ -403,6 +413,7 @@ def _render_effects_figure(
     repeat_ylabels: bool = False,
     pct_points: bool = False,
     combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -463,6 +474,7 @@ def _render_effects_figure(
         row_order=row_order,
         pct_points=pct_points,
         combine_values=combine_values,
+        relative_cap=relative_cap,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -488,6 +500,7 @@ def _render_multi_effect_figure(
     repeat_ylabels: bool = False,
     pct_points: bool = False,
     combine_values: bool = False,
+    relative_cap: float = 5.0,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -574,6 +587,7 @@ def _render_multi_effect_figure(
             row_order=row_order,
             pct_points=(pct_points and ec == "absolute_effect"),
             combine_values=combine_values,
+            relative_cap=relative_cap,
         )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -602,6 +616,7 @@ def plot_effects(
     repeat_ylabels: bool = False,
     pct_points: bool = False,
     combine_values: bool = False,
+    relative_cap: float = 5.0,
     save_path: str | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
@@ -705,6 +720,12 @@ def plot_effects(
         ``"Absolute Effect (pp)"`` and ``show_values`` annotations gain a
         ``"pp"`` suffix.  Has no effect on relative effect columns.
         Default ``False``.
+    relative_cap : float, optional
+        When displaying relative effects (as standalone labels or in
+        ``combine_values`` parentheses), values whose absolute size exceeds
+        this threshold are shown as ``>100%`` or ``<-100%`` instead of the
+        raw number.  The threshold is expressed as a multiplier (e.g. ``5.0``
+        means 500%).  Default ``5.0``.
     combine_values : bool, optional
         When ``True`` and ``show_values=True``, append the *secondary* effect
         in parentheses to each dot annotation.  The secondary effect is the
@@ -858,6 +879,7 @@ def plot_effects(
         repeat_ylabels=repeat_ylabels,
         pct_points=pct_points,
         combine_values=combine_values,
+        relative_cap=relative_cap,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
