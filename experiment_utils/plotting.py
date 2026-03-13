@@ -176,10 +176,11 @@ def _draw_panels_into_axes(
                 and np.isfinite(lo)
                 and np.isfinite(hi)
             )
-            if ci_valid:
-                ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
-                ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
-                ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+            if not ci_valid:
+                continue
+            ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
+            ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
+            ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.scatter(eff, i, color=color, s=dot_size, marker=marker, zorder=5, edgecolors="white", linewidths=0.7)
 
             if show_values:
@@ -331,11 +332,14 @@ def _render_effects_figure(
     # derive a stable row order from the first panel so all panels share the same
     # top-to-bottom sequence regardless of per-panel effect magnitudes.
     row_order: dict | None = None
-    if sort_by_magnitude and n_panels > 1:
+    if n_panels > 1:
         row_order = {}
         first_panel = unique_panels[0]
         pdata = data[data[panel_col] == first_panel]
-        sorted_rows = pdata.sort_values(by=eff_col, ascending=False)
+        if sort_by_magnitude:
+            sorted_rows = pdata.sort_values(by=eff_col, ascending=False)
+        else:
+            sorted_rows = pdata  # preserve natural order of first panel
         reference_order = list(sorted_rows[row_col])
         for pval in unique_panels:
             row_order[pval] = reference_order
@@ -415,16 +419,21 @@ def _render_multi_effect_figure(
 
     fig, all_axes = plt.subplots(1, n_cols, figsize=figsize, squeeze=False)
 
-    # derive a stable row order from the first effect so all panels share the
+    # derive a stable row order from the first panel so all panels share the
     # same top-to-bottom sequence regardless of which effect is displayed.
     row_order: dict | None = None
-    if sort_by_magnitude:
-        first_ec = effect_specs[0][0]
+    if n_panels > 1:
         row_order = {}
-        for pval in unique_panels:
-            pdata = data[data[panel_col] == pval]
+        first_panel = unique_panels[0]
+        pdata = data[data[panel_col] == first_panel]
+        if sort_by_magnitude:
+            first_ec = effect_specs[0][0]
             sorted_rows = pdata.sort_values(by=first_ec, ascending=False)
-            row_order[pval] = list(sorted_rows[row_col])
+        else:
+            sorted_rows = pdata  # preserve natural order of first panel
+        reference_order = list(sorted_rows[row_col])
+        for pval in unique_panels:
+            row_order[pval] = reference_order
 
     for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
         # prepare CI columns for this effect type
