@@ -262,6 +262,56 @@ def _add_legend_and_title(
     plt.close(fig)
 
 
+def _make_pooled_meta(
+    data: pd.DataFrame,
+    panel_col: str,
+    eff_col: str,
+    lo_col: str,
+    hi_col: str,
+    sig_col: str,
+    alpha: float,
+) -> pd.DataFrame | None:
+    """Compute IVW pooled estimate per panel from the visible plot data.
+
+    Always derives the pooled row from the same rows shown in the figure,
+    so it can never be inconsistent with external pre-computed meta DataFrames.
+    Returns None when no panel has at least two valid experiments.
+    """
+    if "standard_error" not in data.columns:
+        return None
+    z = stats.norm.ppf(1 - alpha / 2)
+    rows = []
+    for panel_val in data[panel_col].unique():
+        od = data[data[panel_col] == panel_val]
+        valid = (
+            od["standard_error"].notna()
+            & od["standard_error"].apply(np.isfinite)
+            & (od["standard_error"] > 0)
+            & od[eff_col].notna()
+            & od[eff_col].apply(np.isfinite)
+        )
+        od = od[valid]
+        if len(od) < 2:
+            continue
+        w = 1.0 / (od["standard_error"] ** 2)
+        eff = float((w * od[eff_col]).sum() / w.sum())
+        se = float(np.sqrt(1.0 / w.sum()))
+        pvalue = float(2 * stats.norm.sf(abs(eff / se)))
+        rows.append(
+            {
+                panel_col: panel_val,
+                "_label": "Pooled",
+                eff_col: eff,
+                lo_col: eff - z * se,
+                hi_col: eff + z * se,
+                "standard_error": se,
+                "pvalue": pvalue,
+                sig_col: 1 if pvalue < alpha else 0,
+            }
+        )
+    return pd.DataFrame(rows) if rows else None
+
+
 def _fill_missing_panel_rows(
     data: pd.DataFrame,
     panel_col: str,
@@ -718,7 +768,18 @@ def plot_effects(
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
-        kw = {**shared_kw, "meta_df": group_meta}
+        # Always recompute the pooled row from the visible data so it is
+        # guaranteed to be the IVW of the individual rows shown, regardless
+        # of how (or on what dataset) the external meta_df was computed.
+        if group_meta is not None and len(effects) == 1:
+            sig_col_local = (
+                "stat_significance_mcp" if "stat_significance_mcp" in labelled.columns else "stat_significance"
+            )
+            effective_meta = _make_pooled_meta(labelled, panel_col, eff_col, lo_col, hi_col, sig_col_local, alpha)
+        else:
+            effective_meta = group_meta  # None or multi-effect passthrough
+
+        kw = {**shared_kw, "meta_df": effective_meta}
         if len(effects) == 1:
             return _render_effects_figure(
                 labelled,
