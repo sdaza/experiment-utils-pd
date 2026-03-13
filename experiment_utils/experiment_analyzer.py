@@ -2234,9 +2234,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         panel_titles: str | list | dict | None = None,
         row_labels: dict | None = None,
         show_values: bool = False,
-        value_decimals: int = 2,
+        value_decimals: int | None = None,
         panel_spacing: float | None = None,
         repeat_ylabels: bool = False,
+        pct_points: bool = False,
+        combined_label: bool = False,
         save_path: str | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":

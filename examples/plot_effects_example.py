@@ -2,7 +2,6 @@
 import matplotlib
 
 matplotlib.use("Agg")  # non-interactive backend — swap to "TkAgg" or remove for interactive use
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -61,78 +60,126 @@ analyzer.get_effects()
 
 print(
     analyzer.results[
-        ["country", "type", "outcome", "absolute_effect", "standard_error", "pvalue", "stat_significance"]
+        ["country", "type", "outcome", "absolute_effect", "relative_effect", "standard_error", "pvalue", "stat_significance"]
     ].to_string(index=False)
 )
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 1 — all experiments, sorted by magnitude
+# Case 1 — absolute effects, sorted by magnitude
 # ─────────────────────────────────────────────────────────────────────────────
-fig1 = analyzer.plot_effects(
+analyzer.plot_effects(
     title="Treatment Effects — Revenue & Conversion",
     sort_by_magnitude=True,
     show_values=True,
 )
-fig1.savefig("examples/plot_effects_basic.png", bbox_inches="tight", dpi=150)
-plt.close(fig1)
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 2 — group by country (one figure per country, rows = type)
+# Case 2 — conversion rate in percentage points (pct_points=True)
+#           values shown as "+3.0pp" instead of "+0.03"
+# ─────────────────────────────────────────────────────────────────────────────
+analyzer.plot_effects(
+    outcomes="converted",
+    title="Conversion Rate — Percentage Points",
+    pct_points=True,
+    show_values=True,
+    sort_by_magnitude=True,
+)
+
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 3 — combined label: absolute (pp) with relative % in parentheses
+#           "+3.0pp (+15.4%)" in a single absolute-effect panel
+# ─────────────────────────────────────────────────────────────────────────────
+analyzer.plot_effects(
+    outcomes="converted",
+    title="Conversion Rate — pp with Relative in Parentheses",
+    effect="absolute",
+    pct_points=True,
+    show_values=True,
+    combined_label=True,
+    sort_by_magnitude=True,
+)
+
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 4 — combined label starting from relative:
+#           "+15.4% (+3.0pp)" — relative panel, absolute in parentheses
+# ─────────────────────────────────────────────────────────────────────────────
+analyzer.plot_effects(
+    outcomes="converted",
+    title="Conversion Rate — Relative with pp in Parentheses",
+    effect="relative",
+    pct_points=True,
+    show_values=True,
+    combined_label=True,
+    sort_by_magnitude=True,
+)
+
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 5 — side-by-side absolute (pp) and relative panels
+# ─────────────────────────────────────────────────────────────────────────────
+analyzer.plot_effects(
+    title="Conversion Rate — Absolute (pp) & Relative Side-by-Side",
+    effect=["absolute", "relative"],
+    pct_points=True,
+    show_values=True,
+    sort_by_magnitude=True,
+)
+
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 6 — group by country (one figure per country, rows = type)
+#           with pooled meta-analysis row
 # ─────────────────────────────────────────────────────────────────────────────
 figs_by_country = analyzer.plot_effects(
     group_by="country",
+    pct_points=True,
+    show_values=True,
     sort_by_magnitude=True,
     meta_analysis=True,
 )
-for country, fig in figs_by_country.items():
-    fname = f"examples/plot_effects_country_{country.lower()}.png"
-    fig.savefig(fname, bbox_inches="tight", dpi=150)
-    plt.close(fig)
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 3 — group by type (one figure per experiment type, rows = country)
+# Case 7 — group by type (one figure per experiment type, rows = country)
 # ─────────────────────────────────────────────────────────────────────────────
 figs_by_type = analyzer.plot_effects(
     group_by="type",
+    pct_points=True,
+    show_values=True,
     sort_by_magnitude=True,
 )
-for exp_type, fig in figs_by_type.items():
-    fname = f"examples/plot_effects_type_{exp_type.replace('-', '_')}.png"
-    fig.savefig(fname, bbox_inches="tight", dpi=150)
-    plt.close(fig)
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 4 — single outcome with pooled meta-analysis row
+# Case 8 — single outcome with pooled meta-analysis row
 # ─────────────────────────────────────────────────────────────────────────────
-fig4 = analyzer.plot_effects(
+analyzer.plot_effects(
     outcomes="revenue",
     meta_analysis=True,
+    show_values=True,
     sort_by_magnitude=True,
     title="Revenue Effect — with Pooled Estimate",
 )
-fig4.savefig("examples/plot_effects_meta.png", bbox_inches="tight", dpi=150)
-plt.close(fig4)
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 5 — y="outcome": outcomes on the y-axis, experiments as panels
+# Case 9 — y="outcome": outcomes on the y-axis, experiments as panels
 #           useful when there are many outcomes and few experiments
 # ─────────────────────────────────────────────────────────────────────────────
-fig5 = analyzer.plot_effects(
+analyzer.plot_effects(
     y="outcome",
     title="Effects by Experiment",
+    show_values=True,
 )
-fig5.savefig("examples/plot_effects_y_outcome.png", bbox_inches="tight", dpi=150)
-plt.close(fig5)
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
-# Case 6 — single experiment with multiple outcomes (most common y="outcome" use)
-#           panel_titles overrides the auto subplot title
+# Case 10 — single experiment with multiple outcomes
+#            panel_titles overrides the auto subplot title
 # ─────────────────────────────────────────────────────────────────────────────
 np.random.seed(99)
 n_single = 1200
@@ -157,18 +204,25 @@ analyzer_single = ExperimentAnalyzer(
 )
 analyzer_single.get_effects()
 
-fig6 = analyzer_single.plot_effects(
+analyzer_single.plot_effects(
     y="outcome",
     title="Email Campaign Results",
     panel_titles="Treatment vs Control",
+    show_values=True,
 )
-fig6.savefig("examples/plot_effects_single_exp.png", bbox_inches="tight", dpi=150)
-plt.close(fig6)
 
-print("\nAll plots saved to examples/")
-print("  plot_effects_basic.png")
-print("  plot_effects_country_us.png  /  plot_effects_country_eu.png")
-print("  plot_effects_type_email.png  /  plot_effects_type_push.png  /  plot_effects_type_in_app.png")
-print("  plot_effects_meta.png")
-print("  plot_effects_y_outcome.png")
-print("  plot_effects_single_exp.png")
+# %%
+# ─────────────────────────────────────────────────────────────────────────────
+# Case 11 — single experiment, conversion in pp + combined label
+# ─────────────────────────────────────────────────────────────────────────────
+analyzer_single.plot_effects(
+    outcomes="converted",
+    y="outcome",
+    title="Email Campaign — Conversion (pp + relative)",
+    panel_titles="Treatment vs Control",
+    pct_points=True,
+    show_values=True,
+    combined_label=True,
+)
+
+print("\nAll examples rendered (no files saved).")
