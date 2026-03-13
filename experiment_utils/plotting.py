@@ -717,7 +717,8 @@ def plot_effects(
         repeat_ylabels=repeat_ylabels,
     )
 
-    def _render(labelled: pd.DataFrame, fig_title: str | None) -> plt.Figure:
+    def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
+        kw = {**shared_kw, "meta_df": group_meta}
         if len(effects) == 1:
             return _render_effects_figure(
                 labelled,
@@ -727,15 +728,29 @@ def plot_effects(
                 hi_col=hi_col,
                 x_label=x_label,
                 title=fig_title,
-                **shared_kw,
+                **kw,
             )
         effect_specs = [_effect_cols(e) for e in effects]
         return _render_multi_effect_figure(
             labelled,
             effect_specs=effect_specs,
             title=fig_title,
-            **shared_kw,
+            **kw,
         )
+
+    def _filter_meta_for_group(group_key, cols: list[str]) -> pd.DataFrame | None:
+        """Return the slice of meta_df relevant to this group, or None if not filterable."""
+        if meta_df is None:
+            return None
+        matching_cols = [c for c in cols if c in meta_df.columns]
+        if not matching_cols:
+            return None  # meta_df has no group cols — it's a global pool, suppress it
+        key_vals = list(group_key) if isinstance(group_key, tuple) else [group_key]
+        mask = pd.Series(True, index=meta_df.index)
+        for col, val in zip(matching_cols, key_vals[: len(matching_cols)], strict=False):
+            mask &= meta_df[col] == val
+        filtered = meta_df[mask]
+        return filtered if not filtered.empty else None
 
     if group_cols:
         figures: dict[str, plt.Figure] = {}
@@ -743,7 +758,8 @@ def plot_effects(
             key_str = " | ".join(str(v) for v in group_key) if isinstance(group_key, tuple) else str(group_key)
             fig_title = title if title is not None else key_str
             labelled = _build_labels(group_data)
-            figures[key_str] = _render(labelled, fig_title)
+            group_meta = _filter_meta_for_group(group_key, group_cols)
+            figures[key_str] = _render(labelled, fig_title, group_meta=group_meta)
         if save_path is not None:
             import os
 
@@ -755,7 +771,7 @@ def plot_effects(
         return figures
 
     labelled = _build_labels(data)
-    fig = _render(labelled, title)
+    fig = _render(labelled, title, group_meta=meta_df)
     if save_path is not None and fig is not None:
         fig.savefig(save_path, bbox_inches="tight")
     return fig
