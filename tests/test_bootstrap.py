@@ -56,6 +56,7 @@ class TestBootstrapInference:
         assert analyzer._bootstrap
         assert analyzer._bootstrap_iterations == 100
         assert analyzer._bootstrap_ci_method == "percentile"
+        assert analyzer._bootstrap_pvalue_method == "studentized"
         assert analyzer._bootstrap_stratify
         assert analyzer._bootstrap_seed == 123
 
@@ -254,6 +255,30 @@ class TestBootstrapInference:
         assert results1["abs_effect_lower"].values[0] == results2["abs_effect_lower"].values[0]
         assert results1["abs_effect_upper"].values[0] == results2["abs_effect_upper"].values[0]
 
+    def test_bootstrap_pvalue_methods(self, sample_data):
+        """Test bootstrap_pvalue_method parameter: percentile and studentized"""
+        results = {}
+        for method in ["percentile", "studentized"]:
+            analyzer = ExperimentAnalyzer(
+                data=sample_data,
+                outcomes=["outcome"],
+                treatment_col="treatment",
+                experiment_identifier=["experiment_id"],
+                bootstrap=True,
+                bootstrap_iterations=100,
+                bootstrap_pvalue_method=method,
+                bootstrap_seed=123,
+            )
+            assert analyzer._bootstrap_pvalue_method == method
+            analyzer.get_effects()
+            results[method] = analyzer.results
+
+        for method in ["percentile", "studentized"]:
+            assert "pvalue" in results[method].columns
+            # True effect = 5, both methods should detect significance
+            assert results[method]["pvalue"].values[0] < 0.05
+            assert results[method]["stat_significance"].values[0] == 1
+
     def test_bootstrap_relative_ci(self, sample_data):
         """Test that bootstrap computes relative effect CIs correctly"""
         analyzer = ExperimentAnalyzer(
@@ -286,6 +311,55 @@ class TestBootstrapInference:
         # Allow for some numerical tolerance
         assert rel_lower <= rel_effect * 1.01 or rel_effect <= rel_lower * 1.01
         assert rel_effect <= rel_upper * 1.01 or rel_upper <= rel_effect * 1.01
+
+    def test_pvalue_convergence_with_asymptotic(self):
+        """Bootstrap p-values should converge toward asymptotic p-values at large N.
+
+        Uses N=1000 with a clear true effect. At this sample size, the normal
+        approximation underlying asymptotic inference holds well, so all three
+        methods (asymptotic, percentile, studentized) should give similar p-values.
+        """
+        np.random.seed(7)
+        n = 1000
+        data = pd.DataFrame(
+            {
+                "experiment_id": "conv_test",
+                "treatment": np.random.binomial(1, 0.5, n),
+                "x": np.random.normal(0, 1, n),
+            }
+        )
+        data["outcome"] = 2.0 * data["treatment"] + 0.5 * data["x"] + np.random.normal(0, 3, n)
+
+        def _run(method, bootstrap):
+            a = ExperimentAnalyzer(
+                data=data,
+                outcomes=["outcome"],
+                treatment_col="treatment",
+                experiment_identifier=["experiment_id"],
+                bootstrap=bootstrap,
+                bootstrap_iterations=500,
+                bootstrap_pvalue_method=method,
+                bootstrap_seed=42,
+            )
+            a.get_effects()
+            return float(a.results["pvalue"].values[0])
+
+        pval_asymptotic = _run("percentile", bootstrap=False)
+        pval_percentile = _run("percentile", bootstrap=True)
+        pval_studentized = _run("studentized", bootstrap=True)
+
+        # All three should detect the true effect (SNR ~ 2/3 ≈ 0.67 at N=1000)
+        assert pval_asymptotic < 0.05, f"Asymptotic p-value not significant: {pval_asymptotic:.4f}"
+        assert pval_percentile < 0.05, f"Percentile p-value not significant: {pval_percentile:.4f}"
+        assert pval_studentized < 0.05, f"Studentized p-value not significant: {pval_studentized:.4f}"
+
+        # At N=1000 bootstrap p-values should be within 0.05 of the asymptotic p-value
+        assert abs(pval_percentile - pval_asymptotic) < 0.05, (
+            f"Percentile vs asymptotic p-value gap too large: {pval_percentile:.4f} vs {pval_asymptotic:.4f}"
+        )
+        assert abs(pval_studentized - pval_asymptotic) < 0.05, (
+            f"Studentized vs asymptotic p-value gap too large: {pval_studentized:.4f} vs {pval_asymptotic:.4f}"
+        )
 
 
 if __name__ == "__main__":

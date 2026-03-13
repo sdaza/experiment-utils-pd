@@ -373,8 +373,8 @@ class BootstrapMixin:
 
         Returns
         -------
-        tuple[float | None, float | None, str | None]
-            (absolute_effect, relative_effect, error_info)
+        tuple[float | None, float | None, float | None, str | None]
+            (absolute_effect, relative_effect, standard_error, error_info)
         """
         try:
             import inspect
@@ -411,11 +411,11 @@ class BootstrapMixin:
                 warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
                 output = model_func(**estimator_params)
 
-            return output["absolute_effect"], output["relative_effect"], None
+            return output["absolute_effect"], output["relative_effect"], output.get("standard_error", np.nan), None
 
         except Exception as e:
             error_info = f"{type(e).__name__}: {str(e)[:100]}"
-            return None, None, error_info
+            return None, None, np.nan, error_info
 
     def _bootstrap_single_iteration(
         self,
@@ -434,7 +434,7 @@ class BootstrapMixin:
         interaction_covariates: list[str] | None = None,
         bootstrap_indices: np.ndarray | None = None,
         ratio_cols: tuple[str, str] | None = None,
-    ) -> tuple[float | None, float | None, str | None]:
+    ) -> tuple[float | None, float | None, float | None, str | None]:
         """
         Execute a single bootstrap iteration.
 
@@ -495,7 +495,7 @@ class BootstrapMixin:
         )
 
         if prep_error is not None:
-            return None, None, prep_error
+            return None, None, np.nan, prep_error
 
         # Stage 2: Fit model (CPU-bound)
         event_col = None
@@ -532,7 +532,7 @@ class BootstrapMixin:
         compute_marginal_effects: str | bool = "overall",
         interaction_covariates: list[str] | None = None,
         ratio_cols: tuple[str, str] | None = None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Bootstrap a single effect estimate for one outcome.
 
@@ -560,8 +560,8 @@ class BootstrapMixin:
 
         Returns
         -------
-        tuple[np.ndarray, np.ndarray]
-            (Bootstrapped absolute effects, Bootstrapped relative effects)
+        tuple[np.ndarray, np.ndarray, np.ndarray]
+            (Bootstrapped absolute effects, Bootstrapped relative effects, Bootstrapped standard errors)
         """
         event_col_for_resample = None
         if model_type == "cox":
@@ -671,6 +671,7 @@ class BootstrapMixin:
                 # Combine results and count errors
                 bootstrap_abs_effects = []
                 bootstrap_rel_effects = []
+                bootstrap_ses = []
                 error_counts = {}
 
                 # Add Stage 1 errors
@@ -682,10 +683,11 @@ class BootstrapMixin:
                     error_counts[error_type]["count"] += 1
 
                 # Add Stage 2 results and errors
-                for abs_eff, rel_eff, error_info in results:
+                for abs_eff, rel_eff, se_eff, error_info in results:
                     if abs_eff is not None:
                         bootstrap_abs_effects.append(abs_eff)
                         bootstrap_rel_effects.append(rel_eff)
+                        bootstrap_ses.append(se_eff)
                     else:
                         if error_info:
                             error_type = error_info.split(":")[0] if ":" in error_info else "UnknownError"
@@ -735,12 +737,14 @@ class BootstrapMixin:
 
                 bootstrap_abs_effects = []
                 bootstrap_rel_effects = []
+                bootstrap_ses = []
                 error_counts = {}
 
-                for _i, (abs_eff, rel_eff, error_info) in enumerate(results):
+                for _i, (abs_eff, rel_eff, se_eff, error_info) in enumerate(results):
                     if abs_eff is not None:
                         bootstrap_abs_effects.append(abs_eff)
                         bootstrap_rel_effects.append(rel_eff)
+                        bootstrap_ses.append(se_eff)
                     else:
                         if error_info:
                             error_type = error_info.split(":")[0] if ":" in error_info else "UnknownError"
@@ -759,10 +763,11 @@ class BootstrapMixin:
 
             bootstrap_abs_effects = []
             bootstrap_rel_effects = []
+            bootstrap_ses = []
             error_counts = {}
 
             for i in tqdm(range(self._bootstrap_iterations), desc=f"Bootstrap [{outcome_display}]", unit="iter"):
-                abs_eff, rel_eff, error_info = self._bootstrap_single_iteration(
+                abs_eff, rel_eff, se_eff, error_info = self._bootstrap_single_iteration(
                     data=data,
                     outcome=outcome,
                     adjustment=adjustment,
@@ -783,6 +788,7 @@ class BootstrapMixin:
                 if abs_eff is not None:
                     bootstrap_abs_effects.append(abs_eff)
                     bootstrap_rel_effects.append(rel_eff)
+                    bootstrap_ses.append(se_eff)
                 else:
                     if error_info:
                         error_type = error_info.split(":")[0] if ":" in error_info else "UnknownError"
@@ -833,7 +839,7 @@ class BootstrapMixin:
                     f"Consider reducing covariates or increasing sample size."
                 )
 
-        return np.array(bootstrap_abs_effects), np.array(bootstrap_rel_effects)
+        return np.array(bootstrap_abs_effects), np.array(bootstrap_rel_effects), np.array(bootstrap_ses)
 
     def _calculate_bootstrap_inference(
         self,
@@ -841,6 +847,8 @@ class BootstrapMixin:
         bootstrap_rel_effects: np.ndarray,
         observed_abs_effect: float,
         observed_rel_effect: float,
+        bootstrap_ses: np.ndarray | None = None,
+        observed_se: float | None = None,
     ) -> dict[str, float]:
         """
         Calculate confidence intervals and p-value from bootstrap distribution.
@@ -855,6 +863,10 @@ class BootstrapMixin:
             Observed absolute effect estimate from original data
         observed_rel_effect : float
             Observed relative effect estimate from original data
+        bootstrap_ses : np.ndarray, optional
+            Array of bootstrap standard error estimates (required for studentized p-value)
+        observed_se : float, optional
+            Observed standard error from original model (required for studentized p-value)
 
         Returns
         -------
@@ -919,10 +931,39 @@ class BootstrapMixin:
                 rel_ci_lower = np.nan
                 rel_ci_upper = np.nan
 
-        # two-sided bootstrap p-value (already two-tailed via np.abs on both sides)
-        pvalue = np.mean(
-            np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean)) >= np.abs(observed_abs_effect)
-        )
+        # Two-sided bootstrap p-value
+        if (
+            self._bootstrap_pvalue_method == "studentized"
+            and bootstrap_ses is not None
+            and observed_se is not None
+            and observed_se > 0
+        ):
+            # Studentized (bootstrap-t): pivot the statistic by each sample's SE.
+            # t* = (β* - β_obs) / SE*   vs   t_obs = β_obs / SE_obs
+            # Better Type I error control for non-normal data and small samples because
+            # it accounts for the variability of SE itself across resamples.
+            valid_se_idx = ~np.isnan(bootstrap_ses[valid_abs_idx])
+            boot_abs_for_t = bootstrap_abs_effects_clean[valid_se_idx]
+            boot_ses_for_t = bootstrap_ses[valid_abs_idx][valid_se_idx]
+            positive_se_mask = boot_ses_for_t > 0
+            if positive_se_mask.sum() > 0:
+                t_boot = (boot_abs_for_t[positive_se_mask] - observed_abs_effect) / boot_ses_for_t[positive_se_mask]
+                t_obs = observed_abs_effect / observed_se
+                pvalue = float(np.mean(np.abs(t_boot) >= np.abs(t_obs)))
+            else:
+                pvalue = float(
+                    np.mean(
+                        np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean))
+                        >= np.abs(observed_abs_effect)
+                    )
+                )
+        else:
+            pvalue = float(
+                np.mean(
+                    np.abs(bootstrap_abs_effects_clean - np.mean(bootstrap_abs_effects_clean))
+                    >= np.abs(observed_abs_effect)
+                )
+            )
 
         return {
             "standard_error": bootstrap_se,
