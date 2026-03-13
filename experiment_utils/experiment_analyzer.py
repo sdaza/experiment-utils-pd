@@ -2113,6 +2113,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         return pooled_results[result_columns]
 
     def __get_fixed_meta_analysis_estimate(self, data: pd.DataFrame) -> dict[str, int | float]:
+        # Drop rows with invalid SE (zero, NaN, inf) — these are degenerate experiments
+        # (e.g. all-zero outcomes) that would receive infinite IVW weight and corrupt the pooled estimate.
+        valid_se = data["standard_error"].notna() & np.isfinite(data["standard_error"]) & (data["standard_error"] > 0)
+        data = data[valid_se]
+
+        if data.empty:
+            return {
+                "experiments": 0,
+                "control_units": 0,
+                "treatment_units": 0,
+                "absolute_effect": np.nan,
+                "abs_effect_lower": np.nan,
+                "abs_effect_upper": np.nan,
+                "relative_effect": np.nan,
+                "rel_effect_lower": np.nan,
+                "rel_effect_upper": np.nan,
+                "standard_error": np.nan,
+                "pvalue": np.nan,
+                "stat_significance": 0,
+            }
+
         # Absolute effect: IVW with 1/SE_abs²
         weights_abs = 1 / (data["standard_error"] ** 2)
         absolute_estimate = np.sum(weights_abs * data["absolute_effect"]) / np.sum(weights_abs)
