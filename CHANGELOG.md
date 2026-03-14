@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.3...v0.3.4) (2026-03-14)
+
+
+### Bug Fixes
+
+* update README with enhanced meta-analysis details and effect visualization improvements ([d79ab4d](https://github.com/sdaza/experiment-utils-pd/commit/d79ab4dbdbc3cd49cdbb175c0ba088a02e4e885d))
+* update README with enhanced meta-analysis details and effect visualization improvements ([facdec5](https://github.com/sdaza/experiment-utils-pd/commit/facdec504f05b725e111097903737dd5bc082475))
+
 ## [0.3.3](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.2...v0.3.3) (2026-03-13)
 
 
