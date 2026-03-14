@@ -14,9 +14,11 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Covariate Balance**: Check and visualize balance between treatment groups
 - **Marginal Effects**: Average marginal effects for GLMs (probability change, count change)
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
+- **Meta-Analysis**: Fixed-effects (IVW) and random-effects (Paule-Mandel + HKSJ) pooling across experiments, with heterogeneity diagnostics (τ², I², Cochran's Q)
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
-- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with percentage-point scaling, combined absolute/relative annotations, optional meta-analysis pooling, magnitude sorting, and grouping by any experiment column
+- **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with auto-scaled percentage-point annotations, combined absolute/relative labels, fixed or random-effects pooling, magnitude sorting, and grouping by any experiment column
+- **Overlap Diagnostics**: Mirror density plots of propensity score distributions (`plot_overlap`) with overlap coefficient annotation and group-by splitting
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
@@ -46,7 +48,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
     - [Visualizing Effects](#visualizing-effects)
-    - [Common Support / Propensity Score Overlap (`plot_overlap`)](#common-support--propensity-score-overlap)
+    - [Common Support / Propensity Score Overlap](#common-support--propensity-score-overlap)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
@@ -57,15 +59,12 @@ A comprehensive Python package for designing, analyzing, and validating experime
   - [Utilities](#utilities)
     - [Balanced Random Assignment](#balanced-random-assignment)
     - [Standalone Balance Checker](#standalone-balance-checker)
-    - [Advanced Topics](#advanced-topics)
-        - [Covariate Adjustment Methods](#covariate-adjustment-methods)  
-        - [Outcome Models](#outcome-models)  
-        - [Survival Analysis (Cox Models)](#survival-analysis-cox-models)  
-        - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)  
-        - [Non-Collapsibility of Hazard and Odds Ratios](#non-collapsibility-of-hazard-and-odds-ratios)  
-        - [Handling Missing Data](#handling-missing-data)
-        - [Best Practices](#best-practices)
-        - [Common Workflows](#common-workflows)
+  - [Advanced Topics](#advanced-topics)
+    - [When to Use Different Adjustment Methods](#when-to-use-different-adjustment-methods)
+    - [Non-Collapsibility of Hazard and Odds Ratios](#non-collapsibility-of-hazard-and-odds-ratios)
+    - [Handling Missing Data](#handling-missing-data)
+    - [Best Practices](#best-practices)
+    - [Common Workflows](#common-workflows)
   - [Contributing](#contributing)
   - [License](#license)
   - [Citation](#citation)
@@ -271,12 +270,12 @@ print(weights_df.head())
 - `ps-xgboost`: Propensity score via XGBoost (flexible, non-linear)
 - `entropy`: Entropy balancing (exact moment matching)
 
-Target effects:
+**Target estimands:**
 
-    ATT: Average Treatment Effect on Treated (most common)
-    ATE: Average Treatment Effect (entire population)
-    ATC: Average Treatment Effect on Control
-    ATO: Average Treatment Effect for the Overlap population (overlap weights — see below)
+- `ATT`: Average Treatment Effect on Treated (most common)
+- `ATE`: Average Treatment Effect (entire population)
+- `ATC`: Average Treatment Effect on Control
+- `ATO`: Average Treatment Effect for the Overlap population (overlap weights — see below)
 
 **Option 2: Regression Adjustment**
 
@@ -970,7 +969,7 @@ plt.show()
 
 **Percentage points (`pct_points=True`)**
 
-For rate/proportion outcomes, display absolute effects as percentage points instead of raw decimals (e.g. `+3.0pp` instead of `+0.030`):
+For rate/proportion outcomes, display absolute effects as percentage points instead of raw decimals (e.g. `+3.0pp` instead of `+0.030`). The scaling is applied **per outcome** automatically — outcomes whose control value is outside [0, 1] (e.g. revenue in dollars) are left in their original units:
 
 ```python
 fig = analyzer.plot_effects(
@@ -1025,8 +1024,6 @@ fig = analyzer.plot_effects(
 )
 plt.show()
 ```
-
-See also the [side-by-side example with random-effects pooling](#add-a-pooled-meta-analysis-row) below.
 
 **Single experiment, multiple outcomes on the y-axis**
 
@@ -1165,7 +1162,7 @@ plt.show()
 | `show_zero_line` | `True` | Vertical reference line at zero |
 | `show_values` | `True` | Annotate each dot with its effect value (`*` when significant) |
 | `value_decimals` | auto | Decimal places for value labels. Defaults to `1` when `pct_points=True` or relative effect shown; `2` otherwise |
-| `pct_points` | `False` | Multiply absolute effects by 100 for display as percentage points (pp). Updates axis label and annotations |
+| `pct_points` | `False` | When `True`, auto-detects proportion-scale outcomes (control value in [0, 1]) and scales their absolute effects ×100 for display as percentage points (pp). Raw-unit outcomes such as revenue are left unscaled. Axis tick labels and annotations are updated per panel. |
 | `combine_values` | `False` | Append the secondary effect in parentheses to each annotation: `+3.0pp (+15.4%)` or `+15.4% (+3.0pp)`. Also updates the x-axis label |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
@@ -1175,7 +1172,7 @@ plt.show()
 
 ### Common Support / Propensity Score Overlap
 
-When using propensity score weighting (`adjustment="balance"`), verify that the treatment and control groups have overlapping propensity score distributions. `plot_overlap` is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+`plot_overlap` produces a mirror density plot of propensity scores for common-support diagnostics. It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`. Requires `adjustment="balance"` with a PS-based method (`ps-logistic` or `ps-xgboost`).
 
 **Standalone usage**
 
@@ -1298,8 +1295,6 @@ print(retro[["outcome", "power", "type_s_error", "type_m_error",
 - `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
 - `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
 - `trimmed_abs_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
-
-
 
 ## Power Analysis
 
