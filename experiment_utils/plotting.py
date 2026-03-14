@@ -116,6 +116,7 @@ def _draw_panels_into_axes(
     pct_points: bool = False,
     combine_values: bool = False,
     relative_cap: float = 5.0,
+    pp_outcomes: set | None = None,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -123,6 +124,22 @@ def _draw_panels_into_axes(
     for panel_idx, (ax, panel_val) in enumerate(zip(axes, unique_panels, strict=False)):
         show_yticks = show_yticklabels[panel_idx] if isinstance(show_yticklabels, list) else show_yticklabels
         od = data[data[panel_col] == panel_val].copy()
+
+        # Per-panel pct_points: only True when this panel's outcome is proportion-scale.
+        # When panel_col == "outcome" we know exactly; otherwise fall back to the global flag.
+        if pp_outcomes is not None and panel_col == "outcome":
+            _panel_pct = panel_val in pp_outcomes
+        elif pp_outcomes is not None and panel_col != "outcome" and "outcome" in od.columns:
+            # y="outcome" layout: panel = experiment, rows = outcomes.
+            # pp applies row-by-row; use the global flag as a hint for the axis label.
+            _panel_pct = pct_points
+        else:
+            _panel_pct = pct_points
+
+        # Build the per-panel x-axis label (append "(pp)" only when this panel is scaled).
+        _x_label = x_label
+        if _panel_pct and "relative" not in eff_col and x_label and "(pp)" not in x_label:
+            _x_label = x_label + " (pp)"
 
         ax.set_facecolor("white")
         ax.set_axisbelow(True)
@@ -209,7 +226,7 @@ def _draw_panels_into_axes(
 
             if show_values:
                 lbl = _fmt_label(
-                    eff, sig, eff_col, decimals=value_decimals, pct_points=pct_points, relative_cap=relative_cap
+                    eff, sig, eff_col, decimals=value_decimals, pct_points=_panel_pct, relative_cap=relative_cap
                 )
                 if (
                     combine_values
@@ -218,9 +235,10 @@ def _draw_panels_into_axes(
                     and np.isfinite(secondary_eff)
                 ):
                     if "relative" in eff_col:
-                        # plotting relative → append absolute (pp or raw)
-                        if pct_points:
-                            lbl = f"{lbl} ({secondary_eff * 100:+.{value_decimals}f}pp)"
+                        # plotting relative → append absolute. Values already scaled for
+                        # pp_outcomes, so just add the "pp" suffix without ×100.
+                        if _panel_pct:
+                            lbl = f"{lbl} ({secondary_eff:+.{value_decimals}f}pp)"
                         else:
                             lbl = f"{lbl} ({secondary_eff:+.{value_decimals}f})"
                     else:
@@ -243,7 +261,14 @@ def _draw_panels_into_axes(
 
         ax.tick_params(axis="y", length=0, pad=8 if show_yticks else 2)
         ax.tick_params(axis="x", labelsize=8.5, colors="#64748b", pad=4)
-        ax.set_xlabel(x_label, fontsize=9.5, color="#64748b", labelpad=6)
+        ax.set_xlabel(_x_label, fontsize=9.5, color="#64748b", labelpad=6)
+        # Format x-axis ticks to match the annotation labels:
+        # relative effect panels: decimals → "15%" to match "+15.4%" annotations
+        # absolute pp panels: already scaled ×100, so ticks already match annotations
+        if "relative" in eff_col:
+            from matplotlib.ticker import FuncFormatter
+
+            ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0%}"))
         ax.set_ylim(-0.6, n_rows - 0.4)
         ax.invert_yaxis()
         for spine in ("top", "right", "left"):
@@ -414,6 +439,7 @@ def _render_effects_figure(
     pct_points: bool = False,
     combine_values: bool = False,
     relative_cap: float = 5.0,
+    pp_outcomes: set | None = None,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -475,6 +501,7 @@ def _render_effects_figure(
         pct_points=pct_points,
         combine_values=combine_values,
         relative_cap=relative_cap,
+        pp_outcomes=pp_outcomes,
     )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -501,6 +528,7 @@ def _render_multi_effect_figure(
     pct_points: bool = False,
     combine_values: bool = False,
     relative_cap: float = 5.0,
+    pp_outcomes: set | None = None,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -588,6 +616,7 @@ def _render_multi_effect_figure(
             pct_points=(pct_points and ec == "absolute_effect"),
             combine_values=combine_values,
             relative_cap=relative_cap,
+            pp_outcomes=pp_outcomes if ec == "absolute_effect" else None,
         )
 
     _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
@@ -780,16 +809,39 @@ def plot_effects(
         data.loc[bad_se, "relative_effect"] = np.nan
 
     # Scale absolute effect columns to percentage points for display.
+    # Only applies to outcomes whose values live in the [0, 1] range
+    # (i.e. proportions / rates).  Outcomes with raw-unit effects (e.g. dollars)
+    # are detected automatically and left unscaled.
     if pct_points:
         abs_scale_cols = ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "standard_error"]
+
+        def _is_proportion_outcome(df: pd.DataFrame, outcome: str) -> bool:
+            subset = df[df["outcome"] == outcome]
+            if "control_value" in subset.columns:
+                cv = subset["control_value"].dropna()
+                if not cv.empty:
+                    return bool((cv >= 0).all() and (cv <= 1).all())
+            eff = subset["absolute_effect"].dropna()
+            return bool(not eff.empty and eff.abs().max() <= 1)
+
+        pp_outcomes = {o for o in data["outcome"].unique() if _is_proportion_outcome(data, o)}
+        mask = data["outcome"].isin(pp_outcomes)
         for col in abs_scale_cols:
             if col in data.columns:
-                data[col] = data[col] * 100
+                data.loc[mask, col] = data.loc[mask, col] * 100
+
         if meta_df is not None:
             meta_df = meta_df.copy()
+            meta_mask = (
+                meta_df["outcome"].isin(pp_outcomes)
+                if "outcome" in meta_df.columns
+                else pd.Series(True, index=meta_df.index)
+            )
             for col in abs_scale_cols:
                 if col in meta_df.columns:
-                    meta_df[col] = meta_df[col] * 100
+                    meta_df.loc[meta_mask, col] = meta_df.loc[meta_mask, col] * 100
+
+        pct_points = bool(pp_outcomes)  # keep downstream label logic correct
 
     if value_decimals is None:
         has_relative = any(e == "relative" for e in ([effect] if isinstance(effect, str) else list(effect)))
@@ -880,6 +932,7 @@ def plot_effects(
         pct_points=pct_points,
         combine_values=combine_values,
         relative_cap=relative_cap,
+        pp_outcomes=pp_outcomes if pct_points else None,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
@@ -949,6 +1002,171 @@ def plot_effects(
     labelled = _build_labels(data)
     fig = _render(labelled, title, group_meta=meta_df)
     if save_path is not None and fig is not None:
+        fig.savefig(save_path, bbox_inches="tight")
+    return fig
+
+
+def plot_overlap(
+    data: pd.DataFrame,
+    treatment_col: str,
+    propensity_col: str,
+    group_by: str | list[str] | None = None,
+    bw_method: float | None = None,
+    grid_size: int = 300,
+    show_overlap_region: bool = True,
+    show_overlap_coef: bool = True,
+    title: str | None = None,
+    figsize: tuple | None = None,
+    save_path: str | None = None,
+) -> plt.Figure | dict[str, plt.Figure] | None:
+    """Mirror density plot of propensity scores for common-support diagnostics.
+
+    Treatment scores face upward (blue) and control scores face downward (red).
+    Healthy overlap produces wide shared region near propensity score 0.5.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        DataFrame containing the propensity score and treatment columns.
+        Typically ``analyzer.weights`` after calling ``get_effects()`` with
+        ``adjustment="balance"``, or any DataFrame with the required columns.
+    treatment_col : str
+        Binary treatment indicator column (1 = treated, 0 = control).
+    propensity_col : str
+        Estimated propensity score column (values in [0, 1]).
+    group_by : str or list[str], optional
+        Column(s) to split into separate figures — one figure per unique value.
+        Returns a ``dict`` keyed by the group value instead of a single figure.
+    bw_method : float, optional
+        KDE bandwidth.  ``None`` uses Scott's rule (scipy default).
+    grid_size : int, optional
+        Number of evaluation points for the KDE grid (default 300).
+    show_overlap_region : bool, optional
+        Shade the region where both densities exceed 5 % of their maximum
+        (default ``True``).
+    show_overlap_coef : bool, optional
+        Annotate the plot with the KDE-based overlap coefficient — the integral
+        of ``min(f_treat, f_control)`` over the score range (default ``True``).
+    title : str, optional
+        Figure title.  When ``group_by`` is set and ``title`` is ``None`` the
+        group value is used automatically.
+    figsize : tuple, optional
+        ``(width, height)`` in inches.  Defaults to ``(7, 4)``.
+    save_path : str, optional
+        File path to save the figure.  When ``group_by`` produces multiple
+        figures the group key is inserted before the extension, e.g.
+        ``"overlap.png"`` → ``"overlap_US.png"``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure, dict[str, matplotlib.figure.Figure], or None
+    """
+    from matplotlib.ticker import FuncFormatter
+    from scipy.stats import gaussian_kde
+
+    if data is None or data.empty:
+        return None
+
+    figsize = figsize or (7, 4)
+
+    def _one_figure(subset: pd.DataFrame, fig_title: str | None) -> plt.Figure | None:
+        treat_ps = subset.loc[subset[treatment_col] == 1, propensity_col].dropna().values
+        ctrl_ps = subset.loc[subset[treatment_col] == 0, propensity_col].dropna().values
+
+        if len(treat_ps) < 2 or len(ctrl_ps) < 2:
+            return None
+
+        x_min = min(treat_ps.min(), ctrl_ps.min())
+        x_max = max(treat_ps.max(), ctrl_ps.max())
+        x_grid = np.linspace(x_min, x_max, grid_size)
+
+        kde_t = gaussian_kde(treat_ps, bw_method=bw_method)
+        kde_c = gaussian_kde(ctrl_ps, bw_method=bw_method)
+        d_t = kde_t(x_grid)
+        d_c = kde_c(x_grid)
+
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.set_facecolor("white")
+
+        ax.fill_between(x_grid, d_t, alpha=0.30, color="#2166ac")
+        ax.plot(x_grid, d_t, color="#2166ac", lw=1.5, label=f"Treatment (n={len(treat_ps):,})")
+
+        ax.fill_between(x_grid, -d_c, alpha=0.30, color="#d6604d")
+        ax.plot(x_grid, -d_c, color="#d6604d", lw=1.5, label=f"Control (n={len(ctrl_ps):,})")
+
+        ax.axhline(0, color=_CLR_ZERO, lw=0.9)
+
+        if show_overlap_region:
+            thresh_t = d_t.max() * 0.05
+            thresh_c = d_c.max() * 0.05
+            overlap_mask = (d_t > thresh_t) & (d_c > thresh_c)
+            if overlap_mask.any():
+                ax.axvspan(
+                    x_grid[overlap_mask][0],
+                    x_grid[overlap_mask][-1],
+                    alpha=0.08,
+                    color="#16a34a",
+                    label="Overlap region",
+                )
+
+        if show_overlap_coef:
+            dx = x_grid[1] - x_grid[0]
+            coef = float(np.trapz(np.minimum(d_t, d_c), dx=dx))
+            ax.annotate(
+                f"Overlap coef. = {coef:.3f}",
+                xy=(0.97, 0.97),
+                xycoords="axes fraction",
+                ha="right",
+                va="top",
+                fontsize=9,
+                color="#475569",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=_CLR_SPINE, lw=0.8),
+            )
+
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{abs(x):.2f}"))
+        ax.set_xlabel("Propensity Score", fontsize=10, color="#64748b", labelpad=5)
+        ax.set_ylabel("Density", fontsize=10, color="#64748b", labelpad=5)
+        ax.set_xlim(x_min - 0.02, x_max + 0.02)
+
+        if fig_title:
+            ax.set_title(fig_title, fontsize=11, fontweight="bold", pad=8)
+
+        ax.legend(fontsize=9, frameon=True, framealpha=0.9, edgecolor=_CLR_SPINE)
+
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        for spine in ("bottom", "left"):
+            ax.spines[spine].set_color(_CLR_SPINE)
+            ax.spines[spine].set_linewidth(0.8)
+
+        ax.tick_params(axis="both", labelsize=8.5, colors="#64748b")
+        plt.tight_layout()
+        return fig
+
+    gc = ([group_by] if isinstance(group_by, str) else list(group_by)) if group_by else []
+    gc = [c for c in gc if c in data.columns]
+
+    if gc:
+        import os
+
+        figures: dict[str, plt.Figure] = {}
+        for group_key, group_data in data.groupby(gc):
+            key_str = " | ".join(str(v) for v in group_key) if isinstance(group_key, tuple) else str(group_key)
+            fig_title = title if title is not None else key_str
+            fig = _one_figure(group_data, fig_title)
+            if fig is not None:
+                figures[key_str] = fig
+
+        if save_path is not None:
+            base, ext = os.path.splitext(save_path)
+            ext = ext or ".png"
+            for key_str, fig in figures.items():
+                safe_key = key_str.replace(" | ", "_").replace(" ", "_")
+                fig.savefig(f"{base}_{safe_key}{ext}", bbox_inches="tight")
+        return figures
+
+    fig = _one_figure(data, title)
+    if fig is not None and save_path is not None:
         fig.savefig(save_path, bbox_inches="tight")
     return fig
 

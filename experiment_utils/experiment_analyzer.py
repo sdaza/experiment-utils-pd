@@ -13,6 +13,7 @@ from statsmodels.stats.proportion import proportions_ztest
 
 from .bootstrap import BootstrapMixin
 from .estimators import Estimators
+from .meta_analysis import MetaAnalysisMixin
 from .retrodesign import RetrodesignMixin
 from .utils import detect_categorical_covariates, generate_comparison_pairs, get_logger, log_and_raise_error
 
@@ -25,7 +26,7 @@ def _clean_category_name(cat):
     return cat_str
 
 
-class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
+class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
     """
     Class ExperimentAnalyzer to analyze and design experiments
 
@@ -359,6 +360,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
         self._fitted_models = {}
         self._bootstrap_distributions = {}  # Store bootstrap distributions for MCP adjustment
         self._bootstrap_indices_cache = {}  # Cache bootstrap indices for reuse across outcomes/models
+        self.meta_stats_ = None  # Populated by combine_effects(); holds per-group heterogeneity diagnostics
         self._target_weights = {
             "ATT": "tips_stabilized_weight",
             "ATE": "ips_stabilized_weight",
@@ -1419,11 +1421,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                                 "Overlap plots require propensity scores from balance adjustment. Skipping plot."
                             )
                         elif "propensity_score" in comparison_data.columns:
-                            self._plot_common_support(
+                            from .plotting import plot_overlap
+
+                            exp_label = (
+                                " | ".join(str(v) for v in experiment_tuple)
+                                if isinstance(experiment_tuple, tuple)
+                                else str(experiment_tuple)
+                            )
+                            plot_overlap(
                                 comparison_data,
                                 treatment_col=self._treatment_col,
                                 propensity_col="propensity_score",
-                                experiment_id=experiment_tuple,
+                                title=f"Common Support — {exp_label}",
                             )
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
@@ -1446,6 +1455,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
                         weights_df = comparison_data[weight_columns].copy()
                         weights_df["treatment_group"] = treatment_val
                         weights_df["control_group"] = control_val
+                        weights_df[self._treatment_col] = comparison_data[self._treatment_col].values
+                        if "propensity_score" in comparison_data.columns:
+                            weights_df["propensity_score"] = comparison_data["propensity_score"].values
                         weights_list.append(weights_df)
 
                 if len(final_covariates) > 0 and adjustment == "IV":
@@ -2027,203 +2039,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         self._results = results_df
 
-    def _resolve_grouping_cols(self, data: pd.DataFrame, grouping_cols: list[str] | None) -> list[str]:
-        """
-        Resolve grouping columns for meta-analysis and aggregation methods.
-
-        When grouping_cols is explicitly provided, ensures 'outcome' is included.
-        When None, defaults to ['outcome'] and auto-appends 'treatment_group' /
-        'control_group' whenever those columns exist with more than one unique value.
-        Logs the final grouping so callers can verify the behaviour.
-        """
-        if grouping_cols is not None:
-            cols = list(grouping_cols)
-            if "outcome" not in cols:
-                cols.append("outcome")
-            self._logger.info(f"Grouping by: {cols}")
-            return cols
-
-        cols = ["outcome"]
-        auto_added = []
-        for col in ["treatment_group", "control_group"]:
-            if col in data.columns and data[col].nunique() > 1:
-                cols.append(col)
-                auto_added.append(col)
-
-        if auto_added:
-            self._logger.warning(
-                f"Multiple treatment/control groups detected — auto-grouping by {cols}. "
-                "Pass grouping_cols explicitly to override."
-            )
-        self._logger.info(f"Grouping by: {cols}")
-        return cols
-
-    def combine_effects(self, data: pd.DataFrame | None = None, grouping_cols: list[str] | None = None) -> pd.DataFrame:
-        """
-        Combine effects across experiments using fixed effects meta-analysis.
-
-        Parameters
-        ----------
-        data : pd.DataFrame, optional
-            The DataFrame containing the results. Defaults to self._results
-        grouping_cols : list, optional
-            The columns to group by. Defaults to experiment_identifer + ['outcome']
-        effect : str, optional
-            The method to use for combining results (fixed or random). Defaults to 'fixed'.
-
-        Returns
-        -------
-        A Pandas DataFrame with combined results
-        """
-
-        if data is None:
-            data = self._results
-
-        grouping_cols = self._resolve_grouping_cols(data, grouping_cols)
-
-        if any(data.groupby(grouping_cols).size() < 2):
-            self._logger.warning("There are some combinations with only one experiment!")
-
-        pooled_results = (
-            data.groupby(grouping_cols)
-            .apply(lambda df: pd.Series(self.__get_fixed_meta_analysis_estimate(df)), include_groups=False)
-            .reset_index()
-        )
-
-        result_columns = grouping_cols + [
-            "experiments",
-            "control_units",
-            "treatment_units",
-            "absolute_effect",
-            "abs_effect_lower",
-            "abs_effect_upper",
-            "relative_effect",
-            "rel_effect_lower",
-            "rel_effect_upper",
-            "stat_significance",
-            "standard_error",
-            "pvalue",
-        ]
-        if "balance" in data.columns:
-            index_to_insert = len(grouping_cols)
-            result_columns.insert(index_to_insert + 1, "balance")
-        pooled_results["stat_significance"] = pooled_results["stat_significance"].astype(int)
-
-        self._logger.info("Combining effects using fixed-effects meta-analysis!")
-        return pooled_results[result_columns]
-
-    def __get_fixed_meta_analysis_estimate(self, data: pd.DataFrame) -> dict[str, int | float]:
-        # Drop rows with invalid SE (zero, NaN, inf) — these are degenerate experiments
-        # (e.g. all-zero outcomes) that would receive infinite IVW weight and corrupt the pooled estimate.
-        valid_se = data["standard_error"].notna() & np.isfinite(data["standard_error"]) & (data["standard_error"] > 0)
-        data = data[valid_se]
-
-        if data.empty:
-            return {
-                "experiments": 0,
-                "control_units": 0,
-                "treatment_units": 0,
-                "absolute_effect": np.nan,
-                "abs_effect_lower": np.nan,
-                "abs_effect_upper": np.nan,
-                "relative_effect": np.nan,
-                "rel_effect_lower": np.nan,
-                "rel_effect_upper": np.nan,
-                "standard_error": np.nan,
-                "pvalue": np.nan,
-                "stat_significance": 0,
-            }
-
-        # Absolute effect: IVW with 1/SE_abs²
-        weights_abs = 1 / (data["standard_error"] ** 2)
-        absolute_estimate = np.sum(weights_abs * data["absolute_effect"]) / np.sum(weights_abs)
-        pooled_se_abs = np.sqrt(1 / np.sum(weights_abs))
-
-        # Relative effect: IVW with 1/SE_rel² where SE_rel = SE_abs / |control_mean|
-        # This is the delta-method approximation; using absolute-scale weights would give
-        # wrong CIs (wrong units) when displaying relative effects in the plot.
-        rel_se_pooled = np.nan
-        relative_estimate = np.nan
-        if "control_value" in data.columns:
-            ctrl = data["control_value"].abs()
-            valid = ctrl > 0
-            if valid.any():
-                se_rel = data.loc[valid, "standard_error"] / ctrl[valid]
-                weights_rel = 1 / (se_rel**2)
-                relative_estimate = np.sum(weights_rel * data.loc[valid, "relative_effect"]) / np.sum(weights_rel)
-                rel_se_pooled = float(np.sqrt(1 / np.sum(weights_rel)))
-
-        # Fallback: derive from pooled absolute when relative pooling is not possible
-        if np.isnan(relative_estimate) and "relative_effect" in data.columns:
-            relative_estimate = np.sum(weights_abs * data["relative_effect"]) / np.sum(weights_abs)
-
-        np.seterr(invalid="ignore")
-        try:
-            pvalue = stats.norm.sf(abs(absolute_estimate / pooled_se_abs)) * 2
-        except FloatingPointError:
-            pvalue = np.nan
-
-        z = stats.norm.ppf(1 - self._alpha / 2)
-        meta_results = {
-            "experiments": int(data.shape[0]),
-            "control_units": int(data["control_units"].sum()),
-            "treatment_units": int(data["treatment_units"].sum()),
-            "absolute_effect": absolute_estimate,
-            "abs_effect_lower": absolute_estimate - z * pooled_se_abs,
-            "abs_effect_upper": absolute_estimate + z * pooled_se_abs,
-            "relative_effect": relative_estimate,
-            "rel_effect_lower": relative_estimate - z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
-            "rel_effect_upper": relative_estimate + z * rel_se_pooled if not np.isnan(rel_se_pooled) else np.nan,
-            "standard_error": pooled_se_abs,
-            "pvalue": pvalue,
-        }
-
-        if "balance" in data.columns:
-            meta_results["balance"] = data["balance"].mean()
-        meta_results["stat_significance"] = 1 if meta_results["pvalue"] < self._alpha else 0
-        return meta_results
-
-    def aggregate_effects(
-        self, data: pd.DataFrame | None = None, grouping_cols: list[str] | None = None
-    ) -> pd.DataFrame:  # noqa: E501
-        """
-        Aggregate effects using a weighted average based on the size of the treatment group.
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-        The DataFrame containing the results.
-        grouping_cols : list, optional
-        The columns to group by. Defaults to ['outcome']
-
-        Returns
-        -------
-        A Pandas DataFrame with combined results
-        """
-
-        if data is None:
-            data = self._results
-
-        grouping_cols = self._resolve_grouping_cols(data, grouping_cols)
-
-        aggregate_results = (
-            data.groupby(grouping_cols).apply(self.__compute_weighted_effect, include_groups=False).reset_index()
-        )
-
-        self._logger.info("Aggregating effects using weighted averages!")
-        self._logger.info("For a better standard error estimation, use meta-analysis or `combine_effects`")
-
-        result_columns = grouping_cols + ["experiments", "balance"]
-        existing_columns = [col for col in result_columns if col in aggregate_results.columns]
-        remaining_columns = [col for col in aggregate_results.columns if col not in existing_columns]
-        final_columns = existing_columns + remaining_columns
-        return aggregate_results[final_columns]
-
     def plot_effects(
         self,
         outcomes: list[str] | str | None = None,
         effect: str | list[str] = "absolute",
         meta_analysis: bool | pd.DataFrame | None = None,
+        meta_method: str = "fixed",
         comparison: tuple | list[tuple] | None = None,
         figsize: tuple | None = None,
         title: str | None = None,
@@ -2264,6 +2085,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             - True  → compute pooled estimate via ``combine_effects()``
             - pd.DataFrame → use a pre-computed ``combine_effects()`` result
             - None (default) → no pooled row
+        meta_method : {"fixed", "random"}, optional
+            Meta-analysis method to use when ``meta_analysis=True``.
+            ``"fixed"`` (default) uses IVW fixed effects; ``"random"`` uses
+            Paule-Mandel + HKSJ random effects. Ignored when ``meta_analysis``
+            is a pre-computed DataFrame.
         comparison : tuple or list of tuple, optional
             ``(treatment_group, control_group)`` to restrict the plot to one
             specific comparison, or a list of such tuples to include multiple
@@ -2343,7 +2169,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         meta_df = None
         if meta_analysis is True:
-            meta_df = self.combine_effects(grouping_cols=self._resolve_grouping_cols(self._results, None))
+            meta_df = self.combine_effects(
+                grouping_cols=self._resolve_grouping_cols(self._results, None),
+                method=meta_method,
+            )
             meta_df["_label"] = "Pooled"
         elif isinstance(meta_analysis, pd.DataFrame):
             meta_df = meta_analysis.copy()
@@ -2375,38 +2204,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
             relative_cap=relative_cap,
             save_path=save_path,
         )
-
-    def __compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
-        weights = group["treatment_units"].astype(float)
-        group = group.copy()
-        group["gweight"] = weights
-        total_weight = weights.sum()
-
-        absolute_effect = np.sum(weights * group["absolute_effect"]) / total_weight
-        relative_effect = np.sum(weights * group["relative_effect"]) / total_weight
-
-        # SE of a weighted mean: sqrt(Σ(w_i² × SE_i²)) / Σ(w_i)
-        combined_se = np.sqrt(np.sum(weights**2 * group["standard_error"] ** 2)) / total_weight
-        z_score = absolute_effect / combined_se
-        combined_p_value = 2 * (1 - stats.norm.cdf(abs(z_score)))
-
-        output = pd.Series(
-            {
-                "experiments": int(group.shape[0]),
-                "treatment_units": int(np.sum(group["gweight"])),
-                "absolute_effect": absolute_effect,
-                "relative_effect": relative_effect,
-                "stat_significance": 1 if combined_p_value < self._alpha else 0,
-                "standard_error": combined_se,
-                "pvalue": combined_p_value,
-            }
-        )
-
-        if "balance" in group.columns:
-            combined_balance = np.sum(group["balance"] * group["gweight"]) / np.sum(group["gweight"])
-            output["balance"] = combined_balance
-
-        return output
 
     @property
     def imbalance(self) -> pd.DataFrame | None:
@@ -2999,6 +2796,69 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin):
 
         plt.tight_layout()
         return fig
+
+    def plot_overlap(
+        self,
+        group_by: str | list[str] | None = None,
+        bw_method: float | None = None,
+        show_overlap_region: bool = True,
+        show_overlap_coef: bool = True,
+        title: str | None = None,
+        figsize: tuple | None = None,
+        save_path: str | None = None,
+    ):
+        """Mirror density plot of propensity scores for common-support diagnostics.
+
+        Requires that ``get_effects()`` has been called with ``adjustment="balance"``
+        so that propensity scores are available in ``self.weights``.
+
+        Parameters
+        ----------
+        group_by : str or list[str], optional
+            Column(s) in ``self.weights`` to split into separate figures.
+        bw_method : float, optional
+            KDE bandwidth (``None`` uses Scott's rule).
+        show_overlap_region : bool, optional
+            Shade the region where both densities exceed 5 % of their peak.
+        show_overlap_coef : bool, optional
+            Annotate each figure with the KDE-based overlap coefficient.
+        title : str, optional
+            Figure title override.
+        figsize : tuple, optional
+            ``(width, height)`` in inches.
+        save_path : str, optional
+            File path to save the figure(s).
+
+        Returns
+        -------
+        matplotlib.figure.Figure or dict[str, matplotlib.figure.Figure] or None
+        """
+        from .plotting import plot_overlap as _plot_overlap
+
+        if self.weights is None or self.weights.empty:
+            self._logger.warning(
+                "No propensity scores available. Call get_effects() with adjustment='balance' before plot_overlap()."
+            )
+            return None
+
+        if "propensity_score" not in self.weights.columns:
+            self._logger.warning(
+                "propensity_score column not found in weights. Use balance_method='ps-logistic' or 'ps-xgboost'."
+            )
+            return None
+
+        return _plot_overlap(
+            self.weights,
+            treatment_col=self._treatment_col,
+            propensity_col="propensity_score",
+            group_by=group_by,
+            bw_method=bw_method,
+            show_overlap_region=show_overlap_region,
+            show_overlap_coef=show_overlap_coef,
+            title=title,
+            figsize=figsize,
+            save_path=save_path,
+        )
 
     def _compute_fieller_ci_adjusted(
         self,

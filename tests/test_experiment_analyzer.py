@@ -510,3 +510,353 @@ def test_plot_effects_no_color_by(simple_analyzer):
     """color_by was removed — must raise TypeError."""
     with pytest.raises(TypeError, match="color_by"):
         simple_analyzer.plot_effects(color_by="channel")
+
+
+# ── random effects meta-analysis ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def multi_experiment_analyzer():
+    """Analyzer with 6 experiments and moderate effect sizes (low heterogeneity)."""
+    rng = np.random.default_rng(42)
+    rows = []
+    for exp_id in range(1, 7):
+        n = 500
+        treatment = rng.integers(0, 2, size=n)
+        revenue = rng.normal(50, 15, size=n) + treatment * 3.0
+        rows.append(
+            pd.DataFrame(
+                {
+                    "experiment": exp_id,
+                    "treatment": treatment,
+                    "revenue": revenue,
+                }
+            )
+        )
+    df = pd.concat(rows, ignore_index=True)
+    az = ExperimentAnalyzer(
+        data=df,
+        treatment_col="treatment",
+        outcomes=["revenue"],
+        experiment_identifier=["experiment"],
+        correction=None,
+    )
+    az.get_effects()
+    return az
+
+
+@pytest.fixture
+def heterogeneous_analyzer():
+    """Analyzer where true effects vary widely across experiments (high heterogeneity)."""
+    rng = np.random.default_rng(7)
+    true_effects = [-0.5, 0.1, 0.8, 1.5, -0.3, 1.2]
+    rows = []
+    for exp_id, te in enumerate(true_effects, start=1):
+        n = 300
+        treatment = rng.integers(0, 2, size=n)
+        revenue = rng.normal(10, 5, size=n) + treatment * te
+        rows.append(
+            pd.DataFrame(
+                {
+                    "experiment": exp_id,
+                    "treatment": treatment,
+                    "revenue": revenue,
+                }
+            )
+        )
+    df = pd.concat(rows, ignore_index=True)
+    az = ExperimentAnalyzer(
+        data=df,
+        treatment_col="treatment",
+        outcomes=["revenue"],
+        experiment_identifier=["experiment"],
+        correction=None,
+    )
+    az.get_effects()
+    return az
+
+
+def test_combine_effects_random_returns_same_schema(multi_experiment_analyzer):
+    """Random effects result has the same columns as fixed effects result."""
+    fixed = multi_experiment_analyzer.combine_effects(method="fixed")
+    random = multi_experiment_analyzer.combine_effects(method="random")
+    assert set(fixed.columns) == set(random.columns), (
+        f"Column mismatch.\nFixed: {sorted(fixed.columns)}\nRandom: {sorted(random.columns)}"
+    )
+
+
+def test_combine_effects_random_numeric_outputs(multi_experiment_analyzer):
+    """All key numeric fields are finite numbers for a well-behaved dataset."""
+    result = multi_experiment_analyzer.combine_effects(method="random")
+    for col in ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "standard_error", "pvalue"]:
+        assert np.isfinite(result[col].values).all(), f"Non-finite value in column '{col}': {result[col].values}"
+
+
+def test_combine_effects_random_ci_contains_point_estimate(multi_experiment_analyzer):
+    """Pooled point estimate must lie within the CI bounds."""
+    result = multi_experiment_analyzer.combine_effects(method="random")
+    assert (result["abs_effect_lower"] <= result["absolute_effect"]).all()
+    assert (result["absolute_effect"] <= result["abs_effect_upper"]).all()
+
+
+def test_combine_effects_random_no_heterogeneity_close_to_fixed(multi_experiment_analyzer):
+    """When heterogeneity is low, random and fixed effects pooled estimates are close."""
+    fixed = multi_experiment_analyzer.combine_effects(method="fixed")
+    random = multi_experiment_analyzer.combine_effects(method="random")
+    abs_diff = abs(fixed["absolute_effect"].values - random["absolute_effect"].values)
+    assert (abs_diff < 0.5).all(), f"Fixed vs random point estimates too far apart: {abs_diff}"
+
+
+def test_combine_effects_random_wider_ci_with_heterogeneity(heterogeneous_analyzer):
+    """With high between-study variance random effects CI must be wider than fixed effects CI."""
+    fixed = heterogeneous_analyzer.combine_effects(method="fixed")
+    random = heterogeneous_analyzer.combine_effects(method="random")
+    fe_width = fixed["abs_effect_upper"].values - fixed["abs_effect_lower"].values
+    re_width = random["abs_effect_upper"].values - random["abs_effect_lower"].values
+    assert (re_width >= fe_width).all(), (
+        f"Expected RE CI ≥ FE CI with heterogeneity.\nFE width: {fe_width}\nRE width: {re_width}"
+    )
+
+
+def test_meta_stats_initialized_to_none():
+    """meta_stats_ starts as None before combine_effects is called."""
+    rng = np.random.default_rng(0)
+    n = 100
+    df = pd.DataFrame(
+        {"exp": np.ones(n, dtype=int), "treatment": np.tile([0, 1], n // 2), "revenue": rng.normal(5, 1, n)}
+    )
+    az = ExperimentAnalyzer(
+        data=df, treatment_col="treatment", outcomes=["revenue"], experiment_identifier=["exp"], correction=None
+    )
+    assert az.meta_stats_ is None
+
+
+def test_meta_stats_populated_after_fixed(multi_experiment_analyzer):
+    """meta_stats_ is a DataFrame with expected columns after fixed effects combine_effects."""
+    multi_experiment_analyzer.combine_effects(method="fixed")
+    ms = multi_experiment_analyzer.meta_stats_
+    assert ms is not None
+    assert isinstance(ms, pd.DataFrame)
+    for col in ["tau2", "i2", "Q", "k", "method"]:
+        assert col in ms.columns, f"Missing column '{col}' in meta_stats_"
+    assert (ms["method"] == "fixed").all()
+    assert (ms["tau2"] == 0.0).all()
+
+
+def test_meta_stats_populated_after_random(multi_experiment_analyzer):
+    """meta_stats_ has heterogeneity columns populated after random effects run."""
+    multi_experiment_analyzer.combine_effects(method="random")
+    ms = multi_experiment_analyzer.meta_stats_
+    assert ms is not None
+    for col in ["tau2", "i2", "Q", "k", "method"]:
+        assert col in ms.columns, f"Missing column '{col}' in meta_stats_"
+    assert (ms["method"] == "random").all()
+    assert ms["k"].iloc[0] == 6
+    assert np.isfinite(ms["Q"].values).all()
+
+
+def test_meta_stats_tau2_positive_with_heterogeneity(heterogeneous_analyzer):
+    """τ² is positive when between-study variance is present."""
+    heterogeneous_analyzer.combine_effects(method="random")
+    ms = heterogeneous_analyzer.meta_stats_
+    assert ms["tau2"].iloc[0] > 0, f"Expected τ²>0 with heterogeneous effects, got {ms['tau2'].iloc[0]}"
+
+
+def test_combine_effects_invalid_method_raises(multi_experiment_analyzer):
+    """Passing an unknown method name raises an error."""
+    with pytest.raises(Exception, match="unknown|Unknown|invalid|'fixed' or 'random'"):
+        multi_experiment_analyzer.combine_effects(method="bayesian")
+
+
+def test_combine_effects_random_small_k():
+    """k=2 experiments: HKSJ uses t(1) giving very wide CIs; pvalue should be finite."""
+    rng = np.random.default_rng(99)
+    rows = []
+    for exp_id in [1, 2]:
+        n = 200
+        treatment = rng.integers(0, 2, size=n)
+        revenue = rng.normal(20, 10, size=n) + treatment * 2.0
+        rows.append(pd.DataFrame({"experiment": exp_id, "treatment": treatment, "revenue": revenue}))
+    df = pd.concat(rows, ignore_index=True)
+    az = ExperimentAnalyzer(
+        data=df, treatment_col="treatment", outcomes=["revenue"], experiment_identifier=["experiment"], correction=None
+    )
+    az.get_effects()
+    result = az.combine_effects(method="random")
+    assert np.isfinite(result["absolute_effect"].values).all()
+    assert np.isfinite(result["pvalue"].values).all()
+    # t(1) CI must be wider than t(5) from a k=6 run
+    fixed_result = az.combine_effects(method="fixed")
+    re_width = result["abs_effect_upper"].values - result["abs_effect_lower"].values
+    fe_width = fixed_result["abs_effect_upper"].values - fixed_result["abs_effect_lower"].values
+    assert (re_width >= fe_width).all(), "With k=2, random effects (t(1)) CI should not be narrower than fixed"
+
+
+def test_combine_effects_random_k1_fallback():
+    """k=1 experiment falls back gracefully without raising."""
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame(
+        {
+            "experiment": np.ones(200, dtype=int),
+            "treatment": rng.integers(0, 2, size=200),
+            "revenue": rng.normal(10, 3, size=200),
+        }
+    )
+    az = ExperimentAnalyzer(
+        data=df, treatment_col="treatment", outcomes=["revenue"], experiment_identifier=["experiment"], correction=None
+    )
+    az.get_effects()
+    result = az.combine_effects(method="random")
+    assert len(result) == 1
+    assert np.isfinite(result["absolute_effect"].values).all()
+    ms = az.meta_stats_
+    assert ms["method"].iloc[0] == "random-fallback-k1"
+
+
+def test_plot_effects_random_meta_method(simple_analyzer):
+    """plot_effects with meta_method='random' produces a Figure without error."""
+    import matplotlib.figure as mfig
+
+    fig = simple_analyzer.plot_effects(meta_analysis=True, meta_method="random")
+    assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_meta_method_default_unchanged(simple_analyzer):
+    """Default meta_method='fixed' behaviour is unchanged from before this feature."""
+    import matplotlib.figure as mfig
+
+    fig_default = simple_analyzer.plot_effects(meta_analysis=True)
+    fig_explicit = simple_analyzer.plot_effects(meta_analysis=True, meta_method="fixed")
+    assert isinstance(fig_default, mfig.Figure)
+    assert isinstance(fig_explicit, mfig.Figure)
+
+
+def test_combine_effects_random_pvalue_range(multi_experiment_analyzer):
+    """p-values must be in [0, 1]."""
+    result = multi_experiment_analyzer.combine_effects(method="random")
+    pvals = result["pvalue"].dropna().values
+    assert (pvals >= 0).all() and (pvals <= 1).all(), f"p-values out of [0,1]: {pvals}"
+
+
+def test_combine_effects_random_stat_significance_consistent(multi_experiment_analyzer):
+    """stat_significance flag must agree with pvalue < alpha."""
+    az = multi_experiment_analyzer
+    result = az.combine_effects(method="random")
+    for _, row in result.iterrows():
+        if not np.isnan(row["pvalue"]):
+            expected = int(row["pvalue"] < az._alpha)
+            assert row["stat_significance"] == expected
+
+
+# ── relative effects correctness ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def known_effect_analyzer():
+    """
+    Analyzer with 5 experiments sharing a common control mean (~10) and a known
+    absolute treatment effect (~1.0).  Expected relative ≈ 1.0/10.0 = 0.10.
+    """
+    rng = np.random.default_rng(123)
+    rows = []
+    for exp_id in range(1, 6):
+        n = 600
+        treatment = rng.integers(0, 2, size=n)
+        # Control mean ≈ 10, treatment shifts by +1.0
+        revenue = rng.normal(10, 2, size=n) + treatment * 1.0
+        rows.append(pd.DataFrame({"experiment": exp_id, "treatment": treatment, "revenue": revenue}))
+    df = pd.concat(rows, ignore_index=True)
+    az = ExperimentAnalyzer(
+        data=df,
+        treatment_col="treatment",
+        outcomes=["revenue"],
+        experiment_identifier=["experiment"],
+        correction=None,
+    )
+    az.get_effects()
+    return az
+
+
+def test_relative_effect_ci_contains_estimate_fixed(known_effect_analyzer):
+    """Fixed effects: rel_effect_lower ≤ relative_effect ≤ rel_effect_upper."""
+    result = known_effect_analyzer.combine_effects(method="fixed")
+    row = result.iloc[0]
+    assert row["rel_effect_lower"] <= row["relative_effect"] <= row["rel_effect_upper"], (
+        f"Relative CI does not contain estimate: [{row['rel_effect_lower']:.4f}, {row['rel_effect_upper']:.4f}] "
+        f"vs {row['relative_effect']:.4f}"
+    )
+
+
+def test_relative_effect_ci_contains_estimate_random(known_effect_analyzer):
+    """Random effects: rel_effect_lower ≤ relative_effect ≤ rel_effect_upper."""
+    result = known_effect_analyzer.combine_effects(method="random")
+    row = result.iloc[0]
+    assert row["rel_effect_lower"] <= row["relative_effect"] <= row["rel_effect_upper"], (
+        f"Relative CI does not contain estimate: [{row['rel_effect_lower']:.4f}, {row['rel_effect_upper']:.4f}] "
+        f"vs {row['relative_effect']:.4f}"
+    )
+
+
+def test_relative_effect_matches_absolute_over_control(known_effect_analyzer):
+    """
+    When control mean ≈ 10 and absolute effect ≈ 1.0, pooled relative should ≈ 0.10.
+    Verifies that relative pooling uses the correct delta-method scale.
+    """
+    for method in ("fixed", "random"):
+        result = known_effect_analyzer.combine_effects(method=method)
+        rel = result["relative_effect"].iloc[0]
+        assert abs(rel - 0.10) < 0.05, (
+            f"[{method}] relative_effect={rel:.4f} far from expected ~0.10 "
+            f"(absolute={result['absolute_effect'].iloc[0]:.4f})"
+        )
+
+
+def test_relative_effect_finite_when_control_positive(known_effect_analyzer):
+    """Both fixed and random should produce finite relative effects for clean data."""
+    for method in ("fixed", "random"):
+        result = known_effect_analyzer.combine_effects(method=method)
+        assert np.isfinite(result["relative_effect"].iloc[0]), f"[{method}] relative_effect is not finite"
+        assert np.isfinite(result["rel_effect_lower"].iloc[0]), f"[{method}] rel_effect_lower is not finite"
+        assert np.isfinite(result["rel_effect_upper"].iloc[0]), f"[{method}] rel_effect_upper is not finite"
+
+
+def test_relative_effect_nan_study_does_not_crash(multi_experiment_analyzer):
+    """Injecting a NaN relative_effect in one study must not raise an error."""
+    results = multi_experiment_analyzer._results.copy()
+    # Corrupt relative_effect in the first row to simulate a degenerate study
+    results.loc[results.index[0], "relative_effect"] = np.nan
+    for method in ("fixed", "random"):
+        pooled = multi_experiment_analyzer.combine_effects(data=results, method=method)
+        assert len(pooled) > 0, f"[{method}] combine_effects returned empty DataFrame after NaN injection"
+        assert np.isfinite(pooled["absolute_effect"].iloc[0]), (
+            f"[{method}] absolute_effect corrupted by NaN relative_effect"
+        )
+
+
+def test_relative_effect_zero_control_falls_back(multi_experiment_analyzer):
+    """When all control_value=0, relative pooling must fall back without raising."""
+    results = multi_experiment_analyzer._results.copy()
+    results["control_value"] = 0.0
+    for method in ("fixed", "random"):
+        pooled = multi_experiment_analyzer.combine_effects(data=results, method=method)
+        # Relative CI should be NaN (no valid control values) but absolute must survive
+        assert np.isfinite(pooled["absolute_effect"].iloc[0]), (
+            f"[{method}] absolute_effect should be finite even with control_value=0"
+        )
+        assert np.isnan(pooled["rel_effect_lower"].iloc[0]), (
+            f"[{method}] rel_effect_lower should be NaN when control_value=0"
+        )
+
+
+def test_relative_effect_random_wider_than_fixed_with_heterogeneity(heterogeneous_analyzer):
+    """With high heterogeneity, random effects relative CI must be wider than fixed."""
+    fixed = heterogeneous_analyzer.combine_effects(method="fixed")
+    random = heterogeneous_analyzer.combine_effects(method="random")
+    fe_width = fixed["rel_effect_upper"].values - fixed["rel_effect_lower"].values
+    re_width = random["rel_effect_upper"].values - random["rel_effect_lower"].values
+    # Both CIs must be finite to compare
+    both_finite = np.isfinite(fe_width) & np.isfinite(re_width)
+    if both_finite.any():
+        assert (re_width[both_finite] >= fe_width[both_finite]).all(), (
+            f"RE relative CI should be >= FE with heterogeneity.\nFE width: {fe_width}\nRE width: {re_width}"
+        )

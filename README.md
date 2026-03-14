@@ -46,6 +46,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Non-Inferiority Testing](#non-inferiority-testing)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
     - [Visualizing Effects](#visualizing-effects)
+    - [Common Support / Propensity Score Overlap (`plot_overlap`)](#common-support--propensity-score-overlap)
     - [Retrodesign Analysis](#retrodesign-analysis)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
@@ -90,7 +91,7 @@ All main classes and standalone functions are available directly from the packag
 ```python
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
-from experiment_utils import plot_effects, plot_power
+from experiment_utils import plot_effects, plot_overlap, plot_power
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -870,16 +871,15 @@ Added columns:
 
 ### Combining Effects (Meta-Analysis)
 
-When you have multiple experiments or segments, pool results using fixed-effects meta-analysis or weighted averaging.
+When you have multiple experiments or segments, pool results using fixed-effects or random-effects meta-analysis, or a simple weighted average.
 
-**Fixed-effects meta-analysis (`combine_effects`)**
+**Fixed-effects meta-analysis (inverse-variance weighting)**
 
-Combines effect estimates using inverse-variance weighting, producing a pooled effect with proper standard errors:
+Assumes a single common true effect across all experiments. Pools estimates using inverse-variance weighting and produces a pooled effect with proper standard errors:
 
 ```python
 from experiment_utils import ExperimentAnalyzer
 
-# Analyze multiple experiments
 analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
@@ -890,16 +890,38 @@ analyzer = ExperimentAnalyzer(
 
 analyzer.get_effects()
 
-# Pool results across experiments using fixed-effects meta-analysis
+# Pool across experiments — fixed effects (default)
 pooled = analyzer.combine_effects(grouping_cols=["outcome"])
 print(pooled[["outcome", "experiments", "absolute_effect", "standard_error", "pvalue"]])
 ```
+
+**Random-effects meta-analysis (Paule-Mandel + HKSJ)**
+
+When experiments may have genuinely different true effects (e.g., different markets, time periods, or populations), use random-effects. The Paule-Mandel τ² estimator quantifies between-experiment heterogeneity, and Hartung-Knapp-Sidik-Jonkman (HKSJ) confidence intervals are used for robustness, especially with few experiments:
+
+```python
+# Random-effects pooling
+pooled_re = analyzer.combine_effects(grouping_cols=["outcome"], method="random")
+print(pooled_re[["outcome", "experiments", "absolute_effect", "standard_error", "pvalue"]])
+
+# Inspect heterogeneity diagnostics (τ², I², Cochran's Q, k)
+print(analyzer.meta_stats_)
+```
+
+Key heterogeneity metrics stored in `analyzer.meta_stats_`:
+
+| Metric | Description |
+|--------|-------------|
+| `tau2` | Between-experiment variance (τ²); 0 means no heterogeneity |
+| `i2` | % of total variance due to heterogeneity (I²); >50% = substantial |
+| `q` | Cochran's Q statistic |
+| `k` | Number of experiments pooled |
 
 **Custom grouping:**
 
 ```python
 # Pool by outcome and region (e.g., combine experiments within each region)
-pooled_by_region = analyzer.combine_effects(grouping_cols=["region", "outcome"])
+pooled_by_region = analyzer.combine_effects(grouping_cols=["region", "outcome"], method="random")
 print(pooled_by_region)
 ```
 
@@ -912,9 +934,22 @@ aggregated = analyzer.aggregate_effects(grouping_cols=["outcome"])
 print(aggregated[["outcome", "experiments", "absolute_effect", "pvalue"]])
 ```
 
+**When to use fixed vs. random effects:**
+
+| Scenario | Recommended |
+|---|---|
+| Experiments are replications of the same study | Fixed effects |
+| Experiments span different markets, regions, or time periods | Random effects |
+| Small number of experiments (k < 10) | Random effects with HKSJ CIs |
+| Exploring heterogeneity | Random effects (inspect `meta_stats_`) |
+
 ### Visualizing Effects
 
 `plot_effects` produces a Cleveland dot plot with confidence intervals and optional meta-analysis pooling. It is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+
+![plot_effects with pooled random-effects row and pp + relative combined labels](docs/assets/plot_effects_pooled.png)
+
+*Cleveland dot plot with per-experiment rows, a random-effects pooled row (diamond), and combined annotations. `pct_points=True` is applied automatically only to `converted` (a proportion — control ~8%), while `revenue` (dollar values ~$45) is left in raw units.*
 
 The two axis roles are controlled by `y`:
 
@@ -991,6 +1026,8 @@ fig = analyzer.plot_effects(
 plt.show()
 ```
 
+See also the [side-by-side example with random-effects pooling](#add-a-pooled-meta-analysis-row) below.
+
 **Single experiment, multiple outcomes on the y-axis**
 
 When you have one experiment and several outcomes, flip the axes with `y="outcome"` and customise the panel subtitle with `panel_titles`:
@@ -1041,7 +1078,7 @@ plt.show()
 **Add a pooled meta-analysis row**
 
 ```python
-# Auto-compute pooled estimate (IVW of visible rows)
+# Auto-compute pooled estimate (IVW fixed effects, default)
 fig = analyzer.plot_effects(
     outcomes="revenue",
     meta_analysis=True,
@@ -1049,11 +1086,36 @@ fig = analyzer.plot_effects(
 )
 plt.show()
 
+# Random-effects pooling (Paule-Mandel + HKSJ)
+fig = analyzer.plot_effects(
+    meta_analysis=True,
+    meta_method="random",      # "fixed" (default) or "random"
+    title="Revenue — Random-Effects Pooled",
+)
+plt.show()
+
 # Pass a pre-computed combine_effects() DataFrame
-pooled = analyzer.combine_effects(grouping_cols=["outcome"])
+pooled = analyzer.combine_effects(grouping_cols=["outcome"], method="random")
 fig = analyzer.plot_effects(meta_analysis=pooled)
 plt.show()
 ```
+
+**Side-by-side absolute (pp) and relative panels with random-effects pooling**
+
+```python
+fig = analyzer.plot_effects(
+    effect=["absolute", "relative"],
+    pct_points=True,
+    meta_analysis=True,
+    meta_method="random",
+    title="Effects — Absolute & Relative",
+)
+plt.show()
+```
+
+![Absolute and relative side-by-side with random-effects pooled row](docs/assets/plot_effects_absolute_relative.png)
+
+*Side-by-side absolute (pp) and relative panels. The pooled diamond row uses random-effects meta-analysis.*
 
 **Split into one figure per group**
 
@@ -1094,7 +1156,8 @@ plt.show()
 | `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
 | `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
-| `meta_analysis` | `None` | `True` (auto-compute IVW from visible rows), `DataFrame` (pre-computed), or `None` |
+| `meta_analysis` | `None` | `True` (auto-compute pooled row from visible rows), `DataFrame` (pre-computed), or `None` |
+| `meta_method` | `"fixed"` | Meta-analysis method: `"fixed"` (IVW) or `"random"` (Paule-Mandel + HKSJ) |
 | `sort_by_magnitude` | `True` | Sort rows by `\|effect\|` descending |
 | `group_by` | `None` | Column(s) to split into separate figures |
 | `comparison` | `None` | `(treatment, control)` tuple or list of tuples to filter to specific comparisons |
@@ -1109,6 +1172,103 @@ plt.show()
 | `row_labels` | `None` | Rename individual y-axis row labels. `dict` mapping auto-generated labels to display strings, e.g. `{"US \| email": "Email (US)"}` |
 | `save_path` | `None` | File path to save the figure. With `group_by`, the group key is inserted before the extension: `"effects.png"` → `"effects_US.png"`, etc. |
 | `figsize` | auto | `(width, height)` in inches |
+
+### Common Support / Propensity Score Overlap
+
+When using propensity score weighting (`adjustment="balance"`), verify that the treatment and control groups have overlapping propensity score distributions. `plot_overlap` is available both as a **standalone function** and as a method on `ExperimentAnalyzer`.
+
+**Standalone usage**
+
+```python
+from experiment_utils import plot_overlap
+
+# After get_effects(), propensity scores are stored in analyzer.weights
+fig = plot_overlap(
+    analyzer.weights,
+    treatment_col="treatment",
+    propensity_col="propensity_score",
+    title="Common Support",
+)
+plt.show()
+```
+
+**Via `ExperimentAnalyzer` (recommended)**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion", "revenue"],
+    balance_covariates=["age", "income", "region"],
+    adjustment="balance",
+    balance_method="ps-logistic",
+)
+
+analyzer.get_effects()
+
+# Mirror density plot from stored propensity scores
+fig = analyzer.plot_overlap(title="Common Support")
+plt.show()
+```
+
+**Split by experiment with `group_by`**
+
+```python
+# One figure per experiment group
+figs = analyzer.plot_overlap(group_by="region")
+for region, fig in figs.items():
+    plt.figure(fig.number)
+    plt.show()
+```
+
+The mirror density plot shows treatment scores (facing up, blue) and control scores (facing down, red). The green band marks the shared overlap region; the annotation shows the KDE-based overlap coefficient.
+
+![Common support mirror density plot](docs/assets/common_support.png)
+
+*Mirror density plot of estimated propensity scores. Large overlap indicates good common support; thin or non-overlapping tails may warrant overlap weights (`estimand="ATO"`) or trimming.*
+
+**Auto-plot during `get_effects()`**
+
+Pass `overlap_plot=True` to render the mirror density plot automatically for each comparison during `get_effects()`, without needing to call `plot_overlap()` separately:
+
+```python
+analyzer = ExperimentAnalyzer(
+    ...
+    assess_overlap=True,   # log the KDE-based overlap coefficient
+    overlap_plot=True,     # render mirror density plot automatically
+)
+analyzer.get_effects()
+```
+
+**Key parameters of `plot_overlap`**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `group_by` | `None` | Column(s) to split into separate figures |
+| `bw_method` | `None` | KDE bandwidth (Scott's rule when `None`) |
+| `show_overlap_region` | `True` | Shade the region where both densities exceed 5% of their peak |
+| `show_overlap_coef` | `True` | Annotate with the KDE overlap coefficient |
+| `title` | `None` | Figure title |
+| `figsize` | `(7, 4)` | Figure size in inches |
+| `save_path` | `None` | File path to save; group key inserted before extension with `group_by` |
+
+**Overlap coefficient**
+
+The KDE-based overlap coefficient — the integral of `min(f_treat(x), f_control(x))` — is a single number between 0 (no overlap) and 1 (identical distributions). A value above 0.7 is generally considered acceptable.
+
+```python
+coef = analyzer.get_overlap_coefficient(
+    treatment_scores=ps_treat,
+    control_scores=ps_control,
+)
+print(f"Overlap coefficient: {coef:.3f}")
+```
+
+**When overlap is poor** (bimodal distributions, thin tails):
+
+- Switch to `estimand="ATO"` (overlap weights) to automatically downweight extreme units
+- Or use `trim_ps=True` to drop units outside `[trim_ps_lower, trim_ps_upper]`
+- Set `trim_overlap_threshold` to skip trimming when overlap is already poor
 
 ### Retrodesign Analysis
 
