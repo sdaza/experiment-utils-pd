@@ -446,7 +446,10 @@ def _render_effects_figure(
     mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
     sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
 
-    unique_panels = list(data[panel_col].unique())
+    if panel_col == "outcome" and unique_outcomes:
+        unique_panels = [o for o in unique_outcomes if o in data[panel_col].values]
+    else:
+        unique_panels = list(data[panel_col].unique())
     n_panels = len(unique_panels)
     data = _fill_missing_panel_rows(data, panel_col, row_col)
     max_rows = max(data[data[panel_col] == p][row_col].nunique() for p in unique_panels)
@@ -529,6 +532,7 @@ def _render_multi_effect_figure(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
+    unique_outcomes: list[str] | None = None,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -541,7 +545,10 @@ def _render_multi_effect_figure(
     mcp_method = data["mcp_method"].iloc[0] if "mcp_method" in data.columns else None
     sig_label = f"Significant ({mcp_method}, α={alpha})" if mcp_method else f"Significant (α={alpha})"
 
-    unique_panels = list(data[panel_col].unique())
+    if panel_col == "outcome" and unique_outcomes:
+        unique_panels = [o for o in unique_outcomes if o in data[panel_col].values]
+    else:
+        unique_panels = list(data[panel_col].unique())
     n_panels = len(unique_panels)
     n_effects = len(effect_specs)
     n_cols = n_panels * n_effects
@@ -788,7 +795,9 @@ def plot_effects(
     if outcomes is not None:
         outcomes_list = [outcomes] if isinstance(outcomes, str) else list(outcomes)
         data = data[data["outcome"].isin(outcomes_list)]
-    unique_outcomes = list(data["outcome"].unique())
+        unique_outcomes = [o for o in outcomes_list if o in data["outcome"].values]
+    else:
+        unique_outcomes = list(data["outcome"].unique())
     if not unique_outcomes:
         return None
 
@@ -964,6 +973,7 @@ def plot_effects(
             labelled,
             effect_specs=effect_specs,
             title=fig_title,
+            unique_outcomes=unique_outcomes,
             **kw,
         )
 
