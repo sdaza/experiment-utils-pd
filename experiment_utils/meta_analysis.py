@@ -102,7 +102,6 @@ class MetaAnalysisMixin:
         def _apply(df):
             result = estimator(df)
             diag = result.pop("_diagnostics", {})
-            diag.update({col: df[col].iloc[0] for col in grouping_cols if col in df.columns})
             diagnostics_list.append(diag)
             return pd.Series(result)
 
@@ -128,7 +127,11 @@ class MetaAnalysisMixin:
         pooled_results["stat_significance"] = pooled_results["stat_significance"].astype(int)
 
         if diagnostics_list:
-            self.meta_stats_ = pd.DataFrame(diagnostics_list)
+            diag_df = pd.DataFrame(diagnostics_list)
+            for col in grouping_cols:
+                if col in pooled_results.columns:
+                    diag_df.insert(0, col, pooled_results[col].values)
+            self.meta_stats_ = diag_df
 
         method_label = "fixed-effects" if method == "fixed" else "random-effects (Paule-Mandel + HKSJ)"
         self._logger.info(f"Combining effects using {method_label} meta-analysis!")
