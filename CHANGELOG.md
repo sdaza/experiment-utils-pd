@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.5](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.4...v0.3.5) (2026-03-16)
+
+
+### Bug Fixes
+
+* update meta-analysis diagnostics handling and improve plotting functions for unique outcomes ([3c4dbe6](https://github.com/sdaza/experiment-utils-pd/commit/3c4dbe6470ce96122367c4052e4c20334a6c19e0))
+* update meta-analysis diagnostics handling and improve plotting functions for unique outcomes ([298f47d](https://github.com/sdaza/experiment-utils-pd/commit/298f47d84e72ac0c51b8ac6a172a2c4aa0f06d46))
+
 ## [0.3.4](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.3...v0.3.4) (2026-03-14)
 
 
