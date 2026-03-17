@@ -17,8 +17,7 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
+    environment: pypi
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -26,3 +25,5 @@ jobs:
           python-version: '3.11'
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
