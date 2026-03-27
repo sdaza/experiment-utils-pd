@@ -238,7 +238,10 @@ def _draw_panels_into_axes(
             is_meta_row = has_meta and label == meta_label
             if is_meta_row:
                 if color_direction:
-                    color = (_CLR_SIG if eff >= 0 else _CLR_SIG_NEG) if effective_sig == 1 else _CLR_NSIG
+                    if effective_sig == 1:
+                        color = _CLR_SIG if eff >= 0 else _CLR_SIG_NEG
+                    else:
+                        color = _CLR_NSIG_POS if eff > 0 else _CLR_NSIG_NEG if eff < 0 else _CLR_NSIG
                 else:
                     color = _CLR_SIG if effective_sig == 1 else _CLR_NSIG
                 marker, dot_size, ci_lw = "D", 70, 1.8
@@ -349,32 +352,31 @@ def _add_legend_and_title(
 
         alpha_match = re.search(r"α=([\d.]+)", sig_label)
         alpha_str = alpha_match.group(1) if alpha_match else "0.05"
-        # Check if MCP method is mentioned
         mcp_match = re.search(r"\((\w+),", sig_label)
         if mcp_match:
-            footnote = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
+            footnote_label = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
         else:
-            footnote = f"* significant at α={alpha_str}"
-        fig.text(0.5, top_anchor - 0.01, footnote, ha="center", va="top", fontsize=9, color="#475569")
-        legend_items = []
+            footnote_label = f"* significant at α={alpha_str}"
+        legend_items = [
+            mlines.Line2D([], [], linestyle="None", marker="None", label=footnote_label),
+        ]
         if meta_df is not None:
             legend_items.append(
                 mlines.Line2D(
                     [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
                 )
             )
-        if legend_items:
-            fig.legend(
-                handles=legend_items,
-                loc="upper center",
-                ncol=len(legend_items),
-                bbox_to_anchor=(0.5, top_anchor - 0.05),
-                frameon=False,
-                fontsize=9,
-                handlelength=1.6,
-                handletextpad=0.5,
-                columnspacing=1.4,
-            )
+        fig.legend(
+            handles=legend_items,
+            loc="upper center",
+            ncol=len(legend_items),
+            bbox_to_anchor=(0.5, top_anchor),
+            frameon=False,
+            fontsize=9,
+            handlelength=1.6,
+            handletextpad=0.5,
+            columnspacing=1.4,
+        )
     else:
         legend_items = [
             mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
