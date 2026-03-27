@@ -103,6 +103,7 @@ class Estimators:
         se_intercept: float,
         cov_matrix: np.ndarray,
         alpha: float = 0.05,
+        df_resid: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute Fieller confidence interval for ratio coefficient/intercept using Fieller's theorem.
@@ -157,8 +158,11 @@ class Estimators:
             )
             return (np.nan, np.nan)
 
-        # Critical value (z for large samples, can use t for small samples)
-        z_crit = stats.norm.ppf(1 - alpha / 2)
+        # Critical value: t(df_resid) for OLS, z otherwise
+        if df_resid is not None and np.isfinite(df_resid):
+            z_crit = stats.t.ppf(1 - alpha / 2, df_resid)
+        else:
+            z_crit = stats.norm.ppf(1 - alpha / 2)
         g_sq = z_crit**2
 
         # Extract covariance between treatment coefficient and intercept
@@ -303,7 +307,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
@@ -412,7 +416,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
@@ -542,7 +546,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
