@@ -1735,7 +1735,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
                                     output["rel_effect_lower"] = bootstrap_results["rel_effect_lower"]
                                     output["rel_effect_upper"] = bootstrap_results["rel_effect_upper"]
-                                    output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
+                                    # Derive significance from whether bootstrap CI excludes zero
+                                    # to ensure visual consistency with forest plots
+                                    lo = bootstrap_results["abs_effect_lower"]
+                                    hi = bootstrap_results["abs_effect_upper"]
+                                    if np.isfinite(lo) and np.isfinite(hi):
+                                        output["stat_significance"] = 1 if (lo > 0 or hi < 0) else 0
+                                    else:
+                                        output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
 
                                     if self._correction:
                                         if experiment_tuple not in self._bootstrap_distributions:
@@ -2085,6 +2092,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         combine_values: bool = False,
         relative_cap: float = 5.0,
         save_path: str | None = None,
+        color_direction: bool = False,
         **kwargs,
     ) -> "plt.Figure | dict | None":
         if kwargs:
@@ -2226,6 +2234,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             combine_values=combine_values,
             relative_cap=relative_cap,
             save_path=save_path,
+            color_direction=color_direction,
         )
 
     @property

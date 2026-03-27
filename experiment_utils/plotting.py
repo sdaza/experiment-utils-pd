@@ -30,8 +30,11 @@ def _critical_value(alpha: float, df_resid: pd.Series | None = None) -> pd.Serie
 
 
 # shared palette — used by both the public function and the internal renderer
-_CLR_SIG = "#1e40af"  # deep indigo-blue — significant
+_CLR_SIG = "#1e40af"  # deep indigo-blue — significant positive
+_CLR_SIG_NEG = "#991b1b"  # deep red — significant negative
 _CLR_NSIG = "#64748b"  # muted slate — not significant
+_CLR_NSIG_POS = "#60a5fa"  # medium blue — not significant, positive
+_CLR_NSIG_NEG = "#f87171"  # medium red — not significant, negative
 _CLR_META_BG = "#fef2f2"  # faint rose — pooled row background
 _CLR_ZERO = "#475569"  # dark slate zero line
 _CLR_GUIDE = "#e2e8f0"  # very light guide lines
@@ -132,6 +135,7 @@ def _draw_panels_into_axes(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
+    color_direction: bool = False,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
@@ -215,14 +219,6 @@ def _draw_panels_into_axes(
         ):
             if eff is None or not pd.notna(eff) or not np.isfinite(eff):
                 continue
-            is_meta_row = has_meta and label == meta_label
-            if is_meta_row:
-                color = _CLR_SIG if sig == 1 else _CLR_NSIG
-                marker, dot_size, ci_lw = "D", 70, 1.8
-            elif sig == 1:
-                color, marker, dot_size, ci_lw = _CLR_SIG, "o", 45, 1.4
-            else:
-                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
 
             ci_valid = (
                 lo is not None
@@ -234,6 +230,29 @@ def _draw_panels_into_axes(
             )
             if not ci_valid:
                 continue
+
+            # Override significance when CI visually crosses zero
+            ci_crosses_zero = lo <= 0 <= hi
+            effective_sig = sig if not ci_crosses_zero else 0
+
+            is_meta_row = has_meta and label == meta_label
+            if is_meta_row:
+                if color_direction:
+                    color = (_CLR_SIG if eff >= 0 else _CLR_SIG_NEG) if effective_sig == 1 else _CLR_NSIG
+                else:
+                    color = _CLR_SIG if effective_sig == 1 else _CLR_NSIG
+                marker, dot_size, ci_lw = "D", 70, 1.8
+            elif effective_sig == 1:
+                if color_direction:
+                    sig_clr = _CLR_SIG if eff >= 0 else _CLR_SIG_NEG
+                else:
+                    sig_clr = _CLR_SIG
+                color, marker, dot_size, ci_lw = sig_clr, "o", 45, 1.4
+            elif color_direction:
+                nsig_clr = _CLR_NSIG_POS if eff > 0 else _CLR_NSIG_NEG if eff < 0 else _CLR_NSIG
+                color, marker, dot_size, ci_lw = nsig_clr, "o", 35, 1.2
+            else:
+                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
             ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
             ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
@@ -241,7 +260,12 @@ def _draw_panels_into_axes(
 
             if show_values:
                 lbl = _fmt_label(
-                    eff, sig, eff_col, decimals=value_decimals, pct_points=_panel_pct, relative_cap=relative_cap
+                    eff,
+                    effective_sig,
+                    eff_col,
+                    decimals=value_decimals,
+                    pct_points=_panel_pct,
+                    relative_cap=relative_cap,
                 )
                 if (
                     combine_values
@@ -311,35 +335,68 @@ def _add_legend_and_title(
     sig_label: str,
     meta_df: pd.DataFrame | None,
     panel_spacing: float | None = None,
+    color_direction: bool = False,
 ) -> None:
-    """Add a shared legend and optional suptitle, then call tight_layout."""
-    legend_items = [
-        mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
-        mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
-    ]
-    if meta_df is not None:
-        legend_items.append(
-            mlines.Line2D(
-                [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
-            )
-        )
-
+    """Add a shared legend/footnote and optional suptitle, then call tight_layout."""
     top_anchor = 0.97
     if title:
         fig.suptitle(title, fontsize=13, fontweight="bold", color="#0f172a", y=top_anchor)
         top_anchor -= 0.07
 
-    fig.legend(
-        handles=legend_items,
-        loc="upper center",
-        ncol=len(legend_items),
-        bbox_to_anchor=(0.5, top_anchor),
-        frameon=False,
-        fontsize=9,
-        handlelength=1.6,
-        handletextpad=0.5,
-        columnspacing=1.4,
-    )
+    if color_direction:
+        # Extract alpha from sig_label like "Significant (α=0.05)"
+        import re
+
+        alpha_match = re.search(r"α=([\d.]+)", sig_label)
+        alpha_str = alpha_match.group(1) if alpha_match else "0.05"
+        # Check if MCP method is mentioned
+        mcp_match = re.search(r"\((\w+),", sig_label)
+        if mcp_match:
+            footnote = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
+        else:
+            footnote = f"* significant at α={alpha_str}"
+        fig.text(0.5, top_anchor - 0.01, footnote, ha="center", va="top", fontsize=9, color="#475569")
+        legend_items = []
+        if meta_df is not None:
+            legend_items.append(
+                mlines.Line2D(
+                    [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
+                )
+            )
+        if legend_items:
+            fig.legend(
+                handles=legend_items,
+                loc="upper center",
+                ncol=len(legend_items),
+                bbox_to_anchor=(0.5, top_anchor - 0.05),
+                frameon=False,
+                fontsize=9,
+                handlelength=1.6,
+                handletextpad=0.5,
+                columnspacing=1.4,
+            )
+    else:
+        legend_items = [
+            mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
+            mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
+        ]
+        if meta_df is not None:
+            legend_items.append(
+                mlines.Line2D(
+                    [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
+                )
+            )
+        fig.legend(
+            handles=legend_items,
+            loc="upper center",
+            ncol=len(legend_items),
+            bbox_to_anchor=(0.5, top_anchor),
+            frameon=False,
+            fontsize=9,
+            handlelength=1.6,
+            handletextpad=0.5,
+            columnspacing=1.4,
+        )
 
     header_inches = 0.45 + (0.28 if title else 0.0)
     reserved = header_inches / figsize[1]
@@ -455,6 +512,7 @@ def _render_effects_figure(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
+    color_direction: bool = False,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -520,9 +578,12 @@ def _render_effects_figure(
         combine_values=combine_values,
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes,
+        color_direction=color_direction,
     )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
+    _add_legend_and_title(
+        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing, color_direction=color_direction
+    )
     return fig
 
 
@@ -548,6 +609,7 @@ def _render_multi_effect_figure(
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
     unique_outcomes: list[str] | None = None,
+    color_direction: bool = False,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -641,9 +703,12 @@ def _render_multi_effect_figure(
             combine_values=combine_values,
             relative_cap=relative_cap,
             pp_outcomes=pp_outcomes if ec == "absolute_effect" else None,
+            color_direction=color_direction,
         )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
+    _add_legend_and_title(
+        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing, color_direction=color_direction
+    )
     return fig
 
 
@@ -671,6 +736,7 @@ def plot_effects(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     save_path: str | None = None,
+    color_direction: bool = False,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     if kwargs:
@@ -960,6 +1026,7 @@ def plot_effects(
         combine_values=combine_values,
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes if pct_points else None,
+        color_direction=color_direction,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:
