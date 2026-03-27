@@ -1869,6 +1869,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "stat_significance",
             "se_intercept",
             "cov_coef_intercept",
+            "df_resid",
             "control_std",
             "alpha_param",
         ]
@@ -1913,7 +1914,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         if not results_df.empty and "absolute_effect" in results_df.columns and "standard_error" in results_df.columns:
             alpha = getattr(self, "_alpha", 0.05)
-            z_critical = stats.norm.ppf(1 - alpha / 2)
 
             if "abs_effect_lower" not in results_df.columns:
                 results_df["abs_effect_lower"] = np.nan
@@ -1923,14 +1923,37 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             if "inference_method" in results_df.columns:
                 async_mask = results_df["inference_method"] == "asymptotic"
                 if async_mask.any():
-                    results_df.loc[async_mask, "abs_effect_lower"] = (
-                        results_df.loc[async_mask, "absolute_effect"]
-                        - z_critical * results_df.loc[async_mask, "standard_error"]
+                    has_df = (
+                        async_mask & results_df["df_resid"].notna()
+                        if "df_resid" in results_df.columns
+                        else pd.Series(False, index=results_df.index)
                     )
-                    results_df.loc[async_mask, "abs_effect_upper"] = (
-                        results_df.loc[async_mask, "absolute_effect"]
-                        + z_critical * results_df.loc[async_mask, "standard_error"]
-                    )
+                    no_df = async_mask & ~has_df
+
+                    # t-distribution CI for rows with df_resid (OLS models)
+                    if has_df.any():
+                        df_vals = results_df.loc[has_df, "df_resid"]
+                        t_crit = df_vals.apply(lambda d: stats.t.ppf(1 - alpha / 2, d))
+                        results_df.loc[has_df, "abs_effect_lower"] = (
+                            results_df.loc[has_df, "absolute_effect"]
+                            - t_crit * results_df.loc[has_df, "standard_error"]
+                        )
+                        results_df.loc[has_df, "abs_effect_upper"] = (
+                            results_df.loc[has_df, "absolute_effect"]
+                            + t_crit * results_df.loc[has_df, "standard_error"]
+                        )
+
+                    # z-distribution fallback for rows without df_resid
+                    if no_df.any():
+                        z_critical = stats.norm.ppf(1 - alpha / 2)
+                        results_df.loc[no_df, "abs_effect_lower"] = (
+                            results_df.loc[no_df, "absolute_effect"]
+                            - z_critical * results_df.loc[no_df, "standard_error"]
+                        )
+                        results_df.loc[no_df, "abs_effect_upper"] = (
+                            results_df.loc[no_df, "absolute_effect"]
+                            + z_critical * results_df.loc[no_df, "standard_error"]
+                        )
 
         self._results = results_df
 
