@@ -3074,7 +3074,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 alpha_ci = thres / n_comparisons
                 ci_note = f"Using default Bonferroni α/k = {alpha_ci:.6f}"
 
-            z_crit_adj = stats.norm.ppf(1 - alpha_ci / 2)
+            # Use t-distribution when df_resid available (OLS), z otherwise
+            if "df_resid" in group.columns and group["df_resid"].notna().any():
+                crit_adj = (
+                    group["df_resid"]
+                    .apply(
+                        lambda d: stats.t.ppf(1 - alpha_ci / 2, d) if pd.notna(d) else stats.norm.ppf(1 - alpha_ci / 2)
+                    )
+                    .values
+                )
+            else:
+                crit_adj = stats.norm.ppf(1 - alpha_ci / 2)
 
             result_dict = {
                 "pvalue_mcp": pvals_adj,
@@ -3084,8 +3094,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
             abs_effect = group["absolute_effect"].values
             se = group["standard_error"].values
-            result_dict["abs_effect_lower_mcp"] = abs_effect - z_crit_adj * se
-            result_dict["abs_effect_upper_mcp"] = abs_effect + z_crit_adj * se
+            result_dict["abs_effect_lower_mcp"] = abs_effect - crit_adj * se
+            result_dict["abs_effect_upper_mcp"] = abs_effect + crit_adj * se
 
             if "se_intercept" in group.columns and "cov_coef_intercept" in group.columns:
                 rel_lower_adj = []
