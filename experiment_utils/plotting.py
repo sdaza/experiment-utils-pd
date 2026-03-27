@@ -16,6 +16,19 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+
+def _critical_value(alpha: float, df_resid: pd.Series | None = None) -> pd.Series | float:
+    """Return t or z critical value depending on whether df_resid is available."""
+    z = stats.norm.ppf(1 - alpha / 2)
+    if df_resid is None:
+        return z
+    valid = df_resid.notna()
+    crit = pd.Series(z, index=df_resid.index)
+    if valid.any():
+        crit.loc[valid] = df_resid.loc[valid].apply(lambda d: stats.t.ppf(1 - alpha / 2, d))
+    return crit
+
+
 # shared palette — used by both the public function and the internal renderer
 _CLR_SIG = "#1e40af"  # deep indigo-blue — significant
 _CLR_NSIG = "#64748b"  # muted slate — not significant
@@ -80,16 +93,18 @@ def _resolve_ci_cols(
         if not valid.empty:
             n_tests = max(1, round((valid["pvalue_mcp"] / valid["pvalue"]).median()))
 
-    z_adj = stats.norm.ppf(1 - 0.05 / (2 * n_tests))
+    alpha_adj = 0.05 / n_tests
     _eff_col = eff_col or lo_col.replace("_lower", "").replace("abs_effect", "absolute_effect").replace(
         "rel_effect", "relative_effect"
     )
     if _eff_col not in data.columns:
         return lo_col, hi_col, data
 
+    df_col = data["df_resid"] if "df_resid" in data.columns else None
+    crit_adj = _critical_value(alpha_adj, df_col)
     data = data.copy()
-    data[_mcp_lo] = data[_eff_col] - z_adj * data["standard_error"]
-    data[_mcp_hi] = data[_eff_col] + z_adj * data["standard_error"]
+    data[_mcp_lo] = data[_eff_col] - crit_adj * data["standard_error"]
+    data[_mcp_hi] = data[_eff_col] + crit_adj * data["standard_error"]
     return _mcp_lo, _mcp_hi, data
 
 
@@ -584,13 +599,15 @@ def _render_multi_effect_figure(
     for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
         # prepare CI columns for this effect type
         eff_data = data.copy()
-        z = stats.norm.ppf(1 - alpha / 2)
         if lc not in eff_data.columns or eff_data[lc].isna().all():
-            eff_data[lc] = eff_data[ec] - z * eff_data["standard_error"]
-            eff_data[hc] = eff_data[ec] + z * eff_data["standard_error"]
+            df_col = eff_data["df_resid"] if "df_resid" in eff_data.columns else None
+            crit = _critical_value(alpha, df_col)
+            eff_data[lc] = eff_data[ec] - crit * eff_data["standard_error"]
+            eff_data[hc] = eff_data[ec] + crit * eff_data["standard_error"]
         if meta_df is not None:
             _meta = meta_df.copy()
             if lc not in _meta.columns or _meta[lc].isna().all():
+                z = stats.norm.ppf(1 - alpha / 2)
                 _meta[lc] = _meta[ec] - z * _meta["standard_error"]
                 _meta[hc] = _meta[ec] + z * _meta["standard_error"]
         else:
@@ -865,18 +882,19 @@ def plot_effects(
         lbl = "Absolute (Relative) Effect" if combine_values else "Absolute Effect"
         return "absolute_effect", "abs_effect_lower", "abs_effect_upper", lbl
 
-    z = stats.norm.ppf(1 - alpha / 2)
-
     if len(effects) == 1:
         eff_col, lo_col, hi_col, x_label = _effect_cols(effects[0])
         if lo_col not in data.columns or data[lo_col].isna().all():
-            data[lo_col] = data[eff_col] - z * data["standard_error"]
-            data[hi_col] = data[eff_col] + z * data["standard_error"]
+            df_col = data["df_resid"] if "df_resid" in data.columns else None
+            crit = _critical_value(alpha, df_col)
+            data[lo_col] = data[eff_col] - crit * data["standard_error"]
+            data[hi_col] = data[eff_col] + crit * data["standard_error"]
         if meta_df is not None:
             meta_df = meta_df.copy()
             if "_label" not in meta_df.columns:
                 meta_df["_label"] = "Pooled"
             if lo_col not in meta_df.columns or meta_df[lo_col].isna().all():
+                z = stats.norm.ppf(1 - alpha / 2)
                 meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
                 meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
     else:
