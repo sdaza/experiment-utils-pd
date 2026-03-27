@@ -3112,9 +3112,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     se_coef = se[idx]
                     se_int = group["se_intercept"].values[idx]
                     cov = group["cov_coef_intercept"].values[idx]
+                    df_r = group["df_resid"].values[idx] if "df_resid" in group.columns else None
 
                     rel_ci_lower, rel_ci_upper = self._compute_fieller_ci_adjusted(
-                        coef, intercept, se_coef, se_int, cov, alpha_ci
+                        coef, intercept, se_coef, se_int, cov, alpha_ci, df_r
                     )
                     rel_lower_adj.append(rel_ci_lower)
                     rel_upper_adj.append(rel_ci_upper)
