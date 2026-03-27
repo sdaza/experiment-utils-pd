@@ -70,3 +70,10 @@ globs: ["*"]
 - ALWAYS run `ruff check .` after making any Python file changes
 - Fix ALL ruff errors before considering the task done — never ignore them
 - Order: write code → `ruff format .` → `ruff check .` → fix issues → verify again
+
+## RAM Memory usage
+
+- ALWAYS be mindful of RAM usage when running agents, especially with large models or datasets
+- When running test check the RAM usage and if it exceeds 80% of available memory, consider optimizing the code or using a smaller model
+- Use tools like `htop` or `psutil` to monitor RAM usage in real-time
+- If RAM usage is consistently high, investigate memory leaks or inefficient data structures in your code
