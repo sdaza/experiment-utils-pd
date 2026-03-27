@@ -2891,6 +2891,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         se_intercept: float,
         cov: float,
         alpha: float = 0.05,
+        df_resid: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute Fieller confidence interval with custom alpha.
@@ -2923,7 +2924,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if intercept == 0 or abs(intercept) < 1e-10:
             return (np.nan, np.nan)
 
-        z_crit = stats.norm.ppf(1 - alpha / 2)
+        # Use t-distribution when df_resid available (OLS), z otherwise
+        if df_resid is not None and np.isfinite(df_resid):
+            z_crit = stats.t.ppf(1 - alpha / 2, df_resid)
+        else:
+            z_crit = stats.norm.ppf(1 - alpha / 2)
         g_sq = z_crit**2
 
         a = intercept**2 - g_sq * se_intercept**2
