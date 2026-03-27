@@ -289,6 +289,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -326,6 +327,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -396,6 +398,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -433,6 +436,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -520,6 +524,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.std_errors[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -561,6 +566,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -1786,6 +1792,7 @@ class Estimators:
             "rel_effect_upper": rel_upper,
             "se_intercept": np.nan,
             "cov_coef_intercept": np.nan,
+            "df_resid": np.nan,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
