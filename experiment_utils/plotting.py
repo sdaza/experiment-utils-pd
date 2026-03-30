@@ -362,7 +362,6 @@ def _add_legend_and_title(
     color_palette: dict[str, str] | None = None,
 ) -> None:
     """Add a shared legend/footnote and optional suptitle, then call tight_layout."""
-    pal = _resolve_palette(color_palette)
     top_anchor = 0.97
     if title:
         fig.suptitle(title, fontsize=13, fontweight="bold", color="#0f172a", y=top_anchor)
@@ -616,8 +615,14 @@ def _render_effects_figure(
     )
 
     _add_legend_and_title(
-        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing,
-        color_direction=color_direction, color_palette=color_palette,
+        fig,
+        figsize,
+        title,
+        sig_label,
+        meta_df,
+        panel_spacing=panel_spacing,
+        color_direction=color_direction,
+        color_palette=color_palette,
     )
     return fig
 
