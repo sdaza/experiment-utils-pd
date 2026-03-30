@@ -2,8 +2,9 @@
 testing
 notebooks
 __pycache__
-/experiment_utils_pd.egg-info
 experiment_utils_pd.egg-info
+experiment_utils.egg-info
+
 .venv
 .*cache
 /papers
@@ -11,3 +12,4 @@ experiment_utils_pd.egg-info
 /build
 /dist
 /task
+/docs/superpowers

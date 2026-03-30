@@ -16,13 +16,47 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+
+def _critical_value(alpha: float, df_resid: pd.Series | None = None) -> pd.Series | float:
+    """Return t or z critical value depending on whether df_resid is available."""
+    z = stats.norm.ppf(1 - alpha / 2)
+    if df_resid is None:
+        return z
+    valid = df_resid.notna()
+    crit = pd.Series(z, index=df_resid.index)
+    if valid.any():
+        crit.loc[valid] = df_resid.loc[valid].apply(lambda d: stats.t.ppf(1 - alpha / 2, d))
+    return crit
+
+
 # shared palette — used by both the public function and the internal renderer
-_CLR_SIG = "#1e40af"  # deep indigo-blue — significant
-_CLR_NSIG = "#64748b"  # muted slate — not significant
+_CLR_SIG = "#166534"  # dark green — significant positive
+_CLR_SIG_NEG = "#991b1b"  # deep red — significant negative
+_CLR_NSIG = "#64748b"  # muted slate — neutral / not significant
+_CLR_NSIG_POS = "#4ade80"  # light green — positive but not significant
+_CLR_NSIG_NEG = "#64748b"  # muted slate — negative but not significant
 _CLR_META_BG = "#fef2f2"  # faint rose — pooled row background
 _CLR_ZERO = "#475569"  # dark slate zero line
 _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
+
+# Default color palette for color_direction mode
+DEFAULT_COLOR_PALETTE: dict[str, str] = {
+    "sig_pos": _CLR_SIG,  # dark green — significant positive
+    "sig_neg": _CLR_SIG_NEG,  # deep red — significant negative
+    "nsig_pos": _CLR_NSIG_POS,  # medium-light green — positive but not significant
+    "nsig_neg": _CLR_NSIG_NEG,  # muted slate — negative / neutral
+    "nsig_zero": _CLR_NSIG,  # muted slate — exactly zero
+}
+
+
+def _resolve_palette(color_palette: dict[str, str] | None) -> dict[str, str]:
+    """Merge user overrides into the default palette."""
+    if color_palette is None:
+        return DEFAULT_COLOR_PALETTE.copy()
+    merged = DEFAULT_COLOR_PALETTE.copy()
+    merged.update(color_palette)
+    return merged
 
 
 def _fmt_label(
@@ -80,16 +114,18 @@ def _resolve_ci_cols(
         if not valid.empty:
             n_tests = max(1, round((valid["pvalue_mcp"] / valid["pvalue"]).median()))
 
-    z_adj = stats.norm.ppf(1 - 0.05 / (2 * n_tests))
+    alpha_adj = 0.05 / n_tests
     _eff_col = eff_col or lo_col.replace("_lower", "").replace("abs_effect", "absolute_effect").replace(
         "rel_effect", "relative_effect"
     )
     if _eff_col not in data.columns:
         return lo_col, hi_col, data
 
+    df_col = data["df_resid"] if "df_resid" in data.columns else None
+    crit_adj = _critical_value(alpha_adj, df_col)
     data = data.copy()
-    data[_mcp_lo] = data[_eff_col] - z_adj * data["standard_error"]
-    data[_mcp_hi] = data[_eff_col] + z_adj * data["standard_error"]
+    data[_mcp_lo] = data[_eff_col] - crit_adj * data["standard_error"]
+    data[_mcp_hi] = data[_eff_col] + crit_adj * data["standard_error"]
     return _mcp_lo, _mcp_hi, data
 
 
@@ -117,8 +153,11 @@ def _draw_panels_into_axes(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
+    color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
+    pal = _resolve_palette(color_palette)
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
 
     for panel_idx, (ax, panel_val) in enumerate(zip(axes, unique_panels, strict=False)):
@@ -200,14 +239,6 @@ def _draw_panels_into_axes(
         ):
             if eff is None or not pd.notna(eff) or not np.isfinite(eff):
                 continue
-            is_meta_row = has_meta and label == meta_label
-            if is_meta_row:
-                color = _CLR_SIG if sig == 1 else _CLR_NSIG
-                marker, dot_size, ci_lw = "D", 70, 1.8
-            elif sig == 1:
-                color, marker, dot_size, ci_lw = _CLR_SIG, "o", 45, 1.4
-            else:
-                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
 
             ci_valid = (
                 lo is not None
@@ -219,6 +250,32 @@ def _draw_panels_into_axes(
             )
             if not ci_valid:
                 continue
+
+            # Override significance when CI visually crosses zero
+            ci_crosses_zero = lo <= 0 <= hi
+            effective_sig = sig if not ci_crosses_zero else 0
+
+            is_meta_row = has_meta and label == meta_label
+            if is_meta_row:
+                if color_direction:
+                    if effective_sig == 1:
+                        color = pal["sig_pos"] if eff >= 0 else pal["sig_neg"]
+                    else:
+                        color = pal["nsig_pos"] if eff > 0 else pal["nsig_neg"] if eff < 0 else pal["nsig_zero"]
+                else:
+                    color = pal["sig_pos"] if effective_sig == 1 else _CLR_NSIG
+                marker, dot_size, ci_lw = "D", 70, 1.8
+            elif effective_sig == 1:
+                if color_direction:
+                    sig_clr = pal["sig_pos"] if eff >= 0 else pal["sig_neg"]
+                else:
+                    sig_clr = pal["sig_pos"]
+                color, marker, dot_size, ci_lw = sig_clr, "o", 45, 1.4
+            elif color_direction:
+                nsig_clr = pal["nsig_pos"] if eff > 0 else pal["nsig_neg"] if eff < 0 else pal["nsig_zero"]
+                color, marker, dot_size, ci_lw = nsig_clr, "o", 35, 1.2
+            else:
+                color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
             ax.hlines(i, lo, hi, color=color, linewidth=ci_lw, alpha=0.75, zorder=3)
             ax.vlines(lo, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
             ax.vlines(hi, i - cap_h, i + cap_h, color=color, linewidth=ci_lw * 0.75, alpha=0.75, zorder=3)
@@ -226,7 +283,12 @@ def _draw_panels_into_axes(
 
             if show_values:
                 lbl = _fmt_label(
-                    eff, sig, eff_col, decimals=value_decimals, pct_points=_panel_pct, relative_cap=relative_cap
+                    eff,
+                    effective_sig,
+                    eff_col,
+                    decimals=value_decimals,
+                    pct_points=_panel_pct,
+                    relative_cap=relative_cap,
                 )
                 if (
                     combine_values
@@ -296,35 +358,76 @@ def _add_legend_and_title(
     sig_label: str,
     meta_df: pd.DataFrame | None,
     panel_spacing: float | None = None,
+    color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> None:
-    """Add a shared legend and optional suptitle, then call tight_layout."""
-    legend_items = [
-        mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
-        mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
-    ]
-    if meta_df is not None:
-        legend_items.append(
-            mlines.Line2D(
-                [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
-            )
-        )
-
+    """Add a shared legend/footnote and optional suptitle, then call tight_layout."""
     top_anchor = 0.97
     if title:
         fig.suptitle(title, fontsize=13, fontweight="bold", color="#0f172a", y=top_anchor)
         top_anchor -= 0.07
 
-    fig.legend(
-        handles=legend_items,
-        loc="upper center",
-        ncol=len(legend_items),
-        bbox_to_anchor=(0.5, top_anchor),
-        frameon=False,
-        fontsize=9,
-        handlelength=1.6,
-        handletextpad=0.5,
-        columnspacing=1.4,
-    )
+    if color_direction:
+        # Extract alpha from sig_label like "Significant (α=0.05)"
+        import re
+
+        alpha_match = re.search(r"α=([\d.]+)", sig_label)
+        alpha_str = alpha_match.group(1) if alpha_match else "0.05"
+        mcp_match = re.search(r"\((\w+),", sig_label)
+        if mcp_match:
+            footnote_label = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
+        else:
+            footnote_label = f"* significant at α={alpha_str}"
+        legend_items = [
+            mlines.Line2D([], [], linestyle="None", marker="None", label=footnote_label),
+        ]
+        if meta_df is not None:
+            legend_items.append(
+                mlines.Line2D(
+                    [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
+                )
+            )
+        fig.legend(
+            handles=legend_items,
+            loc="upper center",
+            ncol=len(legend_items),
+            bbox_to_anchor=(0.5, top_anchor),
+            frameon=False,
+            fontsize=9,
+            handlelength=1.6,
+            handletextpad=0.5,
+            columnspacing=1.4,
+        )
+    else:
+        import re
+
+        alpha_match = re.search(r"α=([\d.]+)", sig_label)
+        alpha_str = alpha_match.group(1) if alpha_match else "0.05"
+        mcp_match = re.search(r"\((\w+),", sig_label)
+        if mcp_match:
+            footnote_label = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
+        else:
+            footnote_label = f"* significant at α={alpha_str}"
+        legend_items = [
+            mlines.Line2D([], [], linestyle="None", marker="None", label=footnote_label),
+        ]
+        if meta_df is not None:
+            legend_items.append(
+                mlines.Line2D(
+                    [], [], color="#475569", marker="D", linestyle="None", markersize=6, label="Pooled (meta-analysis)"
+                )
+            )
+        fig.legend(
+            handles=legend_items,
+            loc="upper center",
+            ncol=len(legend_items),
+            bbox_to_anchor=(0.5, top_anchor),
+            frameon=False,
+            fontsize=9,
+            handlelength=1.6,
+            handletextpad=0.5,
+            columnspacing=1.4,
+        )
 
     header_inches = 0.45 + (0.28 if title else 0.0)
     reserved = header_inches / figsize[1]
@@ -440,6 +543,8 @@ def _render_effects_figure(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
+    color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -505,9 +610,20 @@ def _render_effects_figure(
         combine_values=combine_values,
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes,
+        color_direction=color_direction,
+        color_palette=color_palette,
     )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
+    _add_legend_and_title(
+        fig,
+        figsize,
+        title,
+        sig_label,
+        meta_df,
+        panel_spacing=panel_spacing,
+        color_direction=color_direction,
+        color_palette=color_palette,
+    )
     return fig
 
 
@@ -533,6 +649,7 @@ def _render_multi_effect_figure(
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
     unique_outcomes: list[str] | None = None,
+    color_direction: bool = False,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -584,13 +701,15 @@ def _render_multi_effect_figure(
     for eff_idx, (ec, lc, hc, xl) in enumerate(effect_specs):
         # prepare CI columns for this effect type
         eff_data = data.copy()
-        z = stats.norm.ppf(1 - alpha / 2)
         if lc not in eff_data.columns or eff_data[lc].isna().all():
-            eff_data[lc] = eff_data[ec] - z * eff_data["standard_error"]
-            eff_data[hc] = eff_data[ec] + z * eff_data["standard_error"]
+            df_col = eff_data["df_resid"] if "df_resid" in eff_data.columns else None
+            crit = _critical_value(alpha, df_col)
+            eff_data[lc] = eff_data[ec] - crit * eff_data["standard_error"]
+            eff_data[hc] = eff_data[ec] + crit * eff_data["standard_error"]
         if meta_df is not None:
             _meta = meta_df.copy()
             if lc not in _meta.columns or _meta[lc].isna().all():
+                z = stats.norm.ppf(1 - alpha / 2)
                 _meta[lc] = _meta[ec] - z * _meta["standard_error"]
                 _meta[hc] = _meta[ec] + z * _meta["standard_error"]
         else:
@@ -624,9 +743,12 @@ def _render_multi_effect_figure(
             combine_values=combine_values,
             relative_cap=relative_cap,
             pp_outcomes=pp_outcomes if ec == "absolute_effect" else None,
+            color_direction=color_direction,
         )
 
-    _add_legend_and_title(fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing)
+    _add_legend_and_title(
+        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing, color_direction=color_direction
+    )
     return fig
 
 
@@ -654,6 +776,7 @@ def plot_effects(
     combine_values: bool = False,
     relative_cap: float = 5.0,
     save_path: str | None = None,
+    color_direction: bool = False,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     if kwargs:
@@ -865,18 +988,19 @@ def plot_effects(
         lbl = "Absolute (Relative) Effect" if combine_values else "Absolute Effect"
         return "absolute_effect", "abs_effect_lower", "abs_effect_upper", lbl
 
-    z = stats.norm.ppf(1 - alpha / 2)
-
     if len(effects) == 1:
         eff_col, lo_col, hi_col, x_label = _effect_cols(effects[0])
         if lo_col not in data.columns or data[lo_col].isna().all():
-            data[lo_col] = data[eff_col] - z * data["standard_error"]
-            data[hi_col] = data[eff_col] + z * data["standard_error"]
+            df_col = data["df_resid"] if "df_resid" in data.columns else None
+            crit = _critical_value(alpha, df_col)
+            data[lo_col] = data[eff_col] - crit * data["standard_error"]
+            data[hi_col] = data[eff_col] + crit * data["standard_error"]
         if meta_df is not None:
             meta_df = meta_df.copy()
             if "_label" not in meta_df.columns:
                 meta_df["_label"] = "Pooled"
             if lo_col not in meta_df.columns or meta_df[lo_col].isna().all():
+                z = stats.norm.ppf(1 - alpha / 2)
                 meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
                 meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
     else:
@@ -942,6 +1066,7 @@ def plot_effects(
         combine_values=combine_values,
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes if pct_points else None,
+        color_direction=color_direction,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:

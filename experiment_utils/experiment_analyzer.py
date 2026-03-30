@@ -1735,7 +1735,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
                                     output["rel_effect_lower"] = bootstrap_results["rel_effect_lower"]
                                     output["rel_effect_upper"] = bootstrap_results["rel_effect_upper"]
-                                    output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
+                                    # Derive significance from whether bootstrap CI excludes zero
+                                    # to ensure visual consistency with forest plots
+                                    lo = bootstrap_results["abs_effect_lower"]
+                                    hi = bootstrap_results["abs_effect_upper"]
+                                    if np.isfinite(lo) and np.isfinite(hi):
+                                        output["stat_significance"] = 1 if (lo > 0 or hi < 0) else 0
+                                    else:
+                                        output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
 
                                     if self._correction:
                                         if experiment_tuple not in self._bootstrap_distributions:
@@ -1869,6 +1876,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "stat_significance",
             "se_intercept",
             "cov_coef_intercept",
+            "df_resid",
             "control_std",
             "alpha_param",
         ]
@@ -1913,7 +1921,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         if not results_df.empty and "absolute_effect" in results_df.columns and "standard_error" in results_df.columns:
             alpha = getattr(self, "_alpha", 0.05)
-            z_critical = stats.norm.ppf(1 - alpha / 2)
 
             if "abs_effect_lower" not in results_df.columns:
                 results_df["abs_effect_lower"] = np.nan
@@ -1923,14 +1930,37 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             if "inference_method" in results_df.columns:
                 async_mask = results_df["inference_method"] == "asymptotic"
                 if async_mask.any():
-                    results_df.loc[async_mask, "abs_effect_lower"] = (
-                        results_df.loc[async_mask, "absolute_effect"]
-                        - z_critical * results_df.loc[async_mask, "standard_error"]
+                    has_df = (
+                        async_mask & results_df["df_resid"].notna()
+                        if "df_resid" in results_df.columns
+                        else pd.Series(False, index=results_df.index)
                     )
-                    results_df.loc[async_mask, "abs_effect_upper"] = (
-                        results_df.loc[async_mask, "absolute_effect"]
-                        + z_critical * results_df.loc[async_mask, "standard_error"]
-                    )
+                    no_df = async_mask & ~has_df
+
+                    # t-distribution CI for rows with df_resid (OLS models)
+                    if has_df.any():
+                        df_vals = results_df.loc[has_df, "df_resid"]
+                        t_crit = df_vals.apply(lambda d: stats.t.ppf(1 - alpha / 2, d))
+                        results_df.loc[has_df, "abs_effect_lower"] = (
+                            results_df.loc[has_df, "absolute_effect"]
+                            - t_crit * results_df.loc[has_df, "standard_error"]
+                        )
+                        results_df.loc[has_df, "abs_effect_upper"] = (
+                            results_df.loc[has_df, "absolute_effect"]
+                            + t_crit * results_df.loc[has_df, "standard_error"]
+                        )
+
+                    # z-distribution fallback for rows without df_resid
+                    if no_df.any():
+                        z_critical = stats.norm.ppf(1 - alpha / 2)
+                        results_df.loc[no_df, "abs_effect_lower"] = (
+                            results_df.loc[no_df, "absolute_effect"]
+                            - z_critical * results_df.loc[no_df, "standard_error"]
+                        )
+                        results_df.loc[no_df, "abs_effect_upper"] = (
+                            results_df.loc[no_df, "absolute_effect"]
+                            + z_critical * results_df.loc[no_df, "standard_error"]
+                        )
 
         self._results = results_df
 
@@ -2062,6 +2092,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         combine_values: bool = False,
         relative_cap: float = 5.0,
         save_path: str | None = None,
+        color_direction: bool = False,
         **kwargs,
     ) -> "plt.Figure | dict | None":
         if kwargs:
@@ -2203,6 +2234,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             combine_values=combine_values,
             relative_cap=relative_cap,
             save_path=save_path,
+            color_direction=color_direction,
         )
 
     @property
@@ -2868,6 +2900,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         se_intercept: float,
         cov: float,
         alpha: float = 0.05,
+        df_resid: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute Fieller confidence interval with custom alpha.
@@ -2900,7 +2933,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if intercept == 0 or abs(intercept) < 1e-10:
             return (np.nan, np.nan)
 
-        z_crit = stats.norm.ppf(1 - alpha / 2)
+        # Use t-distribution when df_resid available (OLS), z otherwise
+        if df_resid is not None and np.isfinite(df_resid):
+            z_crit = stats.t.ppf(1 - alpha / 2, df_resid)
+        else:
+            z_crit = stats.norm.ppf(1 - alpha / 2)
         g_sq = z_crit**2
 
         a = intercept**2 - g_sq * se_intercept**2
@@ -3051,7 +3088,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 alpha_ci = thres / n_comparisons
                 ci_note = f"Using default Bonferroni α/k = {alpha_ci:.6f}"
 
-            z_crit_adj = stats.norm.ppf(1 - alpha_ci / 2)
+            # Use t-distribution when df_resid available (OLS), z otherwise
+            if "df_resid" in group.columns and group["df_resid"].notna().any():
+                crit_adj = (
+                    group["df_resid"]
+                    .apply(
+                        lambda d: stats.t.ppf(1 - alpha_ci / 2, d) if pd.notna(d) else stats.norm.ppf(1 - alpha_ci / 2)
+                    )
+                    .values
+                )
+            else:
+                crit_adj = stats.norm.ppf(1 - alpha_ci / 2)
 
             result_dict = {
                 "pvalue_mcp": pvals_adj,
@@ -3061,8 +3108,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
             abs_effect = group["absolute_effect"].values
             se = group["standard_error"].values
-            result_dict["abs_effect_lower_mcp"] = abs_effect - z_crit_adj * se
-            result_dict["abs_effect_upper_mcp"] = abs_effect + z_crit_adj * se
+            result_dict["abs_effect_lower_mcp"] = abs_effect - crit_adj * se
+            result_dict["abs_effect_upper_mcp"] = abs_effect + crit_adj * se
 
             if "se_intercept" in group.columns and "cov_coef_intercept" in group.columns:
                 rel_lower_adj = []
@@ -3074,9 +3121,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     se_coef = se[idx]
                     se_int = group["se_intercept"].values[idx]
                     cov = group["cov_coef_intercept"].values[idx]
+                    df_r = group["df_resid"].values[idx] if "df_resid" in group.columns else None
 
                     rel_ci_lower, rel_ci_upper = self._compute_fieller_ci_adjusted(
-                        coef, intercept, se_coef, se_int, cov, alpha_ci
+                        coef, intercept, se_coef, se_int, cov, alpha_ci, df_r
                     )
                     rel_lower_adj.append(rel_ci_lower)
                     rel_upper_adj.append(rel_ci_upper)

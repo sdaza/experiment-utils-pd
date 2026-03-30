@@ -848,6 +848,49 @@ def test_relative_effect_zero_control_falls_back(multi_experiment_analyzer):
         )
 
 
+def test_asymptotic_ci_uses_t_distribution(sample_data):
+    """CI must use t(df_resid), not z, for OLS asymptotic inference."""
+    from scipy import stats
+
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        regression_covariates="baseline_conversion",
+        bootstrap=False,
+    )
+    analyzer.get_effects()
+    results = analyzer.results
+
+    # Filter to asymptotic OLS rows with df_resid
+    mask = (
+        (results["inference_method"] == "asymptotic") & (results["model_type"] == "ols") & (results["df_resid"].notna())
+    )
+    ols_rows = results.loc[mask]
+    assert len(ols_rows) > 0, "Expected at least one asymptotic OLS row with df_resid"
+
+    alpha = 0.05
+    for _, row in ols_rows.iterrows():
+        t_crit = stats.t.ppf(1 - alpha / 2, row["df_resid"])
+        expected_lower = row["absolute_effect"] - t_crit * row["standard_error"]
+        expected_upper = row["absolute_effect"] + t_crit * row["standard_error"]
+        assert np.isclose(row["abs_effect_lower"], expected_lower, rtol=1e-10), (
+            f"abs_effect_lower mismatch: {row['abs_effect_lower']} != {expected_lower}"
+        )
+        assert np.isclose(row["abs_effect_upper"], expected_upper, rtol=1e-10), (
+            f"abs_effect_upper mismatch: {row['abs_effect_upper']} != {expected_upper}"
+        )
+
+    # Verify it does NOT match z-distribution
+    z_crit = stats.norm.ppf(1 - alpha / 2)
+    for _, row in ols_rows.iterrows():
+        z_lower = row["absolute_effect"] - z_crit * row["standard_error"]
+        assert not np.isclose(row["abs_effect_lower"], z_lower, rtol=1e-10), (
+            "abs_effect_lower should NOT match z-distribution"
+        )
+
+
 def test_relative_effect_random_wider_than_fixed_with_heterogeneity(heterogeneous_analyzer):
     """With high heterogeneity, random effects relative CI must be wider than fixed."""
     fixed = heterogeneous_analyzer.combine_effects(method="fixed")
