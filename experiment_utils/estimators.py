@@ -103,6 +103,7 @@ class Estimators:
         se_intercept: float,
         cov_matrix: np.ndarray,
         alpha: float = 0.05,
+        df_resid: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute Fieller confidence interval for ratio coefficient/intercept using Fieller's theorem.
@@ -157,8 +158,11 @@ class Estimators:
             )
             return (np.nan, np.nan)
 
-        # Critical value (z for large samples, can use t for small samples)
-        z_crit = stats.norm.ppf(1 - alpha / 2)
+        # Critical value: t(df_resid) for OLS, z otherwise
+        if df_resid is not None and np.isfinite(df_resid):
+            z_crit = stats.t.ppf(1 - alpha / 2, df_resid)
+        else:
+            z_crit = stats.norm.ppf(1 - alpha / 2)
         g_sq = z_crit**2
 
         # Extract covariance between treatment coefficient and intercept
@@ -289,6 +293,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -302,7 +307,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
@@ -326,6 +331,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -396,6 +402,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.bse[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -409,7 +416,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
@@ -433,6 +440,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -520,6 +528,7 @@ class Estimators:
         relative_effect = coefficient / intercept if intercept != 0 else 0
         standard_error = results.std_errors[self._treatment_col]
         pvalue = results.pvalues[self._treatment_col]
+        df_resid = results.df_resid
 
         # Compute Fieller CI for relative effect (skip during bootstrap)
         if compute_relative_ci:
@@ -537,7 +546,7 @@ class Estimators:
                 cov_coef_intercept = 0.0
 
             rel_effect_lower, rel_effect_upper = self._compute_fieller_ci(
-                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha
+                coefficient, intercept, standard_error, se_intercept, cov_matrix, self._alpha, df_resid
             )
         else:
             # During bootstrap, skip Fieller CI computation (will use percentiles later)
@@ -561,6 +570,7 @@ class Estimators:
             "rel_effect_upper": rel_effect_upper,
             "se_intercept": se_intercept,
             "cov_coef_intercept": cov_coef_intercept,
+            "df_resid": df_resid,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
@@ -1786,6 +1796,7 @@ class Estimators:
             "rel_effect_upper": rel_upper,
             "se_intercept": np.nan,
             "cov_coef_intercept": np.nan,
+            "df_resid": np.nan,
             "model_type": "ols",
             "effect_type": "mean_difference",
         }
