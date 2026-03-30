@@ -30,15 +30,33 @@ def _critical_value(alpha: float, df_resid: pd.Series | None = None) -> pd.Serie
 
 
 # shared palette — used by both the public function and the internal renderer
-_CLR_SIG = "#1e40af"  # deep indigo-blue — significant positive
+_CLR_SIG = "#166534"  # dark green — significant positive
 _CLR_SIG_NEG = "#991b1b"  # deep red — significant negative
-_CLR_NSIG = "#64748b"  # muted slate — not significant
-_CLR_NSIG_POS = "#60a5fa"  # medium blue — not significant, positive
-_CLR_NSIG_NEG = "#f87171"  # medium red — not significant, negative
+_CLR_NSIG = "#64748b"  # muted slate — neutral / not significant
+_CLR_NSIG_POS = "#4ade80"  # light green — positive but not significant
+_CLR_NSIG_NEG = "#64748b"  # muted slate — negative but not significant
 _CLR_META_BG = "#fef2f2"  # faint rose — pooled row background
 _CLR_ZERO = "#475569"  # dark slate zero line
 _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
+
+# Default color palette for color_direction mode
+DEFAULT_COLOR_PALETTE: dict[str, str] = {
+    "sig_pos": _CLR_SIG,  # dark green — significant positive
+    "sig_neg": _CLR_SIG_NEG,  # deep red — significant negative
+    "nsig_pos": _CLR_NSIG_POS,  # medium-light green — positive but not significant
+    "nsig_neg": _CLR_NSIG_NEG,  # muted slate — negative / neutral
+    "nsig_zero": _CLR_NSIG,  # muted slate — exactly zero
+}
+
+
+def _resolve_palette(color_palette: dict[str, str] | None) -> dict[str, str]:
+    """Merge user overrides into the default palette."""
+    if color_palette is None:
+        return DEFAULT_COLOR_PALETTE.copy()
+    merged = DEFAULT_COLOR_PALETTE.copy()
+    merged.update(color_palette)
+    return merged
 
 
 def _fmt_label(
@@ -136,8 +154,10 @@ def _draw_panels_into_axes(
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
     color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> None:
     """Draw Cleveland-dot panels into a pre-created list of axes (one ax per panel value)."""
+    pal = _resolve_palette(color_palette)
     _lo_col, _hi_col, data = _resolve_ci_cols(lo_col, hi_col, data, sig_col, eff_col)
 
     for panel_idx, (ax, panel_val) in enumerate(zip(axes, unique_panels, strict=False)):
@@ -239,20 +259,20 @@ def _draw_panels_into_axes(
             if is_meta_row:
                 if color_direction:
                     if effective_sig == 1:
-                        color = _CLR_SIG if eff >= 0 else _CLR_SIG_NEG
+                        color = pal["sig_pos"] if eff >= 0 else pal["sig_neg"]
                     else:
-                        color = _CLR_NSIG_POS if eff > 0 else _CLR_NSIG_NEG if eff < 0 else _CLR_NSIG
+                        color = pal["nsig_pos"] if eff > 0 else pal["nsig_neg"] if eff < 0 else pal["nsig_zero"]
                 else:
-                    color = _CLR_SIG if effective_sig == 1 else _CLR_NSIG
+                    color = pal["sig_pos"] if effective_sig == 1 else _CLR_NSIG
                 marker, dot_size, ci_lw = "D", 70, 1.8
             elif effective_sig == 1:
                 if color_direction:
-                    sig_clr = _CLR_SIG if eff >= 0 else _CLR_SIG_NEG
+                    sig_clr = pal["sig_pos"] if eff >= 0 else pal["sig_neg"]
                 else:
-                    sig_clr = _CLR_SIG
+                    sig_clr = pal["sig_pos"]
                 color, marker, dot_size, ci_lw = sig_clr, "o", 45, 1.4
             elif color_direction:
-                nsig_clr = _CLR_NSIG_POS if eff > 0 else _CLR_NSIG_NEG if eff < 0 else _CLR_NSIG
+                nsig_clr = pal["nsig_pos"] if eff > 0 else pal["nsig_neg"] if eff < 0 else pal["nsig_zero"]
                 color, marker, dot_size, ci_lw = nsig_clr, "o", 35, 1.2
             else:
                 color, marker, dot_size, ci_lw = _CLR_NSIG, "o", 35, 1.2
@@ -339,8 +359,10 @@ def _add_legend_and_title(
     meta_df: pd.DataFrame | None,
     panel_spacing: float | None = None,
     color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> None:
     """Add a shared legend/footnote and optional suptitle, then call tight_layout."""
+    pal = _resolve_palette(color_palette)
     top_anchor = 0.97
     if title:
         fig.suptitle(title, fontsize=13, fontweight="bold", color="#0f172a", y=top_anchor)
@@ -378,9 +400,17 @@ def _add_legend_and_title(
             columnspacing=1.4,
         )
     else:
+        import re
+
+        alpha_match = re.search(r"α=([\d.]+)", sig_label)
+        alpha_str = alpha_match.group(1) if alpha_match else "0.05"
+        mcp_match = re.search(r"\((\w+),", sig_label)
+        if mcp_match:
+            footnote_label = f"* significant at α={alpha_str} ({mcp_match.group(1)})"
+        else:
+            footnote_label = f"* significant at α={alpha_str}"
         legend_items = [
-            mlines.Line2D([], [], color=_CLR_SIG, marker="o", linestyle="-", markersize=6, label=sig_label),
-            mlines.Line2D([], [], color=_CLR_NSIG, marker="o", linestyle="-", markersize=6, label="Not significant"),
+            mlines.Line2D([], [], linestyle="None", marker="None", label=footnote_label),
         ]
         if meta_df is not None:
             legend_items.append(
@@ -515,6 +545,7 @@ def _render_effects_figure(
     relative_cap: float = 5.0,
     pp_outcomes: set | None = None,
     color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Build and return a single effects figure for *data* (already labelled)."""
     sig_col = "stat_significance_mcp" if "stat_significance_mcp" in data.columns else "stat_significance"
@@ -581,10 +612,12 @@ def _render_effects_figure(
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes,
         color_direction=color_direction,
+        color_palette=color_palette,
     )
 
     _add_legend_and_title(
-        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing, color_direction=color_direction
+        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing,
+        color_direction=color_direction, color_palette=color_palette,
     )
     return fig
 
