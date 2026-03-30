@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.5...v0.4.0) (2026-03-30)
+
+
+### Features
+
+* add df_resid to OLS estimator outputs for t-distribution CI computation ([6e7d8a4](https://github.com/sdaza/experiment-utils-pd/commit/6e7d8a46049c02bce9625b636fbf56a850a10b1d))
+
+
+### Bug Fixes
+
+* add df_resid parameter for Fieller CI computation in estimators and experiment analyzer ([074ca9f](https://github.com/sdaza/experiment-utils-pd/commit/074ca9fd901508ae7f07da6d521a490b65392d2a))
+* enhance color handling and legend display in plotting functions ([54d413c](https://github.com/sdaza/experiment-utils-pd/commit/54d413c12c894864c5848f1a4fbaf712a5eb884a))
+* remove unused import and clean up plotting function parameters ([cc55221](https://github.com/sdaza/experiment-utils-pd/commit/cc552213ba1334a8e50cf1c40c9e84a53144fc08))
+* use t-distribution for OLS asymptotic CIs to match p-values ([c5c4727](https://github.com/sdaza/experiment-utils-pd/commit/c5c4727ef9b9cf81f5c67adcfe99efc8dd5c04d8))
+* use t-distribution in Fieller's method for relative effect CIs ([03037e1](https://github.com/sdaza/experiment-utils-pd/commit/03037e17fc479f74a484710224657a900a2b1319))
+* use t-distribution in MCP-adjusted CIs when df_resid available ([9501891](https://github.com/sdaza/experiment-utils-pd/commit/95018914efc504980106d91b7d82e9d8e4fe9aec))
+* use t-distribution in plotting fallback and MCP CI computations ([5851ab9](https://github.com/sdaza/experiment-utils-pd/commit/5851ab9bdfdc8a049f3e9cf6dec3f6489c824f6e))
+
 ## [0.3.5](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.4...v0.3.5) (2026-03-16)
 
 
