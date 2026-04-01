@@ -2511,6 +2511,107 @@ class PowerSim:
 
         return df
 
+    def power_tost(
+        self,
+        sample_sizes: list[int],
+        equivalence_bound: float,
+        true_effect: float = 0.0,
+        pooled_sd: float = 1.0,
+        alpha: float = 0.05,
+        baseline: float | None = None,
+    ) -> pd.DataFrame:
+        """
+        Simulation-based power analysis for TOST equivalence testing.
+
+        For each sample size, simulate ``nsim`` datasets and compute the
+        proportion where TOST concludes equivalence at the given alpha level.
+
+        Parameters
+        ----------
+        sample_sizes : list[int]
+            Per-group sample sizes to evaluate.
+        equivalence_bound : float
+            Absolute equivalence bound Δ. For ``"average"`` metric this is in
+            raw units; for ``"proportion"`` it is a probability difference.
+        true_effect : float
+            True difference between groups (default 0 = truly equivalent).
+        pooled_sd : float
+            Population SD for ``"average"`` metric. Ignored for ``"proportion"``.
+        alpha : float
+            Significance level for TOST (default 0.05).
+        baseline : float, optional
+            Baseline rate for ``"proportion"`` or ``"count"`` metrics.
+            Required when ``metric`` is not ``"average"``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: ``sample_size``, ``power``, ``se``, ``nsim``.
+        """
+        if equivalence_bound <= 0:
+            log_and_raise_error(self.logger, "equivalence_bound must be > 0.")
+        if not (0 < alpha < 1):
+            log_and_raise_error(self.logger, "alpha must be between 0 and 1.")
+
+        if self.metric != "average" and baseline is None:
+            log_and_raise_error(
+                self.logger,
+                f"baseline is required for metric='{self.metric}'.",
+            )
+
+        results = []
+
+        for n in sample_sizes:
+            equivalence_count = 0
+            sims_run = 0
+
+            for sim_i in range(self.nsim):
+                rng = np.random.default_rng(sim_i)
+
+                # Generate data
+                if self.metric == "average":
+                    control = rng.normal(0, pooled_sd, n)
+                    treatment = rng.normal(true_effect, pooled_sd, n)
+                elif self.metric == "proportion":
+                    p_control = baseline
+                    p_treatment = min(max(baseline + true_effect, 0.001), 0.999)
+                    control = rng.binomial(1, p_control, n)
+                    treatment = rng.binomial(1, p_treatment, n)
+                else:  # count
+                    control = rng.poisson(baseline, n)
+                    treatment = rng.poisson(max(baseline + true_effect, 0.01), n)
+
+                # Compute effect and SE
+                diff = treatment.mean() - control.mean()
+                se = np.sqrt(treatment.var(ddof=1) / n + control.var(ddof=1) / n)
+
+                if se == 0:
+                    continue
+
+                # TOST: two one-sided tests
+                z_lower = (diff + equivalence_bound) / se
+                z_upper = (equivalence_bound - diff) / se
+                p_lower = 1 - stats.norm.cdf(z_lower)
+                p_upper = 1 - stats.norm.cdf(z_upper)
+                tost_p = max(p_lower, p_upper)
+
+                if tost_p < alpha:
+                    equivalence_count += 1
+                sims_run += 1
+
+            power = equivalence_count / sims_run if sims_run > 0 else 0.0
+            se = np.sqrt(power * (1 - power) / sims_run) if sims_run > 0 else 0.0
+            results.append(
+                {
+                    "sample_size": n,
+                    "power": power,
+                    "se": se,
+                    "nsim": sims_run,
+                }
+            )
+
+        return pd.DataFrame(results)
+
     def __ensure_list(self, value):
         """Convert single values to list for consistent handling"""
         if value is None:
