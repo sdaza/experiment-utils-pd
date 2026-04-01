@@ -198,7 +198,7 @@ rr = analyzer.results
 print(rr)
 
 # %% 
-analyzer.test_non_inferiority(relative_margin=0.10)
+analyzer.test_equivalence(test_type="non_inferiority", relative_bound=0.10)
 
 # %% 
 print(analyzer.results)
