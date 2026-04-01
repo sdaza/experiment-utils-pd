@@ -153,3 +153,303 @@ class TestEquivalenceTOST:
             analyzer.test_equivalence()  # no bound
         with pytest.raises(ValueError):
             analyzer.test_equivalence(absolute_bound=1.0, relative_bound=0.1)  # two bounds
+
+
+class TestEquivalenceBoundTypes:
+    """Tests for different bound specifications."""
+
+    def test_relative_bound(self, simple_experiment_data):
+        """Relative bound should compute delta from control_value."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(test_type="equivalence", relative_bound=0.20)
+        result = analyzer.results.iloc[0]
+        expected_delta = 0.20 * abs(result["control_value"])
+        assert result["eq_bound_upper"] == pytest.approx(expected_delta, rel=1e-6)
+        assert result["eq_bound_lower"] == pytest.approx(-expected_delta, rel=1e-6)
+        assert result["eq_bound_type"] == "relative"
+
+    def test_cohens_d_bound_ols(self, simple_experiment_data):
+        """Cohen's d bound should compute delta from pooled_sd."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(test_type="equivalence", cohens_d_bound=0.5)
+        result = analyzer.results.iloc[0]
+        expected_delta = 0.5 * result["pooled_sd"]
+        assert result["eq_bound_upper"] == pytest.approx(expected_delta, rel=1e-6)
+        assert result["eq_bound_type"] == "cohens_d"
+
+    def test_cohens_d_warns_non_ols(self):
+        """Cohen's d with logistic model should produce NaN conclusion."""
+        rng = np.random.default_rng(42)
+        n = 300
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome": rng.binomial(1, 0.5, 2 * n),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+            outcome_models="logistic",
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(test_type="equivalence", cohens_d_bound=0.3)
+        result = analyzer.results.iloc[0]
+        assert pd.isna(result["eq_conclusion"])
+
+
+class TestNonInferiority:
+    """Tests for non-inferiority and non-superiority test types."""
+
+    def test_non_inferiority_higher_is_better(self, simple_experiment_data):
+        """Non-inferiority with higher_is_better tests lower bound only."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(
+            test_type="non_inferiority",
+            absolute_bound=1.0,
+            direction="higher_is_better",
+        )
+        result = analyzer.results.iloc[0]
+        assert result["eq_test_type"] == "non_inferiority"
+        assert result["eq_pvalue"] == pytest.approx(result["eq_pvalue_lower"])
+
+    def test_non_inferiority_lower_is_better(self, simple_experiment_data):
+        """Non-inferiority with lower_is_better tests upper bound only."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(
+            test_type="non_inferiority",
+            absolute_bound=1.0,
+            direction="lower_is_better",
+        )
+        result = analyzer.results.iloc[0]
+        assert result["eq_pvalue"] == pytest.approx(result["eq_pvalue_upper"])
+
+    def test_non_superiority_higher_is_better(self, simple_experiment_data):
+        """Non-superiority with higher_is_better tests upper bound only."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(
+            test_type="non_superiority",
+            absolute_bound=1.0,
+            direction="higher_is_better",
+        )
+        result = analyzer.results.iloc[0]
+        assert result["eq_test_type"] == "non_superiority"
+        assert result["eq_pvalue"] == pytest.approx(result["eq_pvalue_upper"])
+
+    def test_non_inferiority_conclusion_labels(self, simple_experiment_data):
+        """Non-inferiority should use 'non_inferior' labels, not 'equivalent'."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(
+            test_type="non_inferiority",
+            absolute_bound=1.0,
+            direction="higher_is_better",
+        )
+        result = analyzer.results.iloc[0]
+        valid_conclusions = {
+            "non_inferior",
+            "not_non_inferior",
+            "inconclusive",
+            "non_inferior_with_difference",
+        }
+        assert result["eq_conclusion"] in valid_conclusions
+
+
+class TestEquivalenceMultiple:
+    """Tests for multiple outcomes and experiments."""
+
+    def test_multiple_outcomes(self):
+        """TOST should produce results per outcome."""
+        rng = np.random.default_rng(42)
+        n = 300
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome1": np.concatenate([rng.normal(10, 2, n), rng.normal(10.1, 2, n)]),
+                "outcome2": np.concatenate([rng.normal(5, 1, n), rng.normal(8, 1, n)]),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome1", "outcome2"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        results = analyzer.results
+        assert len(results) == 2
+        o1 = results[results["outcome"] == "outcome1"].iloc[0]
+        o2 = results[results["outcome"] == "outcome2"].iloc[0]
+        assert o1["eq_conclusion"] in ("equivalent", "equivalent_with_difference")
+        assert o2["eq_conclusion"] == "not_equivalent"
+
+    def test_multiple_experiments(self):
+        """TOST should produce results per experiment."""
+        rng = np.random.default_rng(42)
+        n = 300
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n + [0] * n + [1] * n,
+                "outcome": np.concatenate(
+                    [
+                        rng.normal(10, 2, n),
+                        rng.normal(10.1, 2, n),
+                        rng.normal(10, 2, n),
+                        rng.normal(10.05, 2, n),
+                    ]
+                ),
+                "experiment": ["exp1"] * (2 * n) + ["exp2"] * (2 * n),
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        results = analyzer.results
+        assert len(results) == 2
+        assert results["eq_pvalue"].notna().all()
+
+    def test_bootstrap_inference(self):
+        """TOST should work with bootstrap SE."""
+        rng = np.random.default_rng(42)
+        n = 200
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome": np.concatenate([rng.normal(10, 2, n), rng.normal(10.1, 2, n)]),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+            bootstrap=True,
+            bootstrap_iterations=100,
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        result = analyzer.results.iloc[0]
+        assert pd.notna(result["eq_pvalue"])
+        assert pd.notna(result["eq_ci_lower"])
+        assert result["eq_conclusion"] in (
+            "equivalent",
+            "equivalent_with_difference",
+            "inconclusive",
+            "not_equivalent",
+        )
+
+
+class TestEquivalenceValidation:
+    """Tests for input validation in test_equivalence()."""
+
+    def test_invalid_test_type(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(test_type="invalid", absolute_bound=1.0)
+
+    def test_no_bounds_raises(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(test_type="equivalence")
+
+    def test_two_bounds_raises(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(absolute_bound=1.0, relative_bound=0.1)
+
+    def test_negative_bound_raises(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(absolute_bound=-1.0)
+
+    def test_invalid_alpha_raises(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(absolute_bound=1.0, alpha=0.0)
+
+    def test_invalid_direction_raises(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.test_equivalence(absolute_bound=1.0, direction="invalid")
