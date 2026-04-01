@@ -40,6 +40,12 @@ _CLR_ZERO = "#475569"  # dark slate zero line
 _CLR_GUIDE = "#e2e8f0"  # very light guide lines
 _CLR_SPINE = "#cbd5e1"  # spine / tick color
 
+# Equivalence test conclusion colors
+_CLR_EQ = "#166534"  # deep green — equivalent / non-inferior
+_CLR_NOT_EQ = "#991b1b"  # deep red — not equivalent
+_CLR_EQ_DIFF = "#b45309"  # amber — equivalent with difference
+_CLR_EQ_BAND = "#dcfce7"  # light green — equivalence region fill
+
 # Default color palette for color_direction mode
 DEFAULT_COLOR_PALETTE: dict[str, str] = {
     "sig_pos": _CLR_SIG,  # dark green — significant positive
@@ -1436,3 +1442,242 @@ def plot_power(
         ax.grid(axis="y", linestyle="--", alpha=0.4)
         plt.tight_layout()
         plt.show()
+
+
+def plot_equivalence(
+    data: pd.DataFrame,
+    outcomes: list[str] | str | None = None,
+    figsize: tuple | None = None,
+    title: str | None = None,
+    show_values: bool = True,
+    value_decimals: int = 2,
+    sort_by_magnitude: bool = True,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Equivalence test visualization with (1-2alpha) CI against equivalence bounds.
+
+    Displays a Cleveland-style dot plot where each row shows the point estimate
+    and the TOST confidence interval.  A shaded band marks the equivalence
+    region [-Delta, +Delta].  Dots are color-coded by the ``eq_conclusion`` column.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Results DataFrame containing ``eq_*`` columns from
+        :meth:`ExperimentAnalyzer.test_equivalence`.
+    outcomes : list[str] or str, optional
+        Subset of outcomes to plot. ``None`` plots all.
+    figsize : tuple, optional
+        Figure size ``(width, height)``.
+    title : str, optional
+        Overall figure title.
+    show_values : bool
+        Annotate each row with the numeric effect and conclusion.
+    value_decimals : int
+        Decimal places for value annotations.
+    sort_by_magnitude : bool
+        Sort rows by absolute effect magnitude.
+    save_path : str, optional
+        Save the figure to this path.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    required = [
+        "eq_ci_lower",
+        "eq_ci_upper",
+        "eq_bound_lower",
+        "eq_bound_upper",
+        "eq_conclusion",
+        "absolute_effect",
+    ]
+    missing = [c for c in required if c not in data.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}. Run test_equivalence() first.")
+
+    df = data.copy()
+
+    # Determine row identifier
+    if "experiment" in df.columns:
+        row_col = "experiment"
+    elif "treatment_group" in df.columns:
+        row_col = "treatment_group"
+    else:
+        df["_row"] = range(len(df))
+        row_col = "_row"
+
+    # Build row label from treatment_group vs control_group if both exist
+    if "treatment_group" in df.columns and "control_group" in df.columns:
+        df["_row_label"] = df["treatment_group"].astype(str) + " vs " + df["control_group"].astype(str)
+        if "experiment" in df.columns:
+            df["_row_label"] = df["experiment"].astype(str) + ": " + df["_row_label"]
+        row_col = "_row_label"
+
+    # Filter outcomes
+    if "outcome" not in df.columns:
+        df["outcome"] = "outcome"
+    if outcomes is not None:
+        if isinstance(outcomes, str):
+            outcomes = [outcomes]
+        df = df[df["outcome"].isin(outcomes)]
+    if df.empty:
+        raise ValueError("No data to plot after filtering outcomes.")
+
+    unique_outcomes = df["outcome"].unique()
+    n_panels = len(unique_outcomes)
+
+    # Figure sizing
+    if figsize is None:
+        max_rows = max(len(df[df["outcome"] == o]) for o in unique_outcomes)
+        fig_h = max(2.5, 0.45 * max_rows * n_panels + 1.5)
+        fig_w = 8
+        figsize = (fig_w, fig_h)
+
+    fig, axes_arr = plt.subplots(n_panels, 1, figsize=figsize, squeeze=False)
+    axes = axes_arr.flatten()
+
+    # Color mapping
+    conclusion_colors = {}
+    for label in ("equivalent", "non_inferior", "non_superior"):
+        conclusion_colors[label] = _CLR_EQ
+    for label in ("not_equivalent", "not_non_inferior", "not_non_superior"):
+        conclusion_colors[label] = _CLR_NOT_EQ
+    for label in (
+        "equivalent_with_difference",
+        "non_inferior_with_difference",
+        "non_superior_with_difference",
+    ):
+        conclusion_colors[label] = _CLR_EQ_DIFF
+    conclusion_colors["inconclusive"] = _CLR_NSIG
+
+    for _panel_idx, (ax, outcome_val) in enumerate(zip(axes, unique_outcomes, strict=False)):
+        od = df[df["outcome"] == outcome_val].copy()
+        if sort_by_magnitude:
+            od = od.sort_values(by="absolute_effect", key=abs, ascending=False)
+
+        labels = list(od[row_col])
+        effs = list(od["absolute_effect"])
+        ci_los = list(od["eq_ci_lower"])
+        ci_his = list(od["eq_ci_upper"])
+        conclusions = list(od["eq_conclusion"])
+        bound_lo = od["eq_bound_lower"].iloc[0] if not od.empty else 0
+        bound_hi = od["eq_bound_upper"].iloc[0] if not od.empty else 0
+
+        n_rows = len(labels)
+        y_pos = list(range(n_rows))
+
+        ax.set_facecolor("white")
+        ax.set_axisbelow(True)
+
+        # Equivalence region band
+        ax.axvspan(bound_lo, bound_hi, color=_CLR_EQ_BAND, alpha=0.5, zorder=0)
+        # Bound lines
+        ax.axvline(
+            bound_lo,
+            color=_CLR_EQ,
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.6,
+            zorder=1,
+        )
+        ax.axvline(
+            bound_hi,
+            color=_CLR_EQ,
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.6,
+            zorder=1,
+        )
+        # Zero line
+        ax.axvline(0, color=_CLR_ZERO, linestyle="-", linewidth=1.0, alpha=0.55, zorder=1)
+
+        # Guide lines
+        for i in range(n_rows):
+            ax.axhline(i, color=_CLR_GUIDE, linewidth=0.6, linestyle=":", zorder=0)
+
+        for i, (_label, eff, lo, hi, conclusion) in enumerate(
+            zip(labels, effs, ci_los, ci_his, conclusions, strict=False)
+        ):
+            if eff is None or not pd.notna(eff) or not np.isfinite(eff):
+                continue
+
+            color = conclusion_colors.get(str(conclusion), _CLR_NSIG)
+
+            # CI bar
+            if pd.notna(lo) and pd.notna(hi) and np.isfinite(lo) and np.isfinite(hi):
+                ax.plot(
+                    [lo, hi],
+                    [i, i],
+                    color=color,
+                    linewidth=1.4,
+                    solid_capstyle="butt",
+                    zorder=3,
+                )
+                cap_h = 0.06
+                ax.plot(
+                    [lo, lo],
+                    [i - cap_h, i + cap_h],
+                    color=color,
+                    linewidth=1.4,
+                    zorder=3,
+                )
+                ax.plot(
+                    [hi, hi],
+                    [i - cap_h, i + cap_h],
+                    color=color,
+                    linewidth=1.4,
+                    zorder=3,
+                )
+
+            # Point estimate
+            ax.scatter(
+                [eff],
+                [i],
+                color=color,
+                s=45,
+                zorder=4,
+                marker="o",
+                edgecolors="white",
+                linewidths=0.5,
+            )
+
+            # Value annotation
+            if show_values:
+                conclusion_label = str(conclusion).replace("_", " ") if pd.notna(conclusion) else ""
+                text = f"{eff:+.{value_decimals}f}  [{conclusion_label}]"
+                ax.annotate(
+                    text,
+                    (hi if pd.notna(hi) else eff, i),
+                    xytext=(6, 0),
+                    textcoords="offset points",
+                    va="center",
+                    fontsize=7,
+                    color=color,
+                )
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Effect (with equivalence bounds)", fontsize=9)
+
+        # Panel title
+        panel_title = outcome_val if n_panels > 1 else (title or outcome_val)
+        ax.set_title(panel_title, fontsize=10, fontweight="bold", loc="left")
+
+        # Spine styling (matching plot_effects)
+        for spine in ax.spines.values():
+            spine.set_color(_CLR_SPINE)
+            spine.set_linewidth(0.8)
+        ax.tick_params(colors=_CLR_SPINE, labelsize=8)
+
+    if title and n_panels > 1:
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    return fig

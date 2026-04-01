@@ -2350,6 +2350,62 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             color_direction=color_direction,
         )
 
+    def plot_equivalence(
+        self,
+        outcomes: list[str] | str | None = None,
+        figsize: tuple | None = None,
+        title: str | None = None,
+        show_values: bool = True,
+        value_decimals: int = 2,
+        sort_by_magnitude: bool = True,
+        save_path: str | None = None,
+    ) -> "plt.Figure":
+        """
+        Plot equivalence test results (TOST visualization).
+
+        Requires :meth:`test_equivalence` to have been called first.
+        Delegates to the standalone :func:`plot_equivalence` function.
+
+        Parameters
+        ----------
+        outcomes : list[str] or str, optional
+            Subset of outcomes to plot.
+        figsize : tuple, optional
+            Figure size ``(width, height)``.
+        title : str, optional
+            Overall figure title.
+        show_values : bool
+            Annotate each row with effect and conclusion.
+        value_decimals : int
+            Decimal places for annotations.
+        sort_by_magnitude : bool
+            Sort rows by |effect|.
+        save_path : str, optional
+            Path to save the figure.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        if self._results is None or "eq_conclusion" not in self._results.columns:
+            log_and_raise_error(
+                self._logger,
+                "Must run test_equivalence() before plot_equivalence().",
+            )
+
+        from .plotting import plot_equivalence as _plot_equivalence
+
+        return _plot_equivalence(
+            data=self._results,
+            outcomes=outcomes,
+            figsize=figsize,
+            title=title,
+            show_values=show_values,
+            value_decimals=value_decimals,
+            sort_by_magnitude=sort_by_magnitude,
+            save_path=save_path,
+        )
+
     @property
     def imbalance(self) -> pd.DataFrame | None:
         """

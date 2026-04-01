@@ -1,10 +1,14 @@
 """Tests for TOST equivalence testing."""
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 
-from experiment_utils import ExperimentAnalyzer
+from experiment_utils import ExperimentAnalyzer, PowerSim, plot_equivalence
 
 
 @pytest.fixture
@@ -453,3 +457,167 @@ class TestEquivalenceValidation:
         analyzer.get_effects()
         with pytest.raises(ValueError):
             analyzer.test_equivalence(absolute_bound=1.0, direction="invalid")
+
+
+class TestPlotEquivalence:
+    """Tests for the plot_equivalence() standalone function."""
+
+    def _make_equivalence_results(self):
+        """Helper: create analyzer with equivalence results."""
+        rng = np.random.default_rng(42)
+        n = 500
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome": np.concatenate([rng.normal(10, 2, n), rng.normal(10.1, 2, n)]),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        return analyzer.results
+
+    def test_returns_figure(self):
+        """plot_equivalence should return a matplotlib Figure."""
+        results = self._make_equivalence_results()
+        fig = plot_equivalence(data=results)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_raises_without_eq_columns(self):
+        """Should raise error if eq_ columns are missing."""
+        data = pd.DataFrame({"absolute_effect": [0.1], "outcome": ["x"]})
+        with pytest.raises(ValueError):
+            plot_equivalence(data=data)
+
+    def test_multiple_outcomes(self):
+        """Should handle multiple outcomes in panels."""
+        rng = np.random.default_rng(42)
+        n = 300
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome1": np.concatenate([rng.normal(10, 2, n), rng.normal(10.1, 2, n)]),
+                "outcome2": np.concatenate([rng.normal(5, 1, n), rng.normal(5.05, 1, n)]),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome1", "outcome2"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        fig = plot_equivalence(data=analyzer.results)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+class TestPlotEquivalenceClassMethod:
+    """Tests for ExperimentAnalyzer.plot_equivalence() wrapper."""
+
+    def test_class_method_returns_figure(self, simple_experiment_data):
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        analyzer.test_equivalence(absolute_bound=1.0)
+        fig = analyzer.plot_equivalence()
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_class_method_raises_without_test_equivalence(self, simple_experiment_data):
+        """Should raise if test_equivalence() hasn't been called."""
+        analyzer = ExperimentAnalyzer(
+            data=simple_experiment_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        with pytest.raises(ValueError):
+            analyzer.plot_equivalence()
+
+
+class TestPowerTOST:
+    """Tests for PowerSim.power_tost()."""
+
+    def test_high_power_scenario(self):
+        """Large N, true_effect=0, wide bounds should give power near 1."""
+        ps = PowerSim(metric="average", nsim=200)
+        result = ps.power_tost(
+            sample_sizes=[500, 1000],
+            equivalence_bound=1.0,
+            true_effect=0.0,
+            pooled_sd=2.0,
+            alpha=0.05,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert "sample_size" in result.columns
+        assert "power" in result.columns
+        high_n_power = result[result["sample_size"] == 1000]["power"].iloc[0]
+        assert high_n_power > 0.7
+
+    def test_low_power_scenario(self):
+        """Small N should give low power."""
+        ps = PowerSim(metric="average", nsim=200)
+        result = ps.power_tost(
+            sample_sizes=[10],
+            equivalence_bound=0.5,
+            true_effect=0.0,
+            pooled_sd=2.0,
+            alpha=0.05,
+        )
+        low_n_power = result[result["sample_size"] == 10]["power"].iloc[0]
+        assert low_n_power < 0.3
+
+    def test_power_increases_with_sample_size(self):
+        """Power should increase as sample size grows."""
+        ps = PowerSim(metric="average", nsim=300)
+        result = ps.power_tost(
+            sample_sizes=[50, 200, 500],
+            equivalence_bound=0.8,
+            true_effect=0.0,
+            pooled_sd=2.0,
+            alpha=0.05,
+        )
+        powers = result.sort_values("sample_size")["power"].tolist()
+        assert powers[-1] >= powers[0]
+
+    def test_proportion_metric(self):
+        """power_tost should work with proportion metric."""
+        ps = PowerSim(metric="proportion", nsim=200)
+        result = ps.power_tost(
+            sample_sizes=[200, 500],
+            equivalence_bound=0.05,
+            true_effect=0.0,
+            pooled_sd=1.0,
+            baseline=0.5,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 2
+
+    def test_output_compatible_with_plot_power(self):
+        """Output should have columns compatible with plot_power."""
+        ps = PowerSim(metric="average", nsim=100)
+        result = ps.power_tost(
+            sample_sizes=[100, 200],
+            equivalence_bound=1.0,
+            true_effect=0.0,
+            pooled_sd=2.0,
+        )
+        assert "sample_size" in result.columns
+        assert "power" in result.columns
+        assert "se" in result.columns
+        assert "nsim" in result.columns
