@@ -1616,6 +1616,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
+                            # Compute pooled SD for equivalence testing (Cohen's d bounds)
+                            treatment_mask = comparison_data[self._treatment_col] == 1
+                            control_outcome = comparison_data.loc[control_mask, outcome]
+                            treatment_outcome = comparison_data.loc[treatment_mask, outcome]
+                            n_c, n_t = len(control_outcome), len(treatment_outcome)
+                            if n_c > 1 and n_t > 1:
+                                s_c = control_outcome.std(ddof=1)
+                                s_t = treatment_outcome.std(ddof=1)
+                                output["pooled_sd"] = np.sqrt(
+                                    ((n_c - 1) * s_c**2 + (n_t - 1) * s_t**2) / (n_c + n_t - 2)
+                                )
+                            else:
+                                output["pooled_sd"] = np.nan
+
                             # For ratio outcomes: fix control_value, treatment_value,
                             # and all relative-effect fields.
                             # The OLS linearized column has control mean ≈ 0 by
@@ -1831,6 +1845,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 "relative_effect": np.nan,
                                 "stat_significance": np.nan,
                                 "standard_error": np.nan,
+                                "pooled_sd": np.nan,
                                 "pvalue": np.nan,
                                 "experiment": experiment_tuple,
                                 "sample_ratio": sample_ratio,
@@ -1878,6 +1893,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "cov_coef_intercept",
             "df_resid",
             "control_std",
+            "pooled_sd",
             "alpha_param",
         ]
 
