@@ -19,7 +19,8 @@ A comprehensive Python package for designing, analyzing, and validating experime
 - **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
 - **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with auto-scaled percentage-point annotations, combined absolute/relative labels, fixed or random-effects pooling, magnitude sorting, and grouping by any experiment column
 - **Overlap Diagnostics**: Mirror density plots of propensity score distributions (`plot_overlap`) with overlap coefficient annotation and group-by splitting
-- **Power Analysis**: Calculate statistical power and find optimal sample sizes
+- **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, and non-superiority following Lakens (2017), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
+- **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
@@ -45,7 +46,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Categorical Treatment Variables](#categorical-treatment-variables)
     - [Instrumental Variables (IV)](#instrumental-variables-iv)
     - [Multiple Comparison Adjustments](#multiple-comparison-adjustments)
-    - [Non-Inferiority Testing](#non-inferiority-testing)
+    - [Equivalence Testing (TOST)](#equivalence-testing-tost)
     - [Combining Effects (Meta-Analysis)](#combining-effects-meta-analysis)
     - [Visualizing Effects](#visualizing-effects)
     - [Common Support / Propensity Score Overlap](#common-support--propensity-score-overlap)
@@ -55,6 +56,7 @@ A comprehensive Python package for designing, analyzing, and validating experime
     - [Power from Real Data](#power-from-real-data)
     - [Grid Power Simulation](#grid-power-simulation)
     - [Find Sample Size](#find-sample-size)
+    - [TOST Equivalence Power](#tost-equivalence-power)
     - [Simulate Retrodesign](#simulate-retrodesign)
   - [Utilities](#utilities)
     - [Balanced Random Assignment](#balanced-random-assignment)
@@ -90,7 +92,7 @@ All main classes and standalone functions are available directly from the packag
 ```python
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
-from experiment_utils import plot_effects, plot_overlap, plot_power
+from experiment_utils import plot_effects, plot_equivalence, plot_overlap, plot_power
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -832,41 +834,76 @@ print(results[["outcome", "pvalue", "pvalue_mcp", "stat_significance_mcp"]])
 - `sidak`: Similar to Bonferroni, assumes independence
 - `fdr_bh`: Benjamini-Hochberg FDR control (less conservative)
 
-### Non-Inferiority Testing
+### Equivalence Testing (TOST)
 
-Test whether the treatment stays within an acceptable margin of control
-(`test_non_inferiority`).  Given margin M, the question is: *"Is the treatment
-close enough to control to be acceptable?"*
+Test whether two groups are practically equivalent using the **Two One-Sided Tests (TOST)** procedure, following [Lakens (2017)](https://doi.org/10.1177/1948550617697177). The unified `test_equivalence()` method handles equivalence, non-inferiority, and non-superiority as related tests within the same framework.
 
-**Intuition** — given `control_value = 0.03` and `margin = 0.01`:
-
-| Direction | Passes when … | In other words … |
-|---|---|---|
-| `higher_is_better` (default) | one-sided lower CI of effect > −M | treatment value is confidently above `control − margin` = 0.02 |
-| `lower_is_better` | one-sided upper CI of effect < +M | treatment value is confidently below `control + margin` = 0.04 |
-
-The test uses a one-sided normal z-test at the specified `alpha` (default 0.05).
+**Equivalence testing** asks: *"Can we confidently say the effect is small enough to be negligible?"* — the opposite of standard NHST which tests for a difference.
 
 ```python
 analyzer.get_effects()
 
-# Higher-is-better (e.g. conversion rate): treatment must stay within 1 pp of control
-analyzer.test_non_inferiority(absolute_margin=0.01)
+# TOST equivalence: effect must fall within ±1.0 units
+analyzer.test_equivalence(absolute_bound=1.0)
 
-# Margin as a fraction of the control mean — 10% of control rate
-analyzer.test_non_inferiority(relative_margin=0.10)
+# Bound as a fraction of control value (10%)
+analyzer.test_equivalence(relative_bound=0.10)
 
-# Lower-is-better (e.g. error rate, churn): treatment must not increase by more than 1 pp
-analyzer.test_non_inferiority(absolute_margin=0.01, direction="lower_is_better")
+# Bound in standardized units (Cohen's d = 0.3, OLS only)
+analyzer.test_equivalence(cohens_d_bound=0.3)
 
 results = analyzer.results
-print(results[["outcome", "absolute_effect", "margin", "margin_pvalue", "within_margin"]])
+print(results[["outcome", "absolute_effect", "eq_pvalue", "eq_conclusion", "eq_cohens_d"]])
 ```
 
-Added columns:
-- `margin` — absolute margin used for each row
-- `margin_pvalue` — one-sided p-value; smaller = stronger evidence the treatment is within the margin
-- `within_margin` — `True` when `margin_pvalue < alpha`
+**Non-inferiority and non-superiority** are one-sided special cases:
+
+```python
+# Non-inferiority: treatment must not be worse than control by more than 1 unit
+analyzer.test_equivalence(
+    test_type="non_inferiority",
+    absolute_bound=1.0,
+    direction="higher_is_better",
+)
+
+# Non-superiority: treatment must not be better than control by more than 1 unit
+analyzer.test_equivalence(
+    test_type="non_superiority",
+    absolute_bound=1.0,
+    direction="higher_is_better",
+)
+```
+
+**Conclusion logic** (Lakens' four-cell matrix) combines NHST and TOST results:
+
+| NHST significant | TOST significant | Conclusion |
+|---|---|---|
+| No | Yes | `equivalent` — no significant effect, confirmed within bounds |
+| No | No | `inconclusive` — can't reject zero or confirm equivalence |
+| Yes | Yes | `equivalent_with_difference` — statistically significant but practically trivial |
+| Yes | No | `not_equivalent` — significant effect outside equivalence bounds |
+
+Added columns (all prefixed with `eq_`):
+- `eq_test_type` — "equivalence", "non_inferiority", or "non_superiority"
+- `eq_bound_lower`, `eq_bound_upper` — equivalence bounds in raw units
+- `eq_pvalue_lower`, `eq_pvalue_upper` — p-values for lower and upper one-sided tests
+- `eq_pvalue` — TOST: max of both p-values; NI/NS: the relevant one-sided p-value
+- `eq_ci_lower`, `eq_ci_upper` — 90% confidence interval (1 − 2α)
+- `eq_cohens_d` — observed effect in Cohen's d units
+- `eq_conclusion` — interpretive label from the four-cell matrix
+
+**Visualizing equivalence results:**
+
+```python
+# Standalone function
+from experiment_utils import plot_equivalence
+fig = plot_equivalence(data=analyzer.results)
+
+# Or as a class method
+fig = analyzer.plot_equivalence()
+```
+
+![Equivalence plot example](docs/assets/plot_equivalence_experiments.png)
 
 ### Combining Effects (Meta-Analysis)
 
@@ -1477,6 +1514,44 @@ sample_result = power_sim.find_sample_size(
     baseline=0.10,
     effect=0.02,
     allocation_ratio=[0.3, 0.7]
+)
+```
+
+### TOST Equivalence Power
+
+Estimate the sample size needed to demonstrate equivalence using TOST. Equivalence tests require substantially larger samples than standard superiority tests — `power_tost()` uses simulation to estimate power for a given equivalence bound:
+
+```python
+from experiment_utils import PowerSim
+
+power_sim = PowerSim(metric="average", nsim=500)
+
+# How much power do we have to demonstrate equivalence within ±1.0 units?
+power_results = power_sim.power_tost(
+    sample_sizes=[100, 200, 500, 1000],
+    equivalence_bound=1.0,   # absolute Δ
+    true_effect=0.0,          # assumed true difference (0 = truly equivalent)
+    pooled_sd=2.0,            # population SD
+    alpha=0.05,
+)
+
+print(power_results)
+#  sample_size  power    se  nsim
+#          100   0.44  0.02   500
+#          200   0.78  0.02   500
+#          500   0.99  0.00   500
+#         1000   1.00  0.00   500
+```
+
+For proportion metrics, pass `baseline` and use `equivalence_bound` as a probability difference:
+
+```python
+power_sim = PowerSim(metric="proportion", nsim=500)
+
+power_results = power_sim.power_tost(
+    sample_sizes=[500, 1000, 2000],
+    equivalence_bound=0.05,   # ±5 percentage points
+    baseline=0.50,
 )
 ```
 
