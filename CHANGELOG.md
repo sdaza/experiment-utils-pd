@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.4.0...v0.5.0) (2026-04-01)
+
+
+### Features
+
+* add plot_equivalence() function and wrapper in ExperimentAnalyzer; update plotting colors and add power_tost() for TOST analysis; bump version to 0.4.0 ([2b7ef84](https://github.com/sdaza/experiment-utils-pd/commit/2b7ef8404ea2810eacaf5682e64adc0d04f76221))
+* add plot_equivalence(), class wrapper, and power_tost() ([909bb67](https://github.com/sdaza/experiment-utils-pd/commit/909bb67242e98a8e3188c535aba25e4d0097ba43))
+* add pooled_sd column to get_effects() results ([a472efa](https://github.com/sdaza/experiment-utils-pd/commit/a472efad5d15bb0815d8de7240b761c9b202cc4c))
+* add test_equivalence() replacing test_non_inferiority() ([ac47e0e](https://github.com/sdaza/experiment-utils-pd/commit/ac47e0e7ce2a37ca23c50124907dbc55396ac780))
+
+
+### Documentation
+
+* add plot_equivalence() example images ([6bf2c2a](https://github.com/sdaza/experiment-utils-pd/commit/6bf2c2a6b7433bf0a0dca570e2475b2893fe7f8d))
+* add TOST equivalence testing design spec ([8756bcb](https://github.com/sdaza/experiment-utils-pd/commit/8756bcbd82f70fe997bc2e88c9c365f6ff10a6db))
+* add TOST equivalence testing implementation plan ([a9d2b20](https://github.com/sdaza/experiment-utils-pd/commit/a9d2b20a6fa911371ba2d998afa6fbdf830aff5e))
+
 ## [0.4.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.3.5...v0.4.0) (2026-03-30)
 
 
