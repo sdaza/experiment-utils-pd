@@ -1616,6 +1616,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             control_mask = comparison_data[self._treatment_col] == 0
                             output["control_std"] = comparison_data.loc[control_mask, outcome].std()
 
+                            # Compute pooled SD for equivalence testing (Cohen's d bounds)
+                            treatment_mask = comparison_data[self._treatment_col] == 1
+                            control_outcome = comparison_data.loc[control_mask, outcome]
+                            treatment_outcome = comparison_data.loc[treatment_mask, outcome]
+                            n_c, n_t = len(control_outcome), len(treatment_outcome)
+                            if n_c > 1 and n_t > 1:
+                                s_c = control_outcome.std(ddof=1)
+                                s_t = treatment_outcome.std(ddof=1)
+                                output["pooled_sd"] = np.sqrt(
+                                    ((n_c - 1) * s_c**2 + (n_t - 1) * s_t**2) / (n_c + n_t - 2)
+                                )
+                            else:
+                                output["pooled_sd"] = np.nan
+
                             # For ratio outcomes: fix control_value, treatment_value,
                             # and all relative-effect fields.
                             # The OLS linearized column has control mean ≈ 0 by
@@ -1831,6 +1845,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 "relative_effect": np.nan,
                                 "stat_significance": np.nan,
                                 "standard_error": np.nan,
+                                "pooled_sd": np.nan,
                                 "pvalue": np.nan,
                                 "experiment": experiment_tuple,
                                 "sample_ratio": sample_ratio,
@@ -1878,6 +1893,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "cov_coef_intercept",
             "df_resid",
             "control_std",
+            "pooled_sd",
             "alpha_param",
         ]
 
@@ -1982,91 +1998,188 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if original_bootstrap is not None:
             self._bootstrap = original_bootstrap
 
-    def test_non_inferiority(
+    def test_equivalence(
         self,
-        absolute_margin: float | None = None,
-        relative_margin: float | None = None,
+        test_type: str = "equivalence",
+        absolute_bound: float | None = None,
+        relative_bound: float | None = None,
+        cohens_d_bound: float | None = None,
         alpha: float = 0.05,
         direction: str = "higher_is_better",
     ) -> None:
         """
-        Test whether the treatment stays within an acceptable margin of control.
+        Unified equivalence, non-inferiority, and non-superiority testing.
 
-        Given margin M, the test asks: "Can we confidently say the treatment
-        is close enough to control to be acceptable?"
-
-        **Higher-is-better metrics** (e.g. conversion rate, revenue):
-            Passes when treatment value is confidently above
-            ``control_value − M``.  Formally: one-sided lower CI of the
-            absolute effect > −M.
-
-        **Lower-is-better metrics** (e.g. error rate, churn, cost):
-            Passes when treatment value is confidently below
-            ``control_value + M``.  Formally: one-sided upper CI of the
-            absolute effect < +M.
+        Implements the Two One-Sided Tests (TOST) procedure following Lakens (2017).
+        Non-inferiority and non-superiority are one-sided special cases of the same
+        framework.
 
         Parameters
         ----------
-        absolute_margin : float, optional
-            Maximum acceptable absolute deviation from control (must be > 0).
-        relative_margin : float, optional
-            Maximum acceptable deviation as a fraction of ``|control_value|``
-            (e.g. ``0.10`` = 10 %).  Must be > 0.
+        test_type : {"equivalence", "non_inferiority", "non_superiority"}
+            ``"equivalence"``: TOST — tests both bounds, concludes equivalence
+            when effect falls within [-delta, +delta].
+            ``"non_inferiority"``: one-sided test against the lower (or upper) bound.
+            ``"non_superiority"``: one-sided test against the opposite bound.
+        absolute_bound : float, optional
+            Equivalence bound in raw outcome units (must be > 0).
+        relative_bound : float, optional
+            Equivalence bound as a fraction of |control_value|
+            (e.g. 0.10 = 10%). Must be > 0.
+        cohens_d_bound : float, optional
+            Equivalence bound in standardized units (Cohen's d). Converted to
+            raw units via pooled_sd. Only valid for OLS model types.
         alpha : float, optional
-            One-sided significance level (default 0.05).
-        direction : {"higher_is_better", "lower_is_better"}, optional
-            Whether a larger or smaller value of the outcome is preferred.
-            Default ``"higher_is_better"``.
+            Significance level (default 0.05). For TOST the confidence interval
+            is (1 - 2*alpha), i.e. 90% by default.
+        direction : {"higher_is_better", "lower_is_better"}
+            Only used for non_inferiority and non_superiority test types.
 
         Updates
         -------
         self._results : pd.DataFrame
-            Adds the following columns:
-
-            - ``margin``: the absolute margin used for each row.
-            - ``margin_pvalue``: one-sided p-value; smaller = stronger evidence
-              the treatment is within the margin.
-            - ``within_margin``: ``True`` when ``margin_pvalue < alpha``.
+            Adds columns prefixed with eq_.
         """
         if self._results is None:
-            log_and_raise_error(self._logger, "Must run get_effects() before test_non_inferiority().")
+            log_and_raise_error(self._logger, "Must run get_effects() before test_equivalence().")
+
+        valid_test_types = {"equivalence", "non_inferiority", "non_superiority"}
+        if test_type not in valid_test_types:
+            log_and_raise_error(self._logger, f"test_type must be one of {valid_test_types}.")
 
         if not (0 < alpha < 1):
             log_and_raise_error(self._logger, "alpha must be between 0 and 1 (exclusive).")
-
-        if absolute_margin is not None and relative_margin is not None:
-            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin, not both.")
-
-        if absolute_margin is None and relative_margin is None:
-            log_and_raise_error(self._logger, "Provide either absolute_margin or relative_margin.")
-
-        if absolute_margin is not None and absolute_margin <= 0:
-            log_and_raise_error(self._logger, "absolute_margin must be > 0.")
-
-        if relative_margin is not None and relative_margin <= 0:
-            log_and_raise_error(self._logger, "relative_margin must be > 0.")
 
         valid_directions = {"higher_is_better", "lower_is_better"}
         if direction not in valid_directions:
             log_and_raise_error(self._logger, f"direction must be one of {valid_directions}.")
 
+        # Exactly one bound type
+        bounds_specified = sum(b is not None for b in [absolute_bound, relative_bound, cohens_d_bound])
+        if bounds_specified != 1:
+            log_and_raise_error(
+                self._logger,
+                "Provide exactly one of absolute_bound, relative_bound, or cohens_d_bound.",
+            )
+
+        if absolute_bound is not None and absolute_bound <= 0:
+            log_and_raise_error(self._logger, "absolute_bound must be > 0.")
+        if relative_bound is not None and relative_bound <= 0:
+            log_and_raise_error(self._logger, "relative_bound must be > 0.")
+        if cohens_d_bound is not None and cohens_d_bound <= 0:
+            log_and_raise_error(self._logger, "cohens_d_bound must be > 0.")
+
         results_df = self._results.copy()
 
-        if relative_margin is not None:
-            results_df["margin"] = relative_margin * results_df["control_value"].abs()
+        # Resolve bounds to absolute units (delta per row)
+        if absolute_bound is not None:
+            results_df["_delta"] = float(absolute_bound)
+            bound_type = "absolute"
+        elif relative_bound is not None:
+            results_df["_delta"] = relative_bound * results_df["control_value"].abs()
+            bound_type = "relative"
         else:
-            results_df["margin"] = float(absolute_margin)
+            # Cohen's d: only valid for OLS
+            if "model_type" in results_df.columns:
+                non_ols = results_df["model_type"] != "ols"
+                if non_ols.any():
+                    self._logger.warning(
+                        "cohens_d_bound is only valid for OLS models. "
+                        "Non-OLS rows will have NaN equivalence results. "
+                        "Use absolute_bound or relative_bound for non-OLS models."
+                    )
+            if "pooled_sd" not in results_df.columns:
+                log_and_raise_error(self._logger, "pooled_sd column not found. Re-run get_effects().")
+            results_df["_delta"] = cohens_d_bound * results_df["pooled_sd"]
+            bound_type = "cohens_d"
 
-        # higher_is_better: z = (effect + M) / SE  — large z → within margin
-        # lower_is_better:  z = (M - effect) / SE  — large z → within margin
-        if direction == "higher_is_better":
-            z_stat = (results_df["absolute_effect"] + results_df["margin"]) / results_df["standard_error"]
+        # For Cohen's d with non-OLS, set delta to NaN
+        if cohens_d_bound is not None and "model_type" in results_df.columns:
+            non_ols_mask = results_df["model_type"] != "ols"
+            results_df.loc[non_ols_mask, "_delta"] = np.nan
+
+        # Store bounds
+        results_df["eq_test_type"] = test_type
+        results_df["eq_bound_type"] = bound_type
+        results_df["eq_bound_lower"] = -results_df["_delta"]
+        results_df["eq_bound_upper"] = results_df["_delta"]
+
+        # Two one-sided test statistics
+        effect = results_df["absolute_effect"]
+        se = results_df["standard_error"]
+        delta = results_df["_delta"]
+
+        z_lower = (effect + delta) / se  # H0: effect <= -delta
+        z_upper = (delta - effect) / se  # H0: effect >= +delta
+
+        results_df["eq_pvalue_lower"] = 1 - stats.norm.cdf(z_lower)
+        results_df["eq_pvalue_upper"] = 1 - stats.norm.cdf(z_upper)
+
+        # (1-2*alpha) confidence interval
+        z_crit = stats.norm.ppf(1 - alpha)
+        results_df["eq_ci_lower"] = effect - z_crit * se
+        results_df["eq_ci_upper"] = effect + z_crit * se
+
+        # Cohen's d for observed effect
+        if "pooled_sd" in results_df.columns:
+            results_df["eq_cohens_d"] = effect / results_df["pooled_sd"]
         else:
-            z_stat = (results_df["margin"] - results_df["absolute_effect"]) / results_df["standard_error"]
+            results_df["eq_cohens_d"] = np.nan
 
-        results_df["margin_pvalue"] = 1 - stats.norm.cdf(z_stat)
-        results_df["within_margin"] = results_df["margin_pvalue"] < alpha
+        # Determine the reported p-value based on test type
+        if test_type == "equivalence":
+            results_df["eq_pvalue"] = results_df[["eq_pvalue_lower", "eq_pvalue_upper"]].max(axis=1)
+        elif test_type == "non_inferiority":
+            if direction == "higher_is_better":
+                results_df["eq_pvalue"] = results_df["eq_pvalue_lower"]
+            else:
+                results_df["eq_pvalue"] = results_df["eq_pvalue_upper"]
+        else:  # non_superiority
+            if direction == "higher_is_better":
+                results_df["eq_pvalue"] = results_df["eq_pvalue_upper"]
+            else:
+                results_df["eq_pvalue"] = results_df["eq_pvalue_lower"]
 
+        # Conclusion logic (Lakens' four-cell matrix)
+        tost_sig = results_df["eq_pvalue"] < alpha
+
+        # Use MCP-adjusted significance if available, otherwise standard
+        sig_col = "stat_significance_mcp" if "stat_significance_mcp" in results_df.columns else "stat_significance"
+        nhst_sig = results_df[sig_col] == 1
+
+        if test_type == "equivalence":
+            labels = {
+                (False, True): "equivalent",
+                (False, False): "inconclusive",
+                (True, True): "equivalent_with_difference",
+                (True, False): "not_equivalent",
+            }
+        elif test_type == "non_inferiority":
+            labels = {
+                (False, True): "non_inferior",
+                (False, False): "inconclusive",
+                (True, True): "non_inferior_with_difference",
+                (True, False): "not_non_inferior",
+            }
+        else:  # non_superiority
+            labels = {
+                (False, True): "non_superior",
+                (False, False): "inconclusive",
+                (True, True): "non_superior_with_difference",
+                (True, False): "not_non_superior",
+            }
+
+        results_df["eq_conclusion"] = [
+            labels.get((bool(n), bool(t)), "inconclusive") for n, t in zip(nhst_sig, tost_sig, strict=True)
+        ]
+
+        # NaN out conclusions for invalid rows (e.g., Cohen's d with non-OLS)
+        nan_mask = results_df["_delta"].isna()
+        eq_cols = [c for c in results_df.columns if c.startswith("eq_") and c not in ("eq_test_type", "eq_bound_type")]
+        for col in eq_cols:
+            results_df.loc[nan_mask, col] = np.nan
+
+        results_df = results_df.drop(columns=["_delta"])
         self._results = results_df
 
     def plot_effects(
@@ -2235,6 +2348,62 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             relative_cap=relative_cap,
             save_path=save_path,
             color_direction=color_direction,
+        )
+
+    def plot_equivalence(
+        self,
+        outcomes: list[str] | str | None = None,
+        figsize: tuple | None = None,
+        title: str | None = None,
+        show_values: bool = True,
+        value_decimals: int = 2,
+        sort_by_magnitude: bool = True,
+        save_path: str | None = None,
+    ) -> "plt.Figure":
+        """
+        Plot equivalence test results (TOST visualization).
+
+        Requires :meth:`test_equivalence` to have been called first.
+        Delegates to the standalone :func:`plot_equivalence` function.
+
+        Parameters
+        ----------
+        outcomes : list[str] or str, optional
+            Subset of outcomes to plot.
+        figsize : tuple, optional
+            Figure size ``(width, height)``.
+        title : str, optional
+            Overall figure title.
+        show_values : bool
+            Annotate each row with effect and conclusion.
+        value_decimals : int
+            Decimal places for annotations.
+        sort_by_magnitude : bool
+            Sort rows by |effect|.
+        save_path : str, optional
+            Path to save the figure.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        if self._results is None or "eq_conclusion" not in self._results.columns:
+            log_and_raise_error(
+                self._logger,
+                "Must run test_equivalence() before plot_equivalence().",
+            )
+
+        from .plotting import plot_equivalence as _plot_equivalence
+
+        return _plot_equivalence(
+            data=self._results,
+            outcomes=outcomes,
+            figsize=figsize,
+            title=title,
+            show_values=show_values,
+            value_decimals=value_decimals,
+            sort_by_magnitude=sort_by_magnitude,
+            save_path=save_path,
         )
 
     @property
