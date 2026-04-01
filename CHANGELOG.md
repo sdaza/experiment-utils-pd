@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.0...v0.5.1) (2026-04-01)
+
+
+### Documentation
+
+* update README with TOST equivalence testing documentation ([b10f40c](https://github.com/sdaza/experiment-utils-pd/commit/b10f40c0bf20c6718dc55160945321bde56e9e0d))
+
 ## [0.5.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.4.0...v0.5.0) (2026-04-01)
 
 
