@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.1...v0.5.2) (2026-04-12)
+
+
+### Bug Fixes
+
+* use unadjusted NHST significance in equivalence conclusion logic to match unadjusted TOST p-values, fixing inconsistent labels when MCP corrections were applied
+
 ## [0.5.1](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.0...v0.5.1) (2026-04-12)
 
 
