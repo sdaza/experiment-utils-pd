@@ -2143,9 +2143,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         # Conclusion logic (Lakens' four-cell matrix)
         tost_sig = results_df["eq_pvalue"] < alpha
 
-        # Use MCP-adjusted significance if available, otherwise standard
-        sig_col = "stat_significance_mcp" if "stat_significance_mcp" in results_df.columns else "stat_significance"
-        nhst_sig = results_df[sig_col] == 1
+        # Use unadjusted NHST significance to match unadjusted TOST p-values
+        nhst_sig = results_df["stat_significance"] == 1
 
         if test_type == "equivalence":
             labels = {
