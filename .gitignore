@@ -9,6 +9,7 @@ experiment_utils.egg-info
 .*cache
 /papers
 .cursor
+.claude
 /build
 /dist
 /task
