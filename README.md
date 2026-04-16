@@ -905,6 +905,10 @@ fig = analyzer.plot_equivalence()
 
 ![Equivalence plot example](docs/assets/plot_equivalence_experiments.png)
 
+When the results contain multiple outcomes, each one gets its own stacked panel:
+
+![Equivalence plot — multiple outcomes](docs/assets/plot_equivalence_outcomes.png)
+
 ### Combining Effects (Meta-Analysis)
 
 When you have multiple experiments or segments, pool results using fixed-effects or random-effects meta-analysis, or a simple weighted average.
