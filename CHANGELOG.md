@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.2...v0.5.3) (2026-04-17)
+
+
+### Bug Fixes
+
+* add effect probabilities and ROPE calculations to ExperimentAnalyzer and update README ([aac5c4d](https://github.com/sdaza/experiment-utils-pd/commit/aac5c4d7866f887f60507a398896d3c2a6a8a02e))
+* add probability and ROPE calculations to BootstrapMixin and ExperimentAnalyzer ([b8414b1](https://github.com/sdaza/experiment-utils-pd/commit/b8414b1bc98e90b3dc4a037a56de60634ce8fb6e))
+* equivalence plots with several outcomes ([467076a](https://github.com/sdaza/experiment-utils-pd/commit/467076a4285b4259fb6b9f28b478b20f74327bd5))
+* equivalence plots with several outcomes ([9216c81](https://github.com/sdaza/experiment-utils-pd/commit/9216c811a529550845f0fc705324646a2a7b7e53))
+
 ## [0.5.2](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.1...v0.5.2) (2026-04-12)
 
 
