@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.4](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.3...v0.5.4) (2026-04-17)
+
+
+### Bug Fixes
+
+* update effect plot display logic and enhance meta-analysis grouping ([2dd3ca4](https://github.com/sdaza/experiment-utils-pd/commit/2dd3ca4ab4b4cb2330649a63e010e81fc8835f5d))
+* update effect plot display logic and enhance meta-analysis grouping ([813e0cb](https://github.com/sdaza/experiment-utils-pd/commit/813e0cb1a701f1939d629114d1b4850b08c3c96f))
+* update plot effects function calls to use consistent string formatting ([8358783](https://github.com/sdaza/experiment-utils-pd/commit/8358783459d551836c0f4094f6aa3a829995cd13))
+
 ## [0.5.3](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.2...v0.5.3) (2026-04-17)
 
 
