@@ -1,5 +1,4 @@
 # %% Imports
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -141,7 +140,7 @@ figs_by_country = analyzer.plot_effects(
     meta_analysis=True,
 )
 
-figs_by_country['EU']
+figs_by_country["EU"]
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,7 +152,7 @@ figs_by_type = analyzer.plot_effects(
     pct_points=True,
 )
 
-figs_by_type['email']
+figs_by_type["email"]
 
 
 # %%
@@ -226,4 +225,3 @@ analyzer_single.plot_effects(
     pct_points=True,
     combine_values=True,
 )
-
