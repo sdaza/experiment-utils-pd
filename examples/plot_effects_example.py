@@ -77,7 +77,6 @@ print(
 #           show_values=True and sort_by_magnitude=True are on by default
 # ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(title="Treatment Effects — Revenue & Conversion")
-plt.show()
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,7 +88,7 @@ analyzer.plot_effects(
     title="Conversion Rate — Percentage Points",
     pct_points=True,
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,7 +102,7 @@ analyzer.plot_effects(
     pct_points=True,
     combine_values=True,
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,7 +116,7 @@ analyzer.plot_effects(
     pct_points=True,
     combine_values=True,
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +127,7 @@ analyzer.plot_effects(
     effect=["absolute", "relative"],
     pct_points=True,
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,9 +140,8 @@ figs_by_country = analyzer.plot_effects(
     combine_values=True,
     meta_analysis=True,
 )
-for fig in figs_by_country.values():
-    plt.figure(fig.number)
-    plt.show()
+
+figs_by_country['EU']
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,9 +152,9 @@ figs_by_type = analyzer.plot_effects(
     group_by="type",
     pct_points=True,
 )
-for fig in figs_by_type.values():
-    plt.figure(fig.number)
-    plt.show()
+
+figs_by_type['email']
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +166,7 @@ analyzer.plot_effects(
     combine_values=True,
     title="Revenue Effect — with Pooled Estimate",
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,7 +177,7 @@ analyzer.plot_effects(
     y="outcome",
     title="Effects by Experiment",
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,7 +212,7 @@ analyzer_single.plot_effects(
     title="Email Campaign Results",
     panel_titles="Treatment vs Control",
 )
-plt.show()
+
 
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,4 +226,4 @@ analyzer_single.plot_effects(
     pct_points=True,
     combine_values=True,
 )
-plt.show()
+
