@@ -132,6 +132,26 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         (unlike PowerSim which uses threading+multiprocessing) because: (1) DataFrames
         benefit from shared memory, (2) statsmodels releases the GIL, (3) avoids
         expensive serialization. Use 'hybrid' for potentially better cache utilization.
+    prob_threshold_abs : float, optional
+        Threshold used to compute ``P(absolute_effect > prob_threshold_abs)`` from the
+        bootstrap distribution. In outcome units. By default 0.0 (i.e., probability of
+        a positive effect). Only applied when ``bootstrap=True``; emitted as the
+        ``prob_abs_effect_gt`` column.
+    prob_threshold_rel : float, optional
+        Threshold used to compute ``P(relative_effect > prob_threshold_rel)`` from the
+        bootstrap distribution. Expressed as a fraction of the control mean (e.g.
+        ``0.02`` = 2%). By default 0.0. Only applied when ``bootstrap=True``; emitted
+        as the ``prob_rel_effect_gt`` column.
+    rope_abs : tuple[float, float], optional
+        Region of Practical Equivalence for the absolute effect, as ``(lo, hi)`` in
+        outcome units. When set (and ``bootstrap=True``), emits
+        ``prob_abs_effect_in_rope`` / ``_above_rope`` / ``_below_rope`` columns —
+        probability mass of the bootstrap distribution inside, above, or below the
+        band. ``None`` (default) disables; those columns are ``NaN``.
+    rope_rel : tuple[float, float], optional
+        ROPE for the relative effect, as ``(lo, hi)`` on the fractional scale
+        (e.g. ``(-0.02, 0.02)`` = ±2%). Emits ``prob_rel_effect_in_rope`` /
+        ``_above_rope`` / ``_below_rope`` when set. ``None`` (default) disables.
     correction : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -257,6 +277,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         skip_bootstrap_for_survival: bool = False,
         bootstrap_fixed_weights: bool = False,
         bootstrap_backend: str = "threading",
+        prob_threshold_abs: float = 0.0,
+        prob_threshold_rel: float = 0.0,
+        rope_abs: tuple[float, float] | list[float] | None = None,
+        rope_rel: tuple[float, float] | list[float] | None = None,
         treatment_comparisons: list[tuple] | None = None,
         correction: str | None = None,
         categorical_max_unique: int = 2,
@@ -320,6 +344,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self._skip_bootstrap_for_survival = skip_bootstrap_for_survival
         self._bootstrap_fixed_weights = bootstrap_fixed_weights
         self._bootstrap_backend = bootstrap_backend
+        self._prob_threshold_abs = self.__validate_prob_threshold(prob_threshold_abs, "prob_threshold_abs")
+        self._prob_threshold_rel = self.__validate_prob_threshold(prob_threshold_rel, "prob_threshold_rel")
+        self._rope_abs = self.__validate_rope(rope_abs, "rope_abs")
+        self._rope_rel = self.__validate_rope(rope_rel, "rope_rel")
         self._correction = correction
         self._treatment_comparisons = treatment_comparisons
         self._categorical_max_unique = categorical_max_unique
@@ -1057,6 +1085,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         - srm_detected: Whether sample ratio mismatch was detected.
         - srm_pvalue: The p-value for the sample ratio mismatch test.
 
+        Bootstrap-only columns (emitted when bootstrap=True):
+        - prob_abs_effect_gt: P(absolute_effect > prob_threshold_abs).
+        - prob_rel_effect_gt: P(relative_effect > prob_threshold_rel).
+        - prob_abs_effect_in_rope / _above_rope / _below_rope: probability mass of
+          the absolute effect inside / above / below rope_abs (NaN if rope_abs is None).
+        - prob_rel_effect_in_rope / _above_rope / _below_rope: same for the relative
+          effect and rope_rel (NaN if rope_rel is None).
+
         Note:
         - Columns with all NaN values are automatically removed from results.
         - Model-specific metrics (odds_ratio, hazard_ratio, etc.) are not included in results.
@@ -1749,6 +1785,50 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
                                     output["rel_effect_lower"] = bootstrap_results["rel_effect_lower"]
                                     output["rel_effect_upper"] = bootstrap_results["rel_effect_upper"]
+                                    for _prob_key in (
+                                        "prob_abs_effect_gt",
+                                        "prob_rel_effect_gt",
+                                        "prob_abs_effect_in_rope",
+                                        "prob_abs_effect_above_rope",
+                                        "prob_abs_effect_below_rope",
+                                        "prob_rel_effect_in_rope",
+                                        "prob_rel_effect_above_rope",
+                                        "prob_rel_effect_below_rope",
+                                    ):
+                                        output[_prob_key] = bootstrap_results[_prob_key]
+                                    # For ratio outcomes the bootstrap's relative-effect array
+                                    # divides by a near-zero control mean of the linearized
+                                    # column; recompute relative probabilities from
+                                    # bootstrap_abs_effects / R so they match the ratio scale.
+                                    if _is_ratio:
+                                        _R_ratio = _ratio_lin_cols[outcome][3]
+                                        if _R_ratio != 0 and len(bootstrap_abs_effects) > 0:
+                                            _rel_arr = bootstrap_abs_effects[~np.isnan(bootstrap_abs_effects)]
+                                            _rel_arr = _rel_arr / _R_ratio
+                                            if len(_rel_arr) > 0:
+                                                output["prob_rel_effect_gt"] = float(
+                                                    np.mean(_rel_arr > self._prob_threshold_rel)
+                                                )
+                                                if self._rope_rel is not None:
+                                                    _rlo, _rhi = self._rope_rel
+                                                    output["prob_rel_effect_in_rope"] = float(
+                                                        np.mean((_rel_arr >= _rlo) & (_rel_arr <= _rhi))
+                                                    )
+                                                    output["prob_rel_effect_above_rope"] = float(
+                                                        np.mean(_rel_arr > _rhi)
+                                                    )
+                                                    output["prob_rel_effect_below_rope"] = float(
+                                                        np.mean(_rel_arr < _rlo)
+                                                    )
+                                                else:
+                                                    output["prob_rel_effect_in_rope"] = np.nan
+                                                    output["prob_rel_effect_above_rope"] = np.nan
+                                                    output["prob_rel_effect_below_rope"] = np.nan
+                                        else:
+                                            output["prob_rel_effect_gt"] = np.nan
+                                            output["prob_rel_effect_in_rope"] = np.nan
+                                            output["prob_rel_effect_above_rope"] = np.nan
+                                            output["prob_rel_effect_below_rope"] = np.nan
                                     # Derive significance from whether bootstrap CI excludes zero
                                     # to ensure visual consistency with forest plots
                                     lo = bootstrap_results["abs_effect_lower"]
@@ -1919,6 +1999,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             result_columns.append("srm_pvalue")
         if self._trim_ps and "trimmed_units" not in result_columns:
             result_columns.append("trimmed_units")
+
+        # Bootstrap-only probability columns: include whenever the bootstrap
+        # path populated them (i.e., any row has inference_method="bootstrap").
+        if (
+            "inference_method" in clean_temp_results.columns
+            and (clean_temp_results["inference_method"] == "bootstrap").any()
+        ):
+            result_columns.extend(
+                [
+                    "prob_abs_effect_gt",
+                    "prob_rel_effect_gt",
+                    "prob_abs_effect_in_rope",
+                    "prob_abs_effect_above_rope",
+                    "prob_abs_effect_below_rope",
+                    "prob_rel_effect_in_rope",
+                    "prob_rel_effect_above_rope",
+                    "prob_rel_effect_below_rope",
+                ]
+            )
 
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
@@ -2488,6 +2587,33 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if item is None:
             return []
         return item if isinstance(item, list) else [item]
+
+    def __validate_prob_threshold(self, value: float, name: str) -> float:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            log_and_raise_error(self._logger, f"{name} must be a finite number, got {value!r}.")
+        if not np.isfinite(v):
+            log_and_raise_error(self._logger, f"{name} must be finite, got {value!r}.")
+        return v
+
+    def __validate_rope(self, value: tuple[float, float] | list[float] | None, name: str) -> tuple[float, float] | None:
+        if value is None:
+            return None
+        if not (isinstance(value, tuple | list) and len(value) == 2):
+            log_and_raise_error(
+                self._logger,
+                f"{name} must be a 2-element tuple/list (lo, hi), got {value!r}.",
+            )
+        try:
+            lo, hi = float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            log_and_raise_error(self._logger, f"{name} bounds must be finite numbers, got {value!r}.")
+        if not (np.isfinite(lo) and np.isfinite(hi)):
+            log_and_raise_error(self._logger, f"{name} bounds must be finite, got {value!r}.")
+        if lo > hi:
+            log_and_raise_error(self._logger, f"{name} lower bound must be <= upper bound, got {value!r}.")
+        return (lo, hi)
 
     @property
     def results(self) -> pd.DataFrame | None:

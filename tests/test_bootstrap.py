@@ -362,5 +362,182 @@ class TestBootstrapInference:
         )
 
 
+class TestBootstrapProbAndRope:
+    """Tests for P(effect > threshold) and ROPE probability columns."""
+
+    PROB_COLS = [
+        "prob_abs_effect_gt",
+        "prob_rel_effect_gt",
+        "prob_abs_effect_in_rope",
+        "prob_abs_effect_above_rope",
+        "prob_abs_effect_below_rope",
+        "prob_rel_effect_in_rope",
+        "prob_rel_effect_above_rope",
+        "prob_rel_effect_below_rope",
+    ]
+
+    def test_prob_columns_present_with_bootstrap(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=200,
+            bootstrap_seed=123,
+            rope_abs=(-1.0, 1.0),
+            rope_rel=(-0.01, 0.01),
+        )
+        analyzer.get_effects()
+        results = analyzer.results
+        for col in self.PROB_COLS:
+            assert col in results.columns, f"Missing column: {col}"
+
+    def test_prob_columns_absent_without_bootstrap(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=False,
+        )
+        analyzer.get_effects()
+        results = analyzer.results
+        for col in self.PROB_COLS:
+            assert col not in results.columns, f"Unexpected column in asymptotic output: {col}"
+
+    def test_prob_gt_zero_detects_positive_effect(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=500,
+            bootstrap_seed=123,
+        )
+        analyzer.get_effects()
+        results = analyzer.results
+        assert results["prob_abs_effect_gt"].values[0] > 0.95
+        assert results["prob_rel_effect_gt"].values[0] > 0.95
+
+    def test_prob_gt_high_threshold_is_low(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=500,
+            bootstrap_seed=123,
+            prob_threshold_abs=100.0,
+        )
+        analyzer.get_effects()
+        results = analyzer.results
+        assert results["prob_abs_effect_gt"].values[0] < 0.05
+
+    def test_rope_contains_all_estimates(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=500,
+            bootstrap_seed=123,
+            rope_abs=(-100.0, 100.0),
+        )
+        analyzer.get_effects()
+        r = analyzer.results.iloc[0]
+        assert r["prob_abs_effect_in_rope"] > 0.99
+        assert r["prob_abs_effect_above_rope"] < 0.01
+        assert r["prob_abs_effect_below_rope"] < 0.01
+
+    def test_rope_entirely_above_true_effect(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=500,
+            bootstrap_seed=123,
+            rope_abs=(100.0, 200.0),
+        )
+        analyzer.get_effects()
+        r = analyzer.results.iloc[0]
+        assert r["prob_abs_effect_below_rope"] > 0.99
+        assert r["prob_abs_effect_in_rope"] < 0.01
+        assert r["prob_abs_effect_above_rope"] < 0.01
+
+    def test_rope_three_way_partition_sums_to_one(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=500,
+            bootstrap_seed=123,
+            rope_abs=(-1.0, 1.0),
+            rope_rel=(-0.01, 0.01),
+        )
+        analyzer.get_effects()
+        r = analyzer.results.iloc[0]
+        total = r["prob_abs_effect_in_rope"] + r["prob_abs_effect_above_rope"] + r["prob_abs_effect_below_rope"]
+        assert abs(total - 1.0) < 1e-9
+
+    def test_rope_none_yields_nan(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=100,
+            bootstrap_seed=123,
+        )
+        analyzer.get_effects()
+        r = analyzer.results.iloc[0]
+        for col in (
+            "prob_abs_effect_in_rope",
+            "prob_abs_effect_above_rope",
+            "prob_abs_effect_below_rope",
+            "prob_rel_effect_in_rope",
+            "prob_rel_effect_above_rope",
+            "prob_rel_effect_below_rope",
+        ):
+            assert np.isnan(r[col]), f"Expected NaN for {col}, got {r[col]}"
+
+    def test_invalid_rope_raises(self, sample_data):
+        with pytest.raises(ValueError):
+            ExperimentAnalyzer(
+                data=sample_data,
+                outcomes=["outcome"],
+                treatment_col="treatment",
+                experiment_identifier=["experiment_id"],
+                bootstrap=True,
+                rope_abs=(1.0, 0.0),
+            )
+        with pytest.raises(ValueError):
+            ExperimentAnalyzer(
+                data=sample_data,
+                outcomes=["outcome"],
+                treatment_col="treatment",
+                experiment_identifier=["experiment_id"],
+                bootstrap=True,
+                rope_rel=(float("nan"), 1.0),
+            )
+        with pytest.raises(ValueError):
+            ExperimentAnalyzer(
+                data=sample_data,
+                outcomes=["outcome"],
+                treatment_col="treatment",
+                experiment_identifier=["experiment_id"],
+                bootstrap=True,
+                rope_abs=(0.0,),
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

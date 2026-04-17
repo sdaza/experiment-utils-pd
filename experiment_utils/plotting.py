@@ -1528,14 +1528,18 @@ def plot_equivalence(
     unique_outcomes = df["outcome"].unique()
     n_panels = len(unique_outcomes)
 
-    # Figure sizing
+    # Figure sizing — budget per-panel chrome (bold title, ticks, padding) separately
+    # from row content so many-panel stacks don't collapse into overlapping titles.
     if figsize is None:
-        max_rows = max(len(df[df["outcome"] == o]) for o in unique_outcomes)
-        fig_h = max(2.5, 0.45 * max_rows * n_panels + 1.5)
+        total_rows = sum(len(df[df["outcome"] == o]) for o in unique_outcomes)
+        per_panel_overhead = 0.85
+        row_height = 0.42
+        xlabel_overhead = 0.35
+        fig_h = max(3.0, per_panel_overhead * n_panels + row_height * total_rows + xlabel_overhead + 0.4)
         fig_w = 8
         figsize = (fig_w, fig_h)
 
-    fig, axes_arr = plt.subplots(n_panels, 1, figsize=figsize, squeeze=False)
+    fig, axes_arr = plt.subplots(n_panels, 1, figsize=figsize, squeeze=False, layout="constrained")
     axes = axes_arr.flatten()
 
     # Color mapping
@@ -1552,7 +1556,7 @@ def plot_equivalence(
         conclusion_colors[label] = _CLR_EQ_DIFF
     conclusion_colors["inconclusive"] = _CLR_NSIG
 
-    for _panel_idx, (ax, outcome_val) in enumerate(zip(axes, unique_outcomes, strict=False)):
+    for panel_idx, (ax, outcome_val) in enumerate(zip(axes, unique_outcomes, strict=False)):
         od = df[df["outcome"] == outcome_val].copy()
         if sort_by_magnitude:
             od = od.sort_values(by="absolute_effect", key=abs, ascending=False)
@@ -1660,7 +1664,8 @@ def plot_equivalence(
         ax.set_yticks(y_pos)
         ax.set_yticklabels(labels, fontsize=8)
         ax.invert_yaxis()
-        ax.set_xlabel("Effect (with equivalence bounds)", fontsize=9)
+        if panel_idx == n_panels - 1:
+            ax.set_xlabel("Effect (with equivalence bounds)", fontsize=9)
 
         # Panel title
         panel_title = outcome_val if n_panels > 1 else (title or outcome_val)
@@ -1674,8 +1679,6 @@ def plot_equivalence(
 
     if title and n_panels > 1:
         fig.suptitle(title, fontsize=12, fontweight="bold")
-
-    fig.tight_layout()
 
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")

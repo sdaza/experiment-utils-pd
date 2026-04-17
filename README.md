@@ -699,6 +699,34 @@ print(results[["outcome", "absolute_effect", "abs_effect_lower",
 - Skepticism about asymptotic assumptions
 - Want robust, distribution-free inference
 
+**Effect probabilities and ROPE (bootstrap only):**
+
+Read off decision-ready probabilities directly from the bootstrap distribution:
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["conversion"],
+    bootstrap=True,
+    bootstrap_iterations=2000,
+    # P(effect > threshold) — threshold is 0 by default
+    prob_threshold_abs=0.0,        # outcome units
+    prob_threshold_rel=0.02,       # fractional scale: 0.02 = 2% lift
+    # Region of Practical Equivalence (optional)
+    rope_abs=(-0.5, 0.5),          # outcome units
+    rope_rel=(-0.01, 0.01),        # +/- 1% relative
+)
+analyzer.get_effects()
+r = analyzer.results.iloc[0]
+# P(absolute_effect > 0), P(relative_effect > 2%)
+r["prob_abs_effect_gt"], r["prob_rel_effect_gt"]
+# Three-way ROPE decision on the relative scale
+r["prob_rel_effect_below_rope"], r["prob_rel_effect_in_rope"], r["prob_rel_effect_above_rope"]
+```
+
+Each scale is configured independently. Absolute params (`prob_threshold_abs`, `rope_abs`) use outcome units; relative params (`prob_threshold_rel`, `rope_rel`) use fractions of the control mean. Leaving `rope_abs` / `rope_rel` as `None` disables the ROPE columns for that scale.
+
 ### Multiple Experiments
 
 Analyze multiple experiments simultaneously:
@@ -904,6 +932,10 @@ fig = analyzer.plot_equivalence()
 ```
 
 ![Equivalence plot example](docs/assets/plot_equivalence_experiments.png)
+
+When the results contain multiple outcomes, each one gets its own stacked panel:
+
+![Equivalence plot — multiple outcomes](docs/assets/plot_equivalence_outcomes.png)
 
 ### Combining Effects (Meta-Analysis)
 
