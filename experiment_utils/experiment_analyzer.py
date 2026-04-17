@@ -2411,8 +2411,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         meta_df = None
         if meta_analysis is True:
+            extra_group_cols: list[str] = []
+            if group_by is not None:
+                extra_group_cols = [group_by] if isinstance(group_by, str) else list(group_by)
             meta_df = self.combine_effects(
-                grouping_cols=self._resolve_grouping_cols(self._results, None),
+                grouping_cols=self._resolve_grouping_cols(self._results, extra_group_cols or None),
                 method=meta_method,
             )
             meta_df["_label"] = "Pooled"
