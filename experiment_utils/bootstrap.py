@@ -873,6 +873,17 @@ class BootstrapMixin:
         dict
             Dictionary with standard error, CI, and p-value
         """
+        empty_probs = {
+            "prob_abs_effect_gt": np.nan,
+            "prob_rel_effect_gt": np.nan,
+            "prob_abs_effect_in_rope": np.nan,
+            "prob_abs_effect_above_rope": np.nan,
+            "prob_abs_effect_below_rope": np.nan,
+            "prob_rel_effect_in_rope": np.nan,
+            "prob_rel_effect_above_rope": np.nan,
+            "prob_rel_effect_below_rope": np.nan,
+        }
+
         if len(bootstrap_abs_effects) == 0:
             return {
                 "standard_error": np.nan,
@@ -881,6 +892,7 @@ class BootstrapMixin:
                 "abs_effect_upper": np.nan,
                 "rel_effect_lower": np.nan,
                 "rel_effect_upper": np.nan,
+                **empty_probs,
             }
 
         valid_abs_idx = ~np.isnan(bootstrap_abs_effects)
@@ -896,6 +908,7 @@ class BootstrapMixin:
                 "abs_effect_upper": np.nan,
                 "rel_effect_lower": np.nan,
                 "rel_effect_upper": np.nan,
+                **empty_probs,
             }
 
         bootstrap_se = np.std(bootstrap_abs_effects_clean, ddof=1)
@@ -965,6 +978,35 @@ class BootstrapMixin:
                 )
             )
 
+        thr_abs = getattr(self, "_prob_threshold_abs", 0.0)
+        thr_rel = getattr(self, "_prob_threshold_rel", 0.0)
+        prob_abs_gt = float(np.mean(bootstrap_abs_effects_clean > thr_abs))
+        prob_rel_gt = (
+            float(np.mean(bootstrap_rel_effects_clean > thr_rel)) if len(bootstrap_rel_effects_clean) > 0 else np.nan
+        )
+
+        rope_abs = getattr(self, "_rope_abs", None)
+        if rope_abs is not None:
+            a_lo, a_hi = rope_abs
+            prob_abs_in_rope = float(
+                np.mean((bootstrap_abs_effects_clean >= a_lo) & (bootstrap_abs_effects_clean <= a_hi))
+            )
+            prob_abs_above_rope = float(np.mean(bootstrap_abs_effects_clean > a_hi))
+            prob_abs_below_rope = float(np.mean(bootstrap_abs_effects_clean < a_lo))
+        else:
+            prob_abs_in_rope = prob_abs_above_rope = prob_abs_below_rope = np.nan
+
+        rope_rel = getattr(self, "_rope_rel", None)
+        if rope_rel is not None and len(bootstrap_rel_effects_clean) > 0:
+            r_lo, r_hi = rope_rel
+            prob_rel_in_rope = float(
+                np.mean((bootstrap_rel_effects_clean >= r_lo) & (bootstrap_rel_effects_clean <= r_hi))
+            )
+            prob_rel_above_rope = float(np.mean(bootstrap_rel_effects_clean > r_hi))
+            prob_rel_below_rope = float(np.mean(bootstrap_rel_effects_clean < r_lo))
+        else:
+            prob_rel_in_rope = prob_rel_above_rope = prob_rel_below_rope = np.nan
+
         return {
             "standard_error": bootstrap_se,
             "pvalue": pvalue,
@@ -972,6 +1014,14 @@ class BootstrapMixin:
             "abs_effect_upper": abs_ci_upper,
             "rel_effect_lower": rel_ci_lower,
             "rel_effect_upper": rel_ci_upper,
+            "prob_abs_effect_gt": prob_abs_gt,
+            "prob_rel_effect_gt": prob_rel_gt,
+            "prob_abs_effect_in_rope": prob_abs_in_rope,
+            "prob_abs_effect_above_rope": prob_abs_above_rope,
+            "prob_abs_effect_below_rope": prob_abs_below_rope,
+            "prob_rel_effect_in_rope": prob_rel_in_rope,
+            "prob_rel_effect_above_rope": prob_rel_above_rope,
+            "prob_rel_effect_below_rope": prob_rel_below_rope,
         }
 
     def clear_bootstrap_distributions(self):
