@@ -132,6 +132,26 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         (unlike PowerSim which uses threading+multiprocessing) because: (1) DataFrames
         benefit from shared memory, (2) statsmodels releases the GIL, (3) avoids
         expensive serialization. Use 'hybrid' for potentially better cache utilization.
+    prob_threshold_abs : float, optional
+        Threshold used to compute ``P(absolute_effect > prob_threshold_abs)`` from the
+        bootstrap distribution. In outcome units. By default 0.0 (i.e., probability of
+        a positive effect). Only applied when ``bootstrap=True``; emitted as the
+        ``prob_abs_effect_gt`` column.
+    prob_threshold_rel : float, optional
+        Threshold used to compute ``P(relative_effect > prob_threshold_rel)`` from the
+        bootstrap distribution. Expressed as a fraction of the control mean (e.g.
+        ``0.02`` = 2%). By default 0.0. Only applied when ``bootstrap=True``; emitted
+        as the ``prob_rel_effect_gt`` column.
+    rope_abs : tuple[float, float], optional
+        Region of Practical Equivalence for the absolute effect, as ``(lo, hi)`` in
+        outcome units. When set (and ``bootstrap=True``), emits
+        ``prob_abs_effect_in_rope`` / ``_above_rope`` / ``_below_rope`` columns —
+        probability mass of the bootstrap distribution inside, above, or below the
+        band. ``None`` (default) disables; those columns are ``NaN``.
+    rope_rel : tuple[float, float], optional
+        ROPE for the relative effect, as ``(lo, hi)`` on the fractional scale
+        (e.g. ``(-0.02, 0.02)`` = ±2%). Emits ``prob_rel_effect_in_rope`` /
+        ``_above_rope`` / ``_below_rope`` when set. ``None`` (default) disables.
     correction : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -1064,6 +1084,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         - rel_effect_upper: Upper bound of relative effect CI (if available).
         - srm_detected: Whether sample ratio mismatch was detected.
         - srm_pvalue: The p-value for the sample ratio mismatch test.
+
+        Bootstrap-only columns (emitted when bootstrap=True):
+        - prob_abs_effect_gt: P(absolute_effect > prob_threshold_abs).
+        - prob_rel_effect_gt: P(relative_effect > prob_threshold_rel).
+        - prob_abs_effect_in_rope / _above_rope / _below_rope: probability mass of
+          the absolute effect inside / above / below rope_abs (NaN if rope_abs is None).
+        - prob_rel_effect_in_rope / _above_rope / _below_rope: same for the relative
+          effect and rope_rel (NaN if rope_rel is None).
 
         Note:
         - Columns with all NaN values are automatically removed from results.
