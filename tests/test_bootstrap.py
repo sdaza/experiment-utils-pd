@@ -361,6 +361,49 @@ class TestBootstrapInference:
             f"Studentized vs asymptotic p-value gap too large: {pval_studentized:.4f} vs {pval_asymptotic:.4f}"
         )
 
+    def test_ratio_outcome_bootstrap_relative_ci_is_finite(self):
+        # Regression test: before Fix B, the bootstrap ran on the linearized
+        # column whose control mean is ~0, so bootstrap_rel_effects were
+        # absolute_effect / ~0 — producing CIs around -2.7e12.
+        np.random.seed(1)
+        n = 5000
+        df = pd.DataFrame(
+            {
+                "experiment_id": "ratio_exp",
+                "treat": np.random.choice(["A", "B"], n),
+                "lead": np.random.choice([0, 1], n, p=[0.7, 0.3]),
+            }
+        )
+        df["trial"] = df["lead"] * np.random.choice([0, 1], n, p=[0.6, 0.4])
+
+        analyzer = ExperimentAnalyzer(
+            data=df,
+            outcomes=["trial", "lead"],
+            treatment_col="treat",
+            experiment_identifier=["experiment_id"],
+            ratio_outcomes={"trial_per_lead": ("trial", "lead")},
+            outcome_models={"trial": "ols", "lead": "ols"},
+            bootstrap=True,
+            bootstrap_iterations=200,
+            bootstrap_seed=1,
+            estimand="ATE",
+        )
+        analyzer.get_effects()
+
+        row = analyzer.results[analyzer.results["outcome"] == "trial_per_lead"].iloc[0]
+        rel_lower = row["rel_effect_lower"]
+        rel_upper = row["rel_effect_upper"]
+        rel_effect = row["relative_effect"]
+
+        assert np.isfinite(rel_lower), f"rel_effect_lower is not finite: {rel_lower}"
+        assert np.isfinite(rel_upper), f"rel_effect_upper is not finite: {rel_upper}"
+        # Plausibility: |rel CI| for a trial/lead ratio should be O(1), not 1e12.
+        assert abs(rel_lower) < 100, f"rel_effect_lower implausibly large: {rel_lower}"
+        assert abs(rel_upper) < 100, f"rel_effect_upper implausibly large: {rel_upper}"
+        assert rel_lower <= rel_effect <= rel_upper or abs(rel_upper - rel_lower) < 1e-9, (
+            f"point estimate {rel_effect} outside CI [{rel_lower}, {rel_upper}]"
+        )
+
 
 class TestBootstrapProbAndRope:
     """Tests for P(effect > threshold) and ROPE probability columns."""
