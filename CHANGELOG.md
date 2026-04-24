@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.5](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.4...v0.5.5) (2026-04-24)
+
+
+### Bug Fixes
+
+* update bootstrap sample preparation to include control-group ratio and enhance CI checks ([fa8ed52](https://github.com/sdaza/experiment-utils-pd/commit/fa8ed52435e10a87e7319fb51c51ad1c5ed402f5))
+* update bootstrap sample preparation to include control-group ratio and enhance CI checks ([91d19f7](https://github.com/sdaza/experiment-utils-pd/commit/91d19f7bc4b6e2ca7e059ff0e4e0ba55f636f85d))
+
 ## [0.5.4](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.3...v0.5.4) (2026-04-17)
 
 
