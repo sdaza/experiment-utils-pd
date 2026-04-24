@@ -1796,39 +1796,6 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                         "prob_rel_effect_below_rope",
                                     ):
                                         output[_prob_key] = bootstrap_results[_prob_key]
-                                    # For ratio outcomes the bootstrap's relative-effect array
-                                    # divides by a near-zero control mean of the linearized
-                                    # column; recompute relative probabilities from
-                                    # bootstrap_abs_effects / R so they match the ratio scale.
-                                    if _is_ratio:
-                                        _R_ratio = _ratio_lin_cols[outcome][3]
-                                        if _R_ratio != 0 and len(bootstrap_abs_effects) > 0:
-                                            _rel_arr = bootstrap_abs_effects[~np.isnan(bootstrap_abs_effects)]
-                                            _rel_arr = _rel_arr / _R_ratio
-                                            if len(_rel_arr) > 0:
-                                                output["prob_rel_effect_gt"] = float(
-                                                    np.mean(_rel_arr > self._prob_threshold_rel)
-                                                )
-                                                if self._rope_rel is not None:
-                                                    _rlo, _rhi = self._rope_rel
-                                                    output["prob_rel_effect_in_rope"] = float(
-                                                        np.mean((_rel_arr >= _rlo) & (_rel_arr <= _rhi))
-                                                    )
-                                                    output["prob_rel_effect_above_rope"] = float(
-                                                        np.mean(_rel_arr > _rhi)
-                                                    )
-                                                    output["prob_rel_effect_below_rope"] = float(
-                                                        np.mean(_rel_arr < _rlo)
-                                                    )
-                                                else:
-                                                    output["prob_rel_effect_in_rope"] = np.nan
-                                                    output["prob_rel_effect_above_rope"] = np.nan
-                                                    output["prob_rel_effect_below_rope"] = np.nan
-                                        else:
-                                            output["prob_rel_effect_gt"] = np.nan
-                                            output["prob_rel_effect_in_rope"] = np.nan
-                                            output["prob_rel_effect_above_rope"] = np.nan
-                                            output["prob_rel_effect_below_rope"] = np.nan
                                     # Derive significance from whether bootstrap CI excludes zero
                                     # to ensure visual consistency with forest plots
                                     lo = bootstrap_results["abs_effect_lower"]

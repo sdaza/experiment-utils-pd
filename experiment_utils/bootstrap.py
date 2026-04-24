@@ -229,7 +229,7 @@ class BootstrapMixin:
         event_col_for_resample: str | None = None,
         bootstrap_indices: np.ndarray | None = None,
         ratio_cols: tuple[str, str] | None = None,
-    ) -> tuple[pd.DataFrame | None, list[str], str | None, str | None]:
+    ) -> tuple[pd.DataFrame | None, list[str], str | None, float | None, str | None]:
         """
         Prepare a bootstrap sample (Stage 1: I/O-bound, use threading).
 
@@ -263,8 +263,12 @@ class BootstrapMixin:
 
         Returns
         -------
-        tuple[pd.DataFrame | None, list[str], str | None, str | None]
-            (prepared_data, boot_relevant_covariates, weight_col, error_info)
+        tuple[pd.DataFrame | None, list[str], str | None, float | None, str | None]
+            (prepared_data, boot_relevant_covariates, weight_col, R_boot, error_info)
+            R_boot is the control-group ratio on this resample (only set when
+            ratio_cols is provided and the control denominator is nonzero);
+            needed downstream to rescale the linearized relative effect back
+            to the ratio scale in a way that captures R's sampling variance.
         """
         try:
             # Resample data
@@ -276,6 +280,7 @@ class BootstrapMixin:
 
             # For ratio outcomes: re-estimate R_control on this resample so the bootstrap
             # correctly captures variance in the control ratio, not just OLS residuals.
+            R_boot: float | None = None
             if ratio_cols is not None:
                 num_col, den_col = ratio_cols
                 c_mask_boot = boot_data[self._treatment_col] == 0
@@ -323,11 +328,11 @@ class BootstrapMixin:
 
             boot_relevant_covariates = list(set(boot_final_covariates) & set(relevant_covariates))
 
-            return boot_data, boot_relevant_covariates, weight_col, None
+            return boot_data, boot_relevant_covariates, weight_col, R_boot, None
 
         except Exception as e:
             error_info = f"{type(e).__name__}: {str(e)[:100]}"
-            return None, [], None, error_info
+            return None, [], None, None, error_info
 
     def _fit_bootstrap_model(
         self,
@@ -341,6 +346,7 @@ class BootstrapMixin:
         cluster_col: str | None,
         event_col: str | None = None,
         interaction_covariates: list[str] | None = None,
+        R_boot: float | None = None,
     ) -> tuple[float | None, float | None, str | None]:
         """
         Fit model on prepared bootstrap sample (Stage 2: CPU-bound, use multiprocessing).
@@ -370,6 +376,12 @@ class BootstrapMixin:
             Event column for survival models
         interaction_covariates : list[str] | None
             Covariates to include as treatment interactions
+        R_boot : float | None
+            Control-group ratio estimated on this resample. When provided and
+            nonzero, the returned relative_effect is recomputed as
+            absolute_effect / R_boot so bootstrap_rel_effects live on the
+            ratio scale (otherwise the estimator's rel_eff divides by the
+            near-zero control mean of the linearized column and is garbage).
 
         Returns
         -------
@@ -411,7 +423,10 @@ class BootstrapMixin:
                 warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
                 output = model_func(**estimator_params)
 
-            return output["absolute_effect"], output["relative_effect"], output.get("standard_error", np.nan), None
+            rel_eff = output["relative_effect"]
+            if R_boot is not None and R_boot != 0 and not np.isnan(R_boot):
+                rel_eff = output["absolute_effect"] / R_boot
+            return output["absolute_effect"], rel_eff, output.get("standard_error", np.nan), None
 
         except Exception as e:
             error_info = f"{type(e).__name__}: {str(e)[:100]}"
@@ -479,7 +494,7 @@ class BootstrapMixin:
             (absolute_effect, relative_effect, error_info)
         """
         # Stage 1: Prepare bootstrap sample (I/O-bound)
-        boot_data, boot_relevant_covariates, weight_col, prep_error = self._prepare_bootstrap_sample(
+        boot_data, boot_relevant_covariates, weight_col, R_boot, prep_error = self._prepare_bootstrap_sample(
             data=data,
             outcome=outcome,
             adjustment=adjustment,
@@ -516,6 +531,7 @@ class BootstrapMixin:
             cluster_col=self._cluster_col,
             event_col=event_col,
             interaction_covariates=interaction_covariates,
+            R_boot=R_boot,
         )
 
     def _bootstrap_single_effect(
@@ -641,7 +657,7 @@ class BootstrapMixin:
                 # Note: Using threading instead of multiprocessing because statsmodels releases GIL
                 # and we avoid expensive DataFrame serialization
                 self._logger.debug("Stage 2: Fitting models with threading...")
-                valid_samples = [(d, c, w, e) for d, c, w, e in prepared_samples if e is None]
+                valid_samples = [(d, c, w, r, e) for d, c, w, r, e in prepared_samples if e is None]
                 results = list(
                     tqdm(
                         Parallel(n_jobs=-1, backend="threading", return_as="generator")(
@@ -656,8 +672,9 @@ class BootstrapMixin:
                                 cluster_col=self._cluster_col,
                                 event_col=event_col,
                                 interaction_covariates=interaction_covariates,
+                                R_boot=R_boot,
                             )
-                            for boot_data, boot_relevant_covariates, weight_col, _ in valid_samples
+                            for boot_data, boot_relevant_covariates, weight_col, R_boot, _ in valid_samples
                         ),
                         total=len(valid_samples),
                         desc=f"Bootstrap [{outcome_display}]",
@@ -666,7 +683,7 @@ class BootstrapMixin:
                 )
 
                 # Collect errors from Stage 1
-                prep_errors = [prep_error for _, _, _, prep_error in prepared_samples if prep_error is not None]
+                prep_errors = [prep_error for _, _, _, _, prep_error in prepared_samples if prep_error is not None]
 
                 # Combine results and count errors
                 bootstrap_abs_effects = []
