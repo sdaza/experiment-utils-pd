@@ -150,6 +150,7 @@ def _draw_panels_into_axes(
     panel_col: str,
     row_col: str,
     panel_titles: str | list | dict | None,
+    show_panel_titles: bool,
     row_labels: dict | None,
     show_values: bool,
     value_decimals: int = 2,
@@ -344,15 +345,16 @@ def _draw_panels_into_axes(
         ax.spines["bottom"].set_color(_CLR_SPINE)
         ax.spines["bottom"].set_linewidth(0.8)
 
-        if isinstance(panel_titles, dict):
-            ptitle = panel_titles.get(panel_val, str(panel_val))
-        elif isinstance(panel_titles, list):
-            ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
-        elif isinstance(panel_titles, str):
-            ptitle = panel_titles
-        else:
-            ptitle = row_labels.get(panel_val, str(panel_val)) if row_labels else str(panel_val)
-        ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
+        if show_panel_titles:
+            if isinstance(panel_titles, dict):
+                ptitle = panel_titles.get(panel_val, str(panel_val))
+            elif isinstance(panel_titles, list):
+                ptitle = panel_titles[panel_idx] if panel_idx < len(panel_titles) else str(panel_val)
+            elif isinstance(panel_titles, str):
+                ptitle = panel_titles
+            else:
+                ptitle = row_labels.get(panel_val, str(panel_val)) if row_labels else str(panel_val)
+            ax.set_title(ptitle, fontsize=11, fontweight="semibold", color="#1e293b", loc="left", pad=18)
 
         ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
 
@@ -540,6 +542,7 @@ def _render_effects_figure(
     panel_col: str = "outcome",
     row_col: str = "_label",
     panel_titles: str | list | dict | None = None,
+    show_panel_titles: bool = True,
     row_labels: dict | None = None,
     show_values: bool = False,
     value_decimals: int = 2,
@@ -607,6 +610,7 @@ def _render_effects_figure(
         panel_col,
         row_col,
         panel_titles,
+        show_panel_titles,
         row_labels,
         show_values,
         value_decimals=value_decimals,
@@ -645,6 +649,7 @@ def _render_multi_effect_figure(
     panel_col: str,
     row_col: str,
     panel_titles: str | list | dict | None,
+    show_panel_titles: bool,
     row_labels: dict | None,
     show_values: bool,
     value_decimals: int = 2,
@@ -740,6 +745,7 @@ def _render_multi_effect_figure(
             panel_col,
             row_col,
             panel_titles if show_yticks else "",
+            show_panel_titles,
             row_labels,
             show_values,
             value_decimals=value_decimals,
@@ -773,6 +779,7 @@ def plot_effects(
     group_by: str | list[str] | None = None,
     y: str = "experiment",
     panel_titles: str | list | dict | None = None,
+    show_panel_titles: bool = True,
     row_labels: dict | None = None,
     show_values: bool = True,
     value_decimals: int | None = None,
@@ -853,6 +860,11 @@ def plot_effects(
           the auto-generated experiment labels (``experiment_identifier``
           column values joined with ``" | "``), e.g.
           ``{"US | email": "US — Email campaign"}``.
+    show_panel_titles : bool, optional
+        Show subplot titles for the panel values (outcomes when
+        ``y="experiment"``, experiments when ``y="outcome"``).  Set to
+        ``False`` to hide these headings, which is useful when the plot has a
+        single redundant panel.  Default ``True``.
 
     row_labels : dict, optional
         Rename individual row labels on the y-axis.  Keys are the
@@ -1063,6 +1075,7 @@ def plot_effects(
         panel_col=panel_col,
         row_col=row_col,
         panel_titles=panel_titles,
+        show_panel_titles=show_panel_titles,
         row_labels=row_labels,
         show_values=show_values,
         value_decimals=value_decimals,
