@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.6](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.5...v0.5.6) (2026-04-25)
+
+
+### Bug Fixes
+
+* add random seed parameter for reproducibility in PowerSim simulations ([14c5e3f](https://github.com/sdaza/experiment-utils-pd/commit/14c5e3f81ba398068b3ce4457b064005afad1755))
+* add show_panel_titles parameter to plot_effects for controlling … ([d2b212b](https://github.com/sdaza/experiment-utils-pd/commit/d2b212b976765947df50b8a786e1c58b1f432dfb))
+* add show_panel_titles parameter to plot_effects for controlling subplot titles ([8aca1e1](https://github.com/sdaza/experiment-utils-pd/commit/8aca1e1471d2b2ea6c710ef6cf632956dce78573))
+
 ## [0.5.5](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.4...v0.5.5) (2026-04-24)
 
 
