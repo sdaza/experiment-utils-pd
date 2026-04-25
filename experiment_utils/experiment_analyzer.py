@@ -2261,6 +2261,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         group_by: str | list[str] | None = None,
         y: str = "experiment",
         panel_titles: str | list | dict | None = None,
+        show_panel_titles: bool = True,
         row_labels: dict | None = None,
         show_values: bool = True,
         value_decimals: int | None = None,
@@ -2336,6 +2337,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             - ``y="outcome"``: one panel per **experiment label**, so keys
               are the ``experiment_identifier`` column values joined with
               ``" | "``, e.g. ``{"US | email": "US — Email campaign"}``.
+        show_panel_titles : bool, optional
+            Show subplot titles for the panel values (outcomes when
+            ``y="experiment"``, experiments when ``y="outcome"``).  Set to
+            ``False`` to hide redundant panel headings.  Default ``True``.
         row_labels : dict, optional
             Rename individual y-axis row labels.  Keys are the auto-generated
             labels (``experiment_identifier`` column values joined with ``" | "``);
@@ -2406,6 +2411,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             group_by=group_by,
             y=y,
             panel_titles=panel_titles,
+            show_panel_titles=show_panel_titles,
             row_labels=row_labels,
             show_values=show_values,
             value_decimals=value_decimals,

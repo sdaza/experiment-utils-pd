@@ -76,6 +76,7 @@ class RetrodesignMixin:
                 baseline=0.0,
                 standard_deviation=[control_std],
                 nsim=nsim,
+                random_seed=seed,
             )
             return {
                 "power": retro_result["power"].iloc[0],

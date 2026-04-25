@@ -479,6 +479,16 @@ def test_plot_effects_y_outcome(simple_analyzer):
     assert isinstance(fig, mfig.Figure)
 
 
+def test_plot_effects_hide_panel_titles(simple_analyzer):
+    fig = simple_analyzer.plot_effects(y="outcome", show_panel_titles=False)
+    assert all(ax.get_title() == "" for ax in fig.axes)
+
+
+def test_plot_effects_hide_panel_titles_multi_effect(simple_analyzer):
+    fig = simple_analyzer.plot_effects(effect=["absolute", "relative"], show_panel_titles=False)
+    assert all(ax.get_title() == "" for ax in fig.axes)
+
+
 def test_plot_effects_panel_titles_list(simple_analyzer):
     import matplotlib.figure as mfig
 

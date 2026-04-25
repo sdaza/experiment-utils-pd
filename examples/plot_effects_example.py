@@ -181,7 +181,7 @@ analyzer.plot_effects(
 # %%
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 10 — single experiment with multiple outcomes
-#            panel_titles overrides the auto subplot title
+#            show_panel_titles=False hides the redundant single experiment panel
 # ─────────────────────────────────────────────────────────────────────────────
 np.random.seed(99)
 n_single = 1200
@@ -209,7 +209,7 @@ analyzer_single.get_effects()
 analyzer_single.plot_effects(
     y="outcome",
     title="Email Campaign Results",
-    panel_titles="Treatment vs Control",
+    show_panel_titles=False,
 )
 
 

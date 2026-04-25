@@ -48,6 +48,38 @@ def test_power_from_data():
         pytest.fail(f" raised an exception: {e}")
 
 
+def test_simulate_retrodesign_seed_reproducible_parallel():
+    """Seeded retrodesign simulations should be reproducible on the parallel path."""
+    p = PowerSim(
+        metric="average",
+        variants=1,
+        nsim=500,
+        alpha=0.05,
+        alternative="two-tailed",
+        parallel_strategy="threading",
+    )
+
+    kwargs = {
+        "true_effect": 0.5,
+        "sample_size": [80, 80],
+        "baseline": 0.0,
+        "standard_deviation": [1.0],
+        "random_seed": 123,
+    }
+    first = p.simulate_retrodesign(**kwargs)
+    second = p.simulate_retrodesign(**kwargs)
+
+    cols = [
+        "power",
+        "type_s_error",
+        "exaggeration_ratio",
+        "relative_bias",
+        "median_significant_effect",
+        "prop_overestimate",
+    ]
+    pd.testing.assert_frame_equal(first[cols], second[cols])
+
+
 def test_find_sample_size():
     """Test find_sample_size method"""
     # Test with proportion metric

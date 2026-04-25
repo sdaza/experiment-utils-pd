@@ -1096,7 +1096,19 @@ plt.show()
 
 **Single experiment, multiple outcomes on the y-axis**
 
-When you have one experiment and several outcomes, flip the axes with `y="outcome"` and customise the panel subtitle with `panel_titles`:
+When you have one experiment and several outcomes, flip the axes with `y="outcome"`.
+Set `show_panel_titles=False` when the single experiment panel heading would be redundant:
+
+```python
+fig = analyzer.plot_effects(
+    y="outcome",
+    title="My Experiment",
+    show_panel_titles=False,
+)
+plt.show()
+```
+
+Use `panel_titles` when you do want to customise the panel heading:
 
 ```python
 fig = analyzer.plot_effects(
@@ -1220,6 +1232,7 @@ plt.show()
 |---|---|---|
 | `y` | `"experiment"` | `"experiment"` — rows = experiments, panels = outcomes; `"outcome"` — rows = outcomes, panels = experiments |
 | `panel_titles` | `None` | Override subplot titles: `str` (all panels) or `dict` (per-panel) |
+| `show_panel_titles` | `True` | Show outcome/experiment subplot headings; set `False` to hide redundant panel titles |
 | `outcomes` | `None` | Outcome(s) to include; `None` = all |
 | `effect` | `"absolute"` | `"absolute"`, `"relative"`, or `["absolute", "relative"]` for side-by-side |
 | `meta_analysis` | `None` | `True` (auto-compute pooled row from visible rows), `DataFrame` (pre-computed), or `None` |
@@ -1998,4 +2011,3 @@ If you use this package in your research, please cite:
   url = {https://github.com/sdaza/experiment-utils-pd}
 }
 ```
-
