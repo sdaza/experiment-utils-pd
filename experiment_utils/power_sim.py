@@ -103,6 +103,7 @@ class PowerSim:
         effect: list[float] = None,
         compliance: list[float] = None,
         standard_deviation: list[float] = None,
+        rng=None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Simulate data to run power analysis.
@@ -136,6 +137,8 @@ class PowerSim:
             compliance = [1.0]
         if baseline is None:
             baseline = 1.0
+        if rng is None:
+            rng = np.random
 
         if len(effect) != self.variants:
             if len(effect) > 1:
@@ -172,7 +175,7 @@ class PowerSim:
         vv = np.array([])
 
         if self.metric == "count":
-            c_data = np.random.poisson(baseline, sample_size[0])
+            c_data = rng.poisson(baseline, sample_size[0])
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
@@ -181,14 +184,14 @@ class PowerSim:
                     re[i] = baseline * (1.00 + effect[i])
                 else:
                     re[i] = baseline + effect[i]
-                t_data_c = np.random.poisson(re[i], int(np.round(sample_size[i + 1] * compliance[i])))
-                t_data_nc = np.random.poisson(baseline, int(np.round(sample_size[i + 1] * (1 - compliance[i]))))
+                t_data_c = rng.poisson(re[i], int(np.round(sample_size[i + 1] * compliance[i])))
+                t_data_nc = rng.poisson(baseline, int(np.round(sample_size[i + 1] * (1 - compliance[i]))))
                 t_data = np.append(t_data_c, t_data_nc)
                 dd = np.append(dd, t_data)
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))
 
         if self.metric == "proportion":
-            c_data = np.random.binomial(n=1, size=int(sample_size[0]), p=baseline)
+            c_data = rng.binomial(n=1, size=int(sample_size[0]), p=baseline)
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
@@ -198,8 +201,8 @@ class PowerSim:
                 else:
                     re[i] = baseline + effect[i]
 
-                t_data_c = np.random.binomial(n=1, size=int(np.round(sample_size[i + 1] * compliance[i])), p=re[i])
-                t_data_nc = np.random.binomial(
+                t_data_c = rng.binomial(n=1, size=int(np.round(sample_size[i + 1] * compliance[i])), p=re[i])
+                t_data_nc = rng.binomial(
                     n=1, size=int(np.round(sample_size[i + 1] * (1 - compliance[i]))), p=baseline
                 )
                 t_data = np.append(t_data_c, t_data_nc)
@@ -207,7 +210,7 @@ class PowerSim:
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))
 
         if self.metric == "average":
-            c_data = np.random.normal(baseline, standard_deviation[0], sample_size[0])
+            c_data = rng.normal(baseline, standard_deviation[0], sample_size[0])
             dd = c_data
             vv = list(itertools.repeat(0, len(c_data)))
 
@@ -217,10 +220,10 @@ class PowerSim:
                 else:
                     re[i] = baseline + effect[i]
 
-                t_data_c = np.random.normal(
+                t_data_c = rng.normal(
                     re[i], standard_deviation[i + 1], int(np.round(sample_size[i + 1] * compliance[i]))
                 )
-                t_data_nc = np.random.normal(
+                t_data_nc = rng.normal(
                     baseline, standard_deviation[i + 1], int(np.round(sample_size[i + 1] * (1 - compliance[i])))
                 )
 
@@ -254,6 +257,7 @@ class PowerSim:
         sample_size: list[int],
         compliance: list[float],
         standard_deviation: list[float],
+        rng_seed: int | None = None,
     ) -> dict:
         """
         Stage 1 (Hybrid): Generate simulation data (fast, numpy operations).
@@ -264,12 +268,14 @@ class PowerSim:
         dict
             Dictionary with 'y' and 'x' arrays for statistical tests
         """
+        rng = np.random.default_rng(rng_seed) if rng_seed is not None else None
         y, x = self.__run_experiment(
             baseline=baseline,
             sample_size=sample_size,
             effect=effect,
             compliance=compliance,
             standard_deviation=standard_deviation,
+            rng=rng,
         )
         return {"y": y, "x": x}
 
@@ -471,6 +477,7 @@ class PowerSim:
         comp_true_effect: float,
         h: int,
         j: int,
+        rng_seed: int | None = None,
     ) -> tuple[float, float, bool]:
         """
         Run a single retrodesign simulation iteration for one comparison.
@@ -499,12 +506,14 @@ class PowerSim:
         tuple[float, float, bool]
             (observed_effect, pvalue, is_significant)
         """
+        rng = np.random.default_rng(rng_seed) if rng_seed is not None else None
         y, x = self.__run_experiment(
             baseline=baseline,
             sample_size=sample_size,
             effect=true_effect,
             compliance=compliance,
             standard_deviation=standard_deviation,
+            rng=rng,
         )
 
         if self.metric == "count":
@@ -2165,6 +2174,7 @@ class PowerSim:
         comparisons: list[tuple[int, int]] = None,
         nsim: int | None = None,
         round_decimals: int = 4,
+        random_seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Simulate retrodesign metrics (Type S and Type M errors) for a study design.
@@ -2204,6 +2214,8 @@ class PowerSim:
         round_decimals : int, optional
             Number of decimal places to round numeric columns to (default: 4).
             Set to None to disable rounding.
+        random_seed : int, optional
+            Random seed for reproducible simulations, including the parallel path.
 
         Returns
         -------
@@ -2309,6 +2321,17 @@ class PowerSim:
 
         original_nsim = self.nsim
         self.nsim = nsim_val
+        rng_seeds = [None] * nsim_val
+        if random_seed is not None:
+            rng_seeds = [
+                int(seed)
+                for seed in np.random.default_rng(random_seed).integers(
+                    0,
+                    np.iinfo(np.uint32).max,
+                    size=nsim_val,
+                    dtype=np.uint32,
+                )
+            ]
 
         results = []
 
@@ -2336,8 +2359,9 @@ class PowerSim:
                                 sample_size=sample_size,
                                 compliance=compliance,
                                 standard_deviation=standard_deviation,
+                                rng_seed=rng_seed,
                             )
-                            for _ in range(nsim_val)
+                            for rng_seed in rng_seeds
                         )
 
                         simulation_results = list(
@@ -2359,7 +2383,7 @@ class PowerSim:
                         self.logger.debug(f"Running {nsim_val} retrodesign simulations in parallel (threading)...")
                         simulation_results = list(
                             tqdm(
-                                Parallel(n_jobs=-1, backend="threading", return_as="generator")(
+                                Parallel(n_jobs=-1, backend="threading", batch_size=50, return_as="generator")(
                                     delayed(self._run_single_retrodesign_simulation)(
                                         baseline=baseline,
                                         sample_size=sample_size,
@@ -2369,8 +2393,9 @@ class PowerSim:
                                         comp_true_effect=comp_true_effect,
                                         h=h,
                                         j=j,
+                                        rng_seed=rng_seed,
                                     )
-                                    for _ in range(nsim_val)
+                                    for rng_seed in rng_seeds
                                 ),
                                 total=nsim_val,
                                 desc=_desc,
@@ -2393,8 +2418,9 @@ class PowerSim:
                                         comp_true_effect=comp_true_effect,
                                         h=h,
                                         j=j,
+                                        rng_seed=rng_seed,
                                     )
-                                    for _ in range(nsim_val)
+                                    for rng_seed in rng_seeds
                                 ),
                                 total=nsim_val,
                                 desc=_desc,
@@ -2423,7 +2449,7 @@ class PowerSim:
                     sign_errors = 0
                     significant_count = 0
 
-                    for _ in tqdm(range(nsim_val), desc=f"Simulations [{h} vs {j}]", unit="sim"):
+                    for rng_seed in tqdm(rng_seeds, desc=f"Simulations [{h} vs {j}]", unit="sim"):
                         observed_effect, pvalue, is_significant = self._run_single_retrodesign_simulation(
                             baseline=baseline,
                             sample_size=sample_size,
@@ -2433,6 +2459,7 @@ class PowerSim:
                             comp_true_effect=comp_true_effect,
                             h=h,
                             j=j,
+                            rng_seed=rng_seed,
                         )
 
                         all_effects.append(observed_effect)
