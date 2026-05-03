@@ -559,6 +559,19 @@ def test_plot_effects_custom_color_palette(simple_analyzer):
     assert any(np.allclose(color, to_rgba(custom_color)) for color in rendered_colors)
 
 
+def test_standardize_covariates_avoids_fragmentation_warning(simple_analyzer):
+    import warnings
+
+    cols = [f"x{i}" for i in range(150)]
+    df = pd.DataFrame(np.random.default_rng(0).normal(size=(25, len(cols))), columns=cols)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pd.errors.PerformanceWarning)
+        standardized = simple_analyzer.standardize_covariates(df, cols)
+
+    assert all(f"z_{col}" in standardized.columns for col in cols)
+
+
 # ── random effects meta-analysis ──────────────────────────────────────────────
 
 

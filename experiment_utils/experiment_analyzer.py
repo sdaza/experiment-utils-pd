@@ -835,11 +835,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         # Add z_ prefix to column names
         standardized.columns = [f"z_{c}" for c in covariates]
 
-        # Assign standardized columns back to data
-        for col in standardized.columns:
-            data[col] = standardized[col]
+        existing_z_cols = [col for col in standardized.columns if col in data.columns]
+        if existing_z_cols:
+            data = data.drop(columns=existing_z_cols)
 
-        return data
+        return pd.concat([data, standardized], axis=1).copy()
 
     def calculate_smd(
         self,

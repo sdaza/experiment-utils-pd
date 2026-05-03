@@ -381,7 +381,7 @@ wheels = [
 
 [[package]]
 name = "experiment-utils-pd"
-version = "0.5.4"
+version = "0.5.6"
 source = { editable = "." }
 dependencies = [
     { name = "lifelines" },
@@ -411,7 +411,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "lifelines", specifier = ">=0.30.1" },
+    { name = "lifelines", specifier = ">=0.30.3" },
     { name = "linearmodels", specifier = ">=6.1" },
     { name = "matplotlib", specifier = ">=3.5.2" },
     { name = "multiprocess", specifier = ">=0.70.14" },
@@ -777,7 +777,7 @@ wheels = [
 
 [[package]]
 name = "lifelines"
-version = "0.30.1"
+version = "0.30.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "autograd" },
@@ -788,9 +788,9 @@ dependencies = [
     { name = "pandas" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/8d/615b79979ad672d5c482614e4ddbb967e6abfdab9cfbe828f227e719ac45/lifelines-0.30.1.tar.gz", hash = "sha256:31a7e239a512318f8cf408e452f953848c8eaf80182e52bf2f41a529e00cbc35", size = 384603 }
+sdist = { url = "https://files.pythonhosted.org/packages/a0/4b/f92ca958b11284f9e80075d6b80b8150a3a231edb55e73a42878f786a54a/lifelines-0.30.3.tar.gz", hash = "sha256:acd1e0ecada4280c7bb2948f39c760a0f9158a57d752c8ca29f984a86c698b7f", size = 690663 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/52/219224a40cfafc2bfa3495affc0355a13f5276e33612f4fe388bec82f7f6/lifelines-0.30.1-py3-none-any.whl", hash = "sha256:46d16809a0e67d7ed4c144984c7cc0fd34bca759d459440a3e59162e1d7e88dc", size = 350035 },
+    { url = "https://files.pythonhosted.org/packages/8a/fb/5ed80a8932630d4ae33af186a87008c9b48f02bc515380acc1a4b1fec162/lifelines-0.30.3-py3-none-any.whl", hash = "sha256:44802480a28d6cb836c7fea4a54ec0ba220eb31c6d7444589637a8bd66066e8c", size = 409055 },
 ]
 
 [[package]]

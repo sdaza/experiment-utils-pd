@@ -202,9 +202,7 @@ class PowerSim:
                     re[i] = baseline + effect[i]
 
                 t_data_c = rng.binomial(n=1, size=int(np.round(sample_size[i + 1] * compliance[i])), p=re[i])
-                t_data_nc = rng.binomial(
-                    n=1, size=int(np.round(sample_size[i + 1] * (1 - compliance[i]))), p=baseline
-                )
+                t_data_nc = rng.binomial(n=1, size=int(np.round(sample_size[i + 1] * (1 - compliance[i]))), p=baseline)
                 t_data = np.append(t_data_c, t_data_nc)
                 dd = np.append(dd, t_data)
                 vv = np.append(vv, list(itertools.repeat(i + 1, len(t_data))))

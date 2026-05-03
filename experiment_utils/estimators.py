@@ -1374,7 +1374,7 @@ class Estimators:
                 f"Python version: {python_version}\n"
                 f"Error: {e}\n\n"
                 f"Installation instructions:\n"
-                f"  - Python 3.11+: pip install 'lifelines>=0.29.0'\n"
+                f"  - Python 3.11+: pip install 'lifelines>=0.30.3'\n"
                 f"  - Python 3.10: pip install 'lifelines>=0.27.0,<0.30.0'\n"
                 f"  - Or install with package extras: pip install experiment-utils-pd[survival]"
             )
@@ -1485,7 +1485,7 @@ class Estimators:
                 f"Python version: {python_version}\n"
                 f"Error: {e}\n\n"
                 f"Installation instructions:\n"
-                f"  - Python 3.11+: pip install 'lifelines>=0.29.0'\n"
+                f"  - Python 3.11+: pip install 'lifelines>=0.30.3'\n"
                 f"  - Python 3.10: pip install 'lifelines>=0.27.0,<0.30.0'\n"
                 f"  - Or install with package extras: pip install experiment-utils-pd[survival]"
             )
