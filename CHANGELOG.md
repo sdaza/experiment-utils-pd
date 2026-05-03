@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.8](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.7...v0.5.8) (2026-05-03)
+
+
+### Bug Fixes
+
+* update lifelines dependency to version 0.30.3 and improve standardization method to avoid fragmentation warnings ([7a07c23](https://github.com/sdaza/experiment-utils-pd/commit/7a07c23182fcc85d900272a0022aa0afa65fa4e7))
+
 ## [0.5.7](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.6...v0.5.7) (2026-05-03)
 
 
