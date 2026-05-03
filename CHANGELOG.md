@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.9](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.8...v0.5.9) (2026-05-03)
+
+
+### Bug Fixes
+
+* update color_palette behavior to automatically enable color_direction and adjust tests accordingly; bump version to 0.5.7 ([5ed53da](https://github.com/sdaza/experiment-utils-pd/commit/5ed53daf249509a23ba9b0c6e8d99bc3c00acfd4))
+
 ## [0.5.8](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.7...v0.5.8) (2026-05-03)
 
 
