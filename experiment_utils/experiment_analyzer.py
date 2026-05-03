@@ -2272,6 +2272,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         relative_cap: float = 5.0,
         save_path: str | None = None,
         color_direction: bool = False,
+        color_palette: dict[str, str] | None = None,
         **kwargs,
     ) -> "plt.Figure | dict | None":
         if kwargs:
@@ -2370,6 +2371,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             ``"effects.png"`` → ``"effects_US.png"``, ``"effects_EU.png"``.
             Supports any format recognised by matplotlib (``png``, ``pdf``,
             ``svg``, …).  ``None`` (default) skips saving.
+        color_direction : bool, optional
+            When ``True``, color effects by significance and sign. Default
+            ``False``.
+        color_palette : dict, optional
+            Override effect colors. Keys are ``"sig_pos"``, ``"sig_neg"``,
+            ``"nsig_pos"``, ``"nsig_neg"``, and ``"nsig_zero"``. Omitted keys
+            use the defaults. Most useful with ``color_direction=True``.
 
         Returns
         -------
@@ -2422,6 +2430,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             relative_cap=relative_cap,
             save_path=save_path,
             color_direction=color_direction,
+            color_palette=color_palette,
         )
 
     def plot_equivalence(

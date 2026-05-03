@@ -661,6 +661,7 @@ def _render_multi_effect_figure(
     pp_outcomes: set | None = None,
     unique_outcomes: list[str] | None = None,
     color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Build a side-by-side figure with one column group per effect type.
 
@@ -756,10 +757,18 @@ def _render_multi_effect_figure(
             relative_cap=relative_cap,
             pp_outcomes=pp_outcomes if ec == "absolute_effect" else None,
             color_direction=color_direction,
+            color_palette=color_palette,
         )
 
     _add_legend_and_title(
-        fig, figsize, title, sig_label, meta_df, panel_spacing=panel_spacing, color_direction=color_direction
+        fig,
+        figsize,
+        title,
+        sig_label,
+        meta_df,
+        panel_spacing=panel_spacing,
+        color_direction=color_direction,
+        color_palette=color_palette,
     )
     return fig
 
@@ -790,6 +799,7 @@ def plot_effects(
     relative_cap: float = 5.0,
     save_path: str | None = None,
     color_direction: bool = False,
+    color_palette: dict[str, str] | None = None,
     **kwargs,
 ) -> plt.Figure | dict[str, plt.Figure] | None:
     if kwargs:
@@ -921,6 +931,13 @@ def plot_effects(
         ``"effects.png"`` becomes ``"effects_US.png"``, ``"effects_EU.png"``.
         Supports any format recognised by matplotlib (``png``, ``pdf``,
         ``svg``, …).  ``None`` (default) skips saving.
+    color_direction : bool, optional
+        When ``True``, color effects by significance and sign. Default
+        ``False``.
+    color_palette : dict, optional
+        Override effect colors. Keys are ``"sig_pos"``, ``"sig_neg"``,
+        ``"nsig_pos"``, ``"nsig_neg"``, and ``"nsig_zero"``. Omitted keys use
+        the defaults. Most useful with ``color_direction=True``.
 
     Returns
     -------
@@ -1086,6 +1103,7 @@ def plot_effects(
         relative_cap=relative_cap,
         pp_outcomes=pp_outcomes if pct_points else None,
         color_direction=color_direction,
+        color_palette=color_palette,
     )
 
     def _render(labelled: pd.DataFrame, fig_title: str | None, group_meta: pd.DataFrame | None = None) -> plt.Figure:

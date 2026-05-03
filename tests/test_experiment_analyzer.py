@@ -522,6 +522,43 @@ def test_plot_effects_no_color_by(simple_analyzer):
         simple_analyzer.plot_effects(color_by="channel")
 
 
+def test_plot_effects_custom_color_palette(simple_analyzer):
+    from matplotlib.colors import to_rgba
+
+    custom_color = "#123456"
+    results = simple_analyzer._results.copy()
+    idx = results.index[0]
+    results.loc[idx, "absolute_effect"] = 1.0
+    results.loc[idx, "abs_effect_lower"] = 0.5
+    results.loc[idx, "abs_effect_upper"] = 1.5
+    results.loc[idx, "standard_error"] = 0.1
+    results.loc[idx, "stat_significance"] = 1
+    simple_analyzer._results = results
+
+    def _rendered_colors(fig):
+        return [
+            tuple(facecolor)
+            for ax in fig.axes
+            for collection in ax.collections
+            for facecolor in collection.get_facecolors()
+        ]
+
+    kwargs = {
+        "outcomes": results.loc[idx, "outcome"],
+        "color_direction": True,
+        "color_palette": {"sig_pos": custom_color},
+        "show_values": False,
+    }
+
+    fig = simple_analyzer.plot_effects(**kwargs)
+    rendered_colors = _rendered_colors(fig)
+    assert any(np.allclose(color, to_rgba(custom_color)) for color in rendered_colors)
+
+    fig_multi = simple_analyzer.plot_effects(effect=["absolute", "relative"], **kwargs)
+    rendered_colors = _rendered_colors(fig_multi)
+    assert any(np.allclose(color, to_rgba(custom_color)) for color in rendered_colors)
+
+
 # ── random effects meta-analysis ──────────────────────────────────────────────
 
 

@@ -1226,6 +1226,24 @@ fig = analyzer.plot_effects()
 plt.show()
 ```
 
+**Color by direction with a custom palette**
+
+Use `color_direction=True` to color effects by sign and significance. Override any of the default colors with `color_palette`:
+
+```python
+fig = analyzer.plot_effects(
+    color_direction=True,
+    color_palette={
+        "sig_pos": "#047857",
+        "sig_neg": "#be123c",
+        "nsig_pos": "#86efac",
+        "nsig_neg": "#94a3b8",
+        "nsig_zero": "#64748b",
+    },
+)
+plt.show()
+```
+
 **Key parameters**
 
 | Parameter | Default | Description |
@@ -1246,6 +1264,8 @@ plt.show()
 | `value_decimals` | auto | Decimal places for value labels. Defaults to `1` when `pct_points=True` or relative effect shown; `2` otherwise |
 | `pct_points` | `False` | When `True`, auto-detects proportion-scale outcomes (control value in [0, 1]) and scales their absolute effects ×100 for display as percentage points (pp). Raw-unit outcomes such as revenue are left unscaled. Axis tick labels and annotations are updated per panel. |
 | `combine_values` | `False` | Append the secondary effect in parentheses to each annotation: `+3.0pp (+15.4%)` or `+15.4% (+3.0pp)`. Also updates the x-axis label |
+| `color_direction` | `False` | Color effects by sign and significance |
+| `color_palette` | `None` | Override `sig_pos`, `sig_neg`, `nsig_pos`, `nsig_neg`, and/or `nsig_zero` colors |
 | `panel_spacing` | `None` | Horizontal whitespace between panels (`wspace`). Try `0.4`–`0.8` when panels overlap |
 | `repeat_ylabels` | `False` | Show y-axis tick labels on every panel, not only the leftmost |
 | `row_labels` | `None` | Rename individual y-axis row labels. `dict` mapping auto-generated labels to display strings, e.g. `{"US \| email": "Email (US)"}` |
