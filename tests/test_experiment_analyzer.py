@@ -525,14 +525,29 @@ def test_plot_effects_no_color_by(simple_analyzer):
 def test_plot_effects_custom_color_palette(simple_analyzer):
     from matplotlib.colors import to_rgba
 
-    custom_color = "#123456"
+    effect_colors = {
+        "sig_pos": "#060478",
+        "sig_neg": "#be123c",
+        "nsig_pos": "#94a3b8",
+        "nsig_neg": "#94a3b8",
+        "nsig_zero": "#94a3b8",
+    }
     results = simple_analyzer._results.copy()
-    idx = results.index[0]
-    results.loc[idx, "absolute_effect"] = 1.0
-    results.loc[idx, "abs_effect_lower"] = 0.5
-    results.loc[idx, "abs_effect_upper"] = 1.5
-    results.loc[idx, "standard_error"] = 0.1
-    results.loc[idx, "stat_significance"] = 1
+    outcome = results["outcome"].iloc[0]
+    idx_pos, idx_neg = results[results["outcome"] == outcome].index[:2]
+    results.loc[idx_pos, ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "stat_significance"]] = [
+        1.0,
+        0.5,
+        1.5,
+        1,
+    ]
+    results.loc[idx_neg, ["absolute_effect", "abs_effect_lower", "abs_effect_upper", "stat_significance"]] = [
+        -1.0,
+        -1.5,
+        -0.5,
+        1,
+    ]
+    results.loc[[idx_pos, idx_neg], "standard_error"] = 0.1
     simple_analyzer._results = results
 
     def _rendered_colors(fig):
@@ -544,19 +559,20 @@ def test_plot_effects_custom_color_palette(simple_analyzer):
         ]
 
     kwargs = {
-        "outcomes": results.loc[idx, "outcome"],
-        "color_direction": True,
-        "color_palette": {"sig_pos": custom_color},
+        "outcomes": outcome,
+        "color_palette": effect_colors,
         "show_values": False,
     }
 
     fig = simple_analyzer.plot_effects(**kwargs)
     rendered_colors = _rendered_colors(fig)
-    assert any(np.allclose(color, to_rgba(custom_color)) for color in rendered_colors)
+    assert any(np.allclose(color, to_rgba(effect_colors["sig_pos"])) for color in rendered_colors)
+    assert any(np.allclose(color, to_rgba(effect_colors["sig_neg"])) for color in rendered_colors)
 
     fig_multi = simple_analyzer.plot_effects(effect=["absolute", "relative"], **kwargs)
     rendered_colors = _rendered_colors(fig_multi)
-    assert any(np.allclose(color, to_rgba(custom_color)) for color in rendered_colors)
+    assert any(np.allclose(color, to_rgba(effect_colors["sig_pos"])) for color in rendered_colors)
+    assert any(np.allclose(color, to_rgba(effect_colors["sig_neg"])) for color in rendered_colors)
 
 
 def test_standardize_covariates_avoids_fragmentation_warning(simple_analyzer):

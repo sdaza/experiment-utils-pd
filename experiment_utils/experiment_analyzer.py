@@ -2377,7 +2377,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         color_palette : dict, optional
             Override effect colors. Keys are ``"sig_pos"``, ``"sig_neg"``,
             ``"nsig_pos"``, ``"nsig_neg"``, and ``"nsig_zero"``. Omitted keys
-            use the defaults. Most useful with ``color_direction=True``.
+            use the defaults. Passing a palette automatically enables
+            ``color_direction``.
 
         Returns
         -------

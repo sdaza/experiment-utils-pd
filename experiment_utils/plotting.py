@@ -937,7 +937,8 @@ def plot_effects(
     color_palette : dict, optional
         Override effect colors. Keys are ``"sig_pos"``, ``"sig_neg"``,
         ``"nsig_pos"``, ``"nsig_neg"``, and ``"nsig_zero"``. Omitted keys use
-        the defaults. Most useful with ``color_direction=True``.
+        the defaults. Passing a palette automatically enables
+        ``color_direction``.
 
     Returns
     -------
@@ -948,6 +949,7 @@ def plot_effects(
     if results is None or results.empty:
         return None
 
+    color_direction = color_direction or color_palette is not None
     data = results.copy()
 
     if outcomes is not None:
