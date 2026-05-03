@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.7](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.6...v0.5.7) (2026-05-03)
+
+
+### Bug Fixes
+
+* add color_direction and color_palette parameters for customizable effect coloring in plot_effects ([0faa3d8](https://github.com/sdaza/experiment-utils-pd/commit/0faa3d8801260b458e7b579662252336081bbf8a))
+
 ## [0.5.6](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.5...v0.5.6) (2026-04-25)
 
 
