@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.10](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.9...v0.5.10) (2026-05-12)
+
+
+### Bug Fixes
+
+* adjust proportion range checks in plot_effects and add test for noisy control value; bump version to 0.5.9 ([680a070](https://github.com/sdaza/experiment-utils-pd/commit/680a07037d259eacfc078965ac027a8ebefb1dd6))
+
 ## [0.5.9](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.8...v0.5.9) (2026-05-03)
 
 
