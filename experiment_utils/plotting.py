@@ -55,6 +55,8 @@ DEFAULT_COLOR_PALETTE: dict[str, str] = {
     "nsig_zero": _CLR_NSIG,  # muted slate — exactly zero
 }
 
+_PROPORTION_RANGE_ATOL = 1e-12
+
 
 def _resolve_palette(color_palette: dict[str, str] | None) -> dict[str, str]:
     """Merge user overrides into the default palette."""
@@ -989,9 +991,9 @@ def plot_effects(
             if "control_value" in subset.columns:
                 cv = subset["control_value"].dropna()
                 if not cv.empty:
-                    return bool((cv >= 0).all() and (cv <= 1).all())
+                    return bool((cv >= -_PROPORTION_RANGE_ATOL).all() and (cv <= 1 + _PROPORTION_RANGE_ATOL).all())
             eff = subset["absolute_effect"].dropna()
-            return bool(not eff.empty and eff.abs().max() <= 1)
+            return bool(not eff.empty and eff.abs().max() <= 1 + _PROPORTION_RANGE_ATOL)
 
         pp_outcomes = {o for o in data["outcome"].unique() if _is_proportion_outcome(data, o)}
         mask = data["outcome"].isin(pp_outcomes)

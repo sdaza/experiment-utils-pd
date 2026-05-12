@@ -7,6 +7,7 @@ from scipy.stats import truncnorm
 matplotlib.use("Agg")
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils.plotting import plot_effects
 
 
 @pytest.fixture
@@ -463,6 +464,27 @@ def test_plot_effects_show_values(simple_analyzer):
 
     fig = simple_analyzer.plot_effects(show_values=True)
     assert isinstance(fig, mfig.Figure)
+
+
+def test_plot_effects_pct_points_tolerates_noisy_zero_control_value():
+    results = pd.DataFrame(
+        {
+            "outcome": ["binary_covariate"],
+            "treatment_group": [1],
+            "control_group": [0],
+            "control_value": [-2.99e-17],
+            "absolute_effect": [0.02],
+            "abs_effect_lower": [0.01],
+            "abs_effect_upper": [0.03],
+            "standard_error": [0.005],
+            "stat_significance": [1],
+        }
+    )
+
+    fig = plot_effects(results, pct_points=True, show_values=True)
+
+    assert fig.axes[0].get_xlabel() == "Absolute Effect (pp)"
+    assert any(text.get_text().startswith("+2.0pp") for text in fig.axes[0].texts)
 
 
 def test_plot_effects_meta_analysis(simple_analyzer):
