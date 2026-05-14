@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 from tqdm import tqdm
 
 
@@ -391,6 +392,8 @@ class BootstrapMixin:
         try:
             import inspect
 
+            model_signature = inspect.signature(model_func)
+
             estimator_params = {
                 "data": prepared_data,
                 "outcome_variable": outcome,
@@ -415,12 +418,19 @@ class BootstrapMixin:
             if interaction_covariates and model_type == "ols":
                 estimator_params["interaction_covariates"] = interaction_covariates
 
-            if "verbose" in inspect.signature(model_func).parameters:
+            if "warn_convergence" in model_signature.parameters:
+                estimator_params["warn_convergence"] = False
+
+            if "raise_on_nonconvergence" in model_signature.parameters:
+                estimator_params["raise_on_nonconvergence"] = True
+
+            if "verbose" in model_signature.parameters:
                 estimator_params["verbose"] = False
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 warnings.filterwarnings("ignore", message="cov_type not fully supported with freq_weights")
+                warnings.filterwarnings("error", category=ConvergenceWarning)
                 output = model_func(**estimator_params)
 
             rel_eff = output["relative_effect"]

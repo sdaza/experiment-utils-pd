@@ -2,9 +2,12 @@
 Unit tests for bootstrap functionality in ExperimentAnalyzer
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
@@ -81,6 +84,48 @@ class TestBootstrapInference:
         assert "abs_effect_lower" in results.columns
         assert "abs_effect_upper" in results.columns
         assert "standard_error" in results.columns
+
+    def test_bootstrap_convergence_warning_is_failed_iteration(self, sample_data):
+        """Convergence warnings during bootstrap should be captured as failed draws."""
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+        )
+
+        def nonconverged_model(warn_convergence=True, raise_on_nonconvergence=False, **_kwargs):
+            assert warn_convergence is False
+            assert raise_on_nonconvergence is True
+            warnings.warn(
+                "Maximum Likelihood optimization failed to converge. Check mle_retvals",
+                ConvergenceWarning,
+                stacklevel=2,
+            )
+            return {
+                "absolute_effect": 1.0,
+                "relative_effect": 0.1,
+                "standard_error": 0.01,
+            }
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            abs_eff, rel_eff, se_eff, error_info = analyzer._fit_bootstrap_model(
+                prepared_data=sample_data,
+                outcome="outcome",
+                model_func=nonconverged_model,
+                boot_relevant_covariates=[],
+                weight_col=None,
+                model_type="logistic",
+                compute_marginal_effects=True,
+                cluster_col=None,
+            )
+
+        assert abs_eff is None
+        assert rel_eff is None
+        assert np.isnan(se_eff)
+        assert error_info.startswith("ConvergenceWarning:")
+        assert caught == []
 
     def test_bootstrap_vs_asymptotic(self, sample_data):
         """Test that bootstrap and asymptotic results use same column names"""

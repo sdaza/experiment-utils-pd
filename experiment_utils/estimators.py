@@ -589,6 +589,8 @@ class Estimators:
         compute_marginal_effects: str | bool = "overall",
         store_model: bool = False,
         compute_relative_ci: bool = True,
+        warn_convergence: bool = True,
+        raise_on_nonconvergence: bool = False,
     ) -> dict[str, str | int | float]:
         """
         Perform logistic regression with optional marginal effects and clustered standard errors.
@@ -612,6 +614,10 @@ class Estimators:
             - False: Return odds ratios instead
         store_model : bool, optional
             Whether to store the fitted model object (default: False)
+        warn_convergence : bool, optional
+            Whether statsmodels should emit convergence warnings (default: True)
+        raise_on_nonconvergence : bool, optional
+            Raise RuntimeError when the optimizer does not converge (default: False)
 
         Returns
         -------
@@ -622,9 +628,18 @@ class Estimators:
         model = smf.logit(formula, data=data)
 
         if cluster_col:
-            results = model.fit(cov_type="cluster", cov_kwds={"groups": data[cluster_col]}, disp=False)
+            results = model.fit(
+                cov_type="cluster",
+                cov_kwds={"groups": data[cluster_col]},
+                disp=False,
+                warn_convergence=warn_convergence,
+            )
         else:
-            results = model.fit(cov_type="HC3", disp=False)
+            results = model.fit(cov_type="HC3", disp=False, warn_convergence=warn_convergence)
+
+        mle_retvals = getattr(results, "mle_retvals", {})
+        if raise_on_nonconvergence and not mle_retvals.get("converged", True):
+            raise RuntimeError("Maximum Likelihood optimization failed to converge")
 
         # Extract treatment effect on logit scale
         coefficient = results.params[self._treatment_col]
