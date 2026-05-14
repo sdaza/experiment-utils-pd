@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.11](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.10...v0.5.11) (2026-05-14)
+
+
+### Bug Fixes
+
+* enhance bootstrap functionality with convergence warning handling and tests ([1f836b3](https://github.com/sdaza/experiment-utils-pd/commit/1f836b3d25adcce576c3ab5e36efb4916a9e1df4))
+
 ## [0.5.10](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.9...v0.5.10) (2026-05-12)
 
 
