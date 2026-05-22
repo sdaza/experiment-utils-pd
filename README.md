@@ -1,7 +1,11 @@
-[![ci](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
-[![PyPI version](https://img.shields.io/pypi/v/experiment-utils-pd.svg)](https://pypi.org/project/experiment-utils-pd/)
-
 # Experiment Utils
+
+[![CI](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
+[![Release](https://img.shields.io/github/v/release/sdaza/experiment-utils-pd?label=release)](https://github.com/sdaza/experiment-utils-pd/releases)
+[![PyPI](https://img.shields.io/pypi/v/experiment-utils-pd?label=pypi)](https://pypi.org/project/experiment-utils-pd/)
+[![Python](https://img.shields.io/pypi/pyversions/experiment-utils-pd)](https://pypi.org/project/experiment-utils-pd/)
+[![Downloads](https://static.pepy.tech/badge/experiment-utils-pd/month)](https://pepy.tech/project/experiment-utils-pd)
+[![License](https://img.shields.io/pypi/l/experiment-utils-pd)](https://github.com/sdaza/experiment-utils-pd/blob/main/LICENSE)
 
 A comprehensive Python package for designing, analyzing, and validating experiments with advanced causal inference capabilities.
 
