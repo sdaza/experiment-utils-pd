@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.12](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.11...v0.5.12) (2026-05-22)
+
+
+### Bug Fixes
+
+* update Python version badge and enhance README with additional badges for clarity ([8aae69d](https://github.com/sdaza/experiment-utils-pd/commit/8aae69d46102f7845cedd399436d4713ed7a11b0))
+
+
+### Documentation
+
+* add source code link and project URLs to README and pyproject.toml ([92b022b](https://github.com/sdaza/experiment-utils-pd/commit/92b022bf07c5787401ea6057aced5e26bc3933b3))
+
 ## [0.5.11](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.10...v0.5.11) (2026-05-14)
 
 
