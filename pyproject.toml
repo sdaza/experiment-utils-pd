@@ -41,6 +41,12 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/sdaza/experiment-utils-pd"
+Repository = "https://github.com/sdaza/experiment-utils-pd"
+Issues = "https://github.com/sdaza/experiment-utils-pd/issues"
+Changelog = "https://github.com/sdaza/experiment-utils-pd/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 where = ["."]  # ["."] by default
 include = ["experiment_utils*"]  # ["*"] by default

@@ -9,6 +9,8 @@
 
 A comprehensive Python package for designing, analyzing, and validating experiments with advanced causal inference capabilities.
 
+Source code: https://github.com/sdaza/experiment-utils-pd
+
 ## Features
 
 - **Experiment Analysis**: Estimate treatment effects with multiple adjustment methods (covariate balancing, regression, IV, AIPW)
