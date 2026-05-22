@@ -3,8 +3,9 @@
 [![CI](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml/badge.svg)](https://github.com/sdaza/experiment-utils-pd/actions/workflows/ci.yaml)
 [![Release](https://img.shields.io/github/v/release/sdaza/experiment-utils-pd?label=release)](https://github.com/sdaza/experiment-utils-pd/releases)
 [![PyPI](https://img.shields.io/pypi/v/experiment-utils-pd?label=pypi)](https://pypi.org/project/experiment-utils-pd/)
-[![Python](https://img.shields.io/pypi/pyversions/experiment-utils-pd)](https://pypi.org/project/experiment-utils-pd/)
-[![Downloads](https://static.pepy.tech/badge/experiment-utils-pd/month)](https://pepy.tech/project/experiment-utils-pd)
+[![Python >=3.11](https://img.shields.io/badge/Python-%3E%3D3.11-blue)](https://pypi.org/project/experiment-utils-pd/)
+[![Monthly downloads](https://static.pepy.tech/badge/experiment-utils-pd/month)](https://pepy.tech/project/experiment-utils-pd)
+[![Stars](https://img.shields.io/github/stars/sdaza/experiment-utils-pd?label=stars)](https://github.com/sdaza/experiment-utils-pd/stargazers)
 [![License](https://img.shields.io/pypi/l/experiment-utils-pd)](https://github.com/sdaza/experiment-utils-pd/blob/main/LICENSE)
 
 A comprehensive Python package for designing, analyzing, and validating experiments with advanced causal inference capabilities.
