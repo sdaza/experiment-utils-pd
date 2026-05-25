@@ -30,10 +30,10 @@ def simple_experiment_data():
 
 
 class TestPooledSd:
-    """Tests for pooled_sd column in get_effects() results."""
+    """Tests for internal pooled_sd support used by Cohen's d equivalence."""
 
-    def test_pooled_sd_present_in_results(self, simple_experiment_data):
-        """pooled_sd column should be present after get_effects()."""
+    def test_pooled_sd_hidden_from_public_results(self, simple_experiment_data):
+        """pooled_sd should be kept internal so get_effects() results stay lean."""
         analyzer = ExperimentAnalyzer(
             data=simple_experiment_data,
             outcomes=["outcome"],
@@ -41,10 +41,11 @@ class TestPooledSd:
             experiment_identifier=["experiment"],
         )
         analyzer.get_effects()
-        assert "pooled_sd" in analyzer.results.columns
+        assert "pooled_sd" not in analyzer.results.columns
+        assert "pooled_sd" in analyzer._results.columns
 
     def test_pooled_sd_value_is_reasonable(self, simple_experiment_data):
-        """pooled_sd should be close to the true SD (2.0) for our generated data."""
+        """Internal pooled_sd should be close to the true SD (2.0)."""
         analyzer = ExperimentAnalyzer(
             data=simple_experiment_data,
             outcomes=["outcome"],
@@ -52,7 +53,7 @@ class TestPooledSd:
             experiment_identifier=["experiment"],
         )
         analyzer.get_effects()
-        pooled_sd = analyzer.results["pooled_sd"].iloc[0]
+        pooled_sd = analyzer._results["pooled_sd"].iloc[0]
         # True SD is 2.0, should be within 0.3
         assert abs(pooled_sd - 2.0) < 0.3
 
@@ -130,7 +131,8 @@ class TestEquivalenceTOST:
         analyzer.get_effects()
         analyzer.test_equivalence(test_type="equivalence", absolute_bound=1.0)
         result = analyzer.results.iloc[0]
-        expected_d = result["absolute_effect"] / result["pooled_sd"]
+        pooled_sd = analyzer._results["pooled_sd"].iloc[0]
+        expected_d = result["absolute_effect"] / pooled_sd
         assert result["eq_cohens_d"] == pytest.approx(expected_d, rel=1e-6)
 
     def test_requires_get_effects_first(self, simple_experiment_data):
@@ -189,7 +191,7 @@ class TestEquivalenceBoundTypes:
         analyzer.get_effects()
         analyzer.test_equivalence(test_type="equivalence", cohens_d_bound=0.5)
         result = analyzer.results.iloc[0]
-        expected_delta = 0.5 * result["pooled_sd"]
+        expected_delta = 0.5 * analyzer._results["pooled_sd"].iloc[0]
         assert result["eq_bound_upper"] == pytest.approx(expected_delta, rel=1e-6)
         assert result["eq_bound_type"] == "cohens_d"
 

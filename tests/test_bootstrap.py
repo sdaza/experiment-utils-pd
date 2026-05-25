@@ -453,16 +453,21 @@ class TestBootstrapInference:
 class TestBootstrapProbAndRope:
     """Tests for P(effect > threshold) and ROPE probability columns."""
 
-    PROB_COLS = [
+    BASE_PROB_COLS = [
         "prob_abs_effect_gt",
         "prob_rel_effect_gt",
+    ]
+    ABS_ROPE_COLS = [
         "prob_abs_effect_in_rope",
         "prob_abs_effect_above_rope",
         "prob_abs_effect_below_rope",
+    ]
+    REL_ROPE_COLS = [
         "prob_rel_effect_in_rope",
         "prob_rel_effect_above_rope",
         "prob_rel_effect_below_rope",
     ]
+    PROB_COLS = BASE_PROB_COLS + ABS_ROPE_COLS + REL_ROPE_COLS
 
     def test_prob_columns_present_with_bootstrap(self, sample_data):
         analyzer = ExperimentAnalyzer(
@@ -540,6 +545,8 @@ class TestBootstrapProbAndRope:
         assert r["prob_abs_effect_in_rope"] > 0.99
         assert r["prob_abs_effect_above_rope"] < 0.01
         assert r["prob_abs_effect_below_rope"] < 0.01
+        for col in self.REL_ROPE_COLS:
+            assert col not in analyzer.results.columns
 
     def test_rope_entirely_above_true_effect(self, sample_data):
         analyzer = ExperimentAnalyzer(
@@ -575,7 +582,7 @@ class TestBootstrapProbAndRope:
         total = r["prob_abs_effect_in_rope"] + r["prob_abs_effect_above_rope"] + r["prob_abs_effect_below_rope"]
         assert abs(total - 1.0) < 1e-9
 
-    def test_rope_none_yields_nan(self, sample_data):
+    def test_rope_none_omits_rope_columns(self, sample_data):
         analyzer = ExperimentAnalyzer(
             data=sample_data,
             outcomes=["outcome"],
@@ -586,16 +593,29 @@ class TestBootstrapProbAndRope:
             bootstrap_seed=123,
         )
         analyzer.get_effects()
-        r = analyzer.results.iloc[0]
-        for col in (
-            "prob_abs_effect_in_rope",
-            "prob_abs_effect_above_rope",
-            "prob_abs_effect_below_rope",
-            "prob_rel_effect_in_rope",
-            "prob_rel_effect_above_rope",
-            "prob_rel_effect_below_rope",
-        ):
-            assert np.isnan(r[col]), f"Expected NaN for {col}, got {r[col]}"
+        results = analyzer.results
+        for col in self.BASE_PROB_COLS:
+            assert col in results.columns, f"Missing threshold probability column: {col}"
+        for col in self.ABS_ROPE_COLS + self.REL_ROPE_COLS:
+            assert col not in results.columns, f"Unexpected ROPE column without ROPE bounds: {col}"
+
+    def test_relative_rope_only_omits_absolute_rope_columns(self, sample_data):
+        analyzer = ExperimentAnalyzer(
+            data=sample_data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment_id"],
+            bootstrap=True,
+            bootstrap_iterations=100,
+            bootstrap_seed=123,
+            rope_rel=(-0.01, 0.01),
+        )
+        analyzer.get_effects()
+        results = analyzer.results
+        for col in self.REL_ROPE_COLS:
+            assert col in results.columns, f"Missing relative ROPE column: {col}"
+        for col in self.ABS_ROPE_COLS:
+            assert col not in results.columns, f"Unexpected absolute ROPE column without rope_abs: {col}"
 
     def test_invalid_rope_raises(self, sample_data):
         with pytest.raises(ValueError):

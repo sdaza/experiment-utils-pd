@@ -172,6 +172,86 @@ def test_regression_covariates(sample_data):
         pytest.fail(f" raised an exception: {e}")
 
 
+def test_compare_precision_auto_summary(sample_data):
+    """Test get_effects stores precision impact separately from results."""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        regression_covariates="baseline_conversion",
+    )
+
+    analyzer.get_effects()
+    results = analyzer.results
+    summary = analyzer.precision_summary
+    row = summary.iloc[0]
+
+    precision_cols = [
+        "unadjusted_absolute_effect",
+        "absolute_effect_change",
+        "unadjusted_standard_error",
+        "standard_error_ratio",
+        "standard_error_reduction",
+        "precision",
+        "unadjusted_precision",
+        "precision_gain",
+    ]
+    for col in precision_cols:
+        assert col in summary.columns
+        assert col not in results.columns
+        assert np.isfinite(row[col])
+
+    assert np.isclose(row["precision"], 1 / row["standard_error"] ** 2)
+    assert np.isclose(row["unadjusted_precision"], 1 / row["unadjusted_standard_error"] ** 2)
+    assert np.isclose(row["standard_error_reduction"], 1 - row["standard_error_ratio"])
+    assert "standard_error" in results.columns
+
+
+def test_compare_precision_can_be_disabled(sample_data):
+    """Test compare_precision=False keeps diagnostics off even with covariates."""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        regression_covariates="baseline_conversion",
+        compare_precision=False,
+    )
+
+    analyzer.get_effects()
+
+    assert analyzer.precision_summary is None
+
+
+def test_compare_precision_with_bootstrap(sample_data):
+    """Test precision impact uses bootstrap reference when bootstrap is enabled."""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        regression_covariates="baseline_conversion",
+        bootstrap=True,
+        bootstrap_iterations=20,
+        bootstrap_seed=123,
+        compare_precision=True,
+    )
+
+    analyzer.get_effects()
+    results = analyzer.results
+    summary = analyzer.precision_summary
+    row = summary.iloc[0]
+
+    assert results["inference_method"].iloc[0] == "bootstrap"
+    assert row["inference_method"] == "bootstrap"
+    assert np.isfinite(row["unadjusted_standard_error"])
+    assert "unadjusted_standard_error" not in results.columns
+    assert np.isfinite(row["unadjusted_ci_width"])
+    assert np.isfinite(row["standard_error_reduction"])
+    assert np.isfinite(row["precision_gain"])
+
+
 def test_no_adjustment(sample_data):
     """Test get_effects no adjustments"""
     outcomes = "conversion"
@@ -959,7 +1039,8 @@ def test_asymptotic_ci_uses_t_distribution(sample_data):
         bootstrap=False,
     )
     analyzer.get_effects()
-    results = analyzer.results
+    assert "df_resid" not in analyzer.results.columns
+    results = analyzer._results
 
     # Filter to asymptotic OLS rows with df_resid
     mask = (

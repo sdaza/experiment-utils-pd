@@ -94,6 +94,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         Covariates added as main effects to the regression formula. These columns are also
         subject to the same balance checks as ``balance_covariates`` and do not need to be
         listed in ``balance_covariates`` separately. By default None.
+    compare_precision : bool | None, optional
+        Whether to compute a separate precision diagnostics table comparing the
+        requested estimate to an unadjusted no-covariate reference. ``None``
+        (default) enables this automatically when regression covariates,
+        interaction covariates, or an adjustment method are used. ``False``
+        disables it. When ``bootstrap=True``, the unadjusted reference is
+        bootstrapped on the same resamples.
     unit_identifier : str, optional
         Column name for the unit/user identifier to connect weights to specific units, by default None
     bootstrap : bool, optional
@@ -147,11 +154,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         outcome units. When set (and ``bootstrap=True``), emits
         ``prob_abs_effect_in_rope`` / ``_above_rope`` / ``_below_rope`` columns —
         probability mass of the bootstrap distribution inside, above, or below the
-        band. ``None`` (default) disables; those columns are ``NaN``.
+        band. ``None`` (default) omits those columns.
     rope_rel : tuple[float, float], optional
         ROPE for the relative effect, as ``(lo, hi)`` on the fractional scale
         (e.g. ``(-0.02, 0.02)`` = ±2%). Emits ``prob_rel_effect_in_rope`` /
-        ``_above_rope`` / ``_below_rope`` when set. ``None`` (default) disables.
+        ``_above_rope`` / ``_below_rope`` when set. ``None`` (default) omits those
+        columns.
     correction : str, optional
         P-value adjustment method to apply automatically after get_effects ('bonferroni', 'holm', 'fdr_bh', 'sidak', 'hommel', 'hochberg', 'by', or None for no adjustment), by default 'bonferroni'
     categorical_max_unique : int, optional
@@ -265,6 +273,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         instrument_col: str | None = None,
         alpha: float = 0.05,
         regression_covariates: list[str] | None = None,
+        compare_precision: bool | None = None,
         assess_overlap: bool = False,
         overlap_plot: bool = False,
         unit_identifier: str | None = None,
@@ -333,6 +342,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self._overlap_plot = overlap_plot
         self._instrument_col = instrument_col
         self._regression_covariates = self.__ensure_list(regression_covariates)
+        self._compare_precision = compare_precision
         self._unit_identifier = unit_identifier
 
         self._bootstrap = bootstrap
@@ -381,6 +391,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self.__check_input()
         self._alpha = alpha
         self._results = None
+        self._precision_summary = None
         self._balance = []
         self._adjusted_balance = []
         self._weights = None
@@ -976,6 +987,325 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         return estimator_map[key]
 
+    def __compute_unadjusted_reference(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        model_type: str,
+        compute_marginal_effects: str | bool,
+        is_ratio: bool = False,
+        ratio_info: tuple[str, str, str, float] | None = None,
+    ) -> dict[str, float]:
+        """
+        Fit a no-covariate reference model used to quantify precision impact.
+        """
+        reference = {
+            "unadjusted_absolute_effect": np.nan,
+            "unadjusted_relative_effect": np.nan,
+            "unadjusted_standard_error": np.nan,
+            "unadjusted_abs_effect_lower": np.nan,
+            "unadjusted_abs_effect_upper": np.nan,
+            "unadjusted_pvalue": np.nan,
+            "unadjusted_df_resid": np.nan,
+        }
+
+        try:
+            estimator_func = self.__get_estimator_function(model_type, None, outcome)
+            estimator_params = {
+                "data": data.copy(),
+                "outcome_variable": outcome,
+                "covariates": [],
+                "cluster_col": self._cluster_col,
+                "store_model": False,
+                "compute_relative_ci": False,
+            }
+
+            if model_type in ["logistic", "poisson", "negative_binomial"]:
+                estimator_params["compute_marginal_effects"] = compute_marginal_effects
+
+            if model_type == "cox":
+                if outcome in self._outcome_event_cols:
+                    estimator_params["event_col"] = self._outcome_event_cols[outcome]
+                elif self._event_col:
+                    estimator_params["event_col"] = self._event_col
+                else:
+                    log_and_raise_error(
+                        self._logger,
+                        f"Cox model for outcome '{outcome}' requires event column.",
+                    )
+
+            output = estimator_func(**estimator_params)
+
+            relative_effect = output.get("relative_effect", np.nan)
+            if is_ratio and ratio_info is not None:
+                control_ratio = ratio_info[3]
+                relative_effect = output["absolute_effect"] / control_ratio if control_ratio != 0 else np.nan
+
+            reference.update(
+                {
+                    "unadjusted_absolute_effect": output.get("absolute_effect", np.nan),
+                    "unadjusted_relative_effect": relative_effect,
+                    "unadjusted_standard_error": output.get("standard_error", np.nan),
+                    "unadjusted_abs_effect_lower": output.get("abs_effect_lower", np.nan),
+                    "unadjusted_abs_effect_upper": output.get("abs_effect_upper", np.nan),
+                    "unadjusted_pvalue": output.get("pvalue", np.nan),
+                    "unadjusted_df_resid": output.get("df_resid", np.nan),
+                }
+            )
+        except Exception as e:
+            self._logger.warning(
+                f"Could not fit unadjusted precision reference for outcome '{outcome}' "
+                f"with model_type='{model_type}': {e}"
+            )
+
+        return reference
+
+    def __compute_unadjusted_bootstrap_reference(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        model_type: str,
+        compute_marginal_effects: str | bool,
+        min_binary_count: int,
+        observed_reference: dict[str, float],
+        ratio_cols: tuple[str, str] | None = None,
+    ) -> dict[str, float]:
+        """
+        Bootstrap the no-covariate reference model for precision comparisons.
+        """
+        reference = {
+            "unadjusted_standard_error": np.nan,
+            "unadjusted_abs_effect_lower": np.nan,
+            "unadjusted_abs_effect_upper": np.nan,
+            "unadjusted_pvalue": np.nan,
+        }
+
+        try:
+            estimator_func = self.__get_estimator_function(model_type, None, outcome)
+            bootstrap_abs_effects, bootstrap_rel_effects, bootstrap_ses = self._bootstrap_single_effect(
+                data=data,
+                outcome=outcome,
+                adjustment=None,
+                model_func=estimator_func,
+                relevant_covariates=[],
+                numeric_covariates=[],
+                binary_covariates=[],
+                min_binary_count=min_binary_count,
+                model_type=model_type,
+                compute_marginal_effects=compute_marginal_effects,
+                interaction_covariates=None,
+                ratio_cols=ratio_cols,
+            )
+            bootstrap_results = self._calculate_bootstrap_inference(
+                bootstrap_abs_effects,
+                bootstrap_rel_effects,
+                observed_reference.get("unadjusted_absolute_effect", np.nan),
+                observed_reference.get("unadjusted_relative_effect", np.nan),
+                bootstrap_ses=bootstrap_ses,
+                observed_se=observed_reference.get("unadjusted_standard_error"),
+            )
+            reference.update(
+                {
+                    "unadjusted_standard_error": bootstrap_results["standard_error"],
+                    "unadjusted_abs_effect_lower": bootstrap_results["abs_effect_lower"],
+                    "unadjusted_abs_effect_upper": bootstrap_results["abs_effect_upper"],
+                    "unadjusted_pvalue": bootstrap_results["pvalue"],
+                }
+            )
+        except Exception as e:
+            self._logger.warning(
+                f"Could not bootstrap unadjusted precision reference for outcome '{outcome}' "
+                f"with model_type='{model_type}': {e}"
+            )
+
+        return reference
+
+    def __precision_impact_columns(self) -> list[str]:
+        return [
+            "unadjusted_absolute_effect",
+            "absolute_effect_change",
+            "unadjusted_relative_effect",
+            "unadjusted_standard_error",
+            "standard_error_ratio",
+            "standard_error_reduction",
+            "precision",
+            "unadjusted_precision",
+            "precision_gain",
+            "ci_width",
+            "unadjusted_abs_effect_lower",
+            "unadjusted_abs_effect_upper",
+            "unadjusted_ci_width",
+            "ci_width_reduction",
+            "unadjusted_pvalue",
+            "unadjusted_df_resid",
+        ]
+
+    def __bootstrap_probability_columns(self) -> list[str]:
+        columns = [
+            "prob_abs_effect_gt",
+            "prob_rel_effect_gt",
+        ]
+        if self._rope_abs is not None:
+            columns.extend(
+                [
+                    "prob_abs_effect_in_rope",
+                    "prob_abs_effect_above_rope",
+                    "prob_abs_effect_below_rope",
+                ]
+            )
+        if self._rope_rel is not None:
+            columns.extend(
+                [
+                    "prob_rel_effect_in_rope",
+                    "prob_rel_effect_above_rope",
+                    "prob_rel_effect_below_rope",
+                ]
+            )
+        return columns
+
+    def __should_compare_precision(self, adjustment: str | None) -> bool:
+        """
+        Auto-enable precision diagnostics only when estimation is adjusted.
+        """
+        has_estimation_covariates = bool(self._regression_covariates or self._interaction_covariates)
+        has_adjustment = adjustment is not None and adjustment != "none"
+        return has_estimation_covariates or has_adjustment
+
+    def __add_precision_impact_columns(self, results_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add standard-error and precision impact columns relative to the unadjusted fit.
+        """
+        if "unadjusted_standard_error" not in results_df.columns:
+            return results_df
+
+        results_df = results_df.copy()
+        se = pd.to_numeric(results_df["standard_error"], errors="coerce")
+        unadjusted_se = pd.to_numeric(results_df["unadjusted_standard_error"], errors="coerce")
+        valid = (se > 0) & (unadjusted_se > 0)
+
+        results_df["precision"] = np.nan
+        results_df["unadjusted_precision"] = np.nan
+        results_df["standard_error_ratio"] = np.nan
+        results_df["standard_error_reduction"] = np.nan
+        results_df["precision_gain"] = np.nan
+
+        results_df.loc[valid, "precision"] = 1 / (se[valid] ** 2)
+        results_df.loc[valid, "unadjusted_precision"] = 1 / (unadjusted_se[valid] ** 2)
+        results_df.loc[valid, "standard_error_ratio"] = se[valid] / unadjusted_se[valid]
+        results_df.loc[valid, "standard_error_reduction"] = 1 - results_df.loc[valid, "standard_error_ratio"]
+        results_df.loc[valid, "precision_gain"] = (
+            results_df.loc[valid, "precision"] / results_df.loc[valid, "unadjusted_precision"] - 1
+        )
+
+        if "absolute_effect" in results_df.columns and "unadjusted_absolute_effect" in results_df.columns:
+            results_df["absolute_effect_change"] = (
+                results_df["absolute_effect"] - results_df["unadjusted_absolute_effect"]
+            )
+
+        if {"abs_effect_lower", "abs_effect_upper"}.issubset(results_df.columns):
+            results_df["ci_width"] = results_df["abs_effect_upper"] - results_df["abs_effect_lower"]
+
+        has_unadjusted_ci_bounds = {
+            "unadjusted_abs_effect_lower",
+            "unadjusted_abs_effect_upper",
+        }.issubset(results_df.columns)
+        if has_unadjusted_ci_bounds:
+            valid_unadjusted_ci = (
+                results_df["unadjusted_abs_effect_lower"].notna()
+                & results_df["unadjusted_abs_effect_upper"].notna()
+            )
+            results_df["unadjusted_ci_width"] = np.nan
+            results_df.loc[valid_unadjusted_ci, "unadjusted_ci_width"] = (
+                results_df.loc[valid_unadjusted_ci, "unadjusted_abs_effect_upper"]
+                - results_df.loc[valid_unadjusted_ci, "unadjusted_abs_effect_lower"]
+            )
+
+        if "unadjusted_df_resid" in results_df.columns:
+            unadj_df = pd.to_numeric(results_df["unadjusted_df_resid"], errors="coerce")
+            alpha = getattr(self, "_alpha", 0.05)
+            z_crit = stats.norm.ppf(1 - alpha / 2)
+            unadj_crit = pd.Series(z_crit, index=results_df.index, dtype=float)
+            has_df = unadj_df.notna() & np.isfinite(unadj_df)
+            if has_df.any():
+                unadj_crit.loc[has_df] = unadj_df.loc[has_df].apply(lambda d: stats.t.ppf(1 - alpha / 2, d))
+            fallback_unadjusted_ci_width = 2 * unadj_crit * unadjusted_se
+            if "unadjusted_ci_width" not in results_df.columns:
+                results_df["unadjusted_ci_width"] = np.nan
+            missing_unadjusted_ci_width = results_df["unadjusted_ci_width"].isna()
+            results_df.loc[missing_unadjusted_ci_width, "unadjusted_ci_width"] = fallback_unadjusted_ci_width.loc[
+                missing_unadjusted_ci_width
+            ]
+
+        if "ci_width" in results_df.columns and "unadjusted_ci_width" in results_df.columns:
+            valid_ci = (
+                results_df["ci_width"].notna()
+                & results_df["unadjusted_ci_width"].notna()
+                & (results_df["unadjusted_ci_width"] > 0)
+            )
+            results_df["ci_width_reduction"] = np.nan
+            results_df.loc[valid_ci, "ci_width_reduction"] = (
+                1 - results_df.loc[valid_ci, "ci_width"] / results_df.loc[valid_ci, "unadjusted_ci_width"]
+            )
+
+        precision_cols = self.__precision_impact_columns()
+        existing_precision_cols = [col for col in precision_cols if col in results_df.columns]
+        if existing_precision_cols and "standard_error" in results_df.columns:
+            base_cols = [col for col in results_df.columns if col not in existing_precision_cols]
+            insert_at = base_cols.index("standard_error") + 1
+            ordered_cols = base_cols[:insert_at] + existing_precision_cols + base_cols[insert_at:]
+            results_df = results_df[ordered_cols]
+
+        return results_df
+
+    def __build_precision_summary(self, results_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Build a separate precision diagnostics table without bloating results.
+        """
+        preferred_cols = (
+            self._experiment_identifier
+            + [
+                "outcome",
+                "treatment_group",
+                "control_group",
+                "adjustment",
+                "method",
+                "estimand",
+                "inference_method",
+                "model_type",
+                "absolute_effect",
+                "unadjusted_absolute_effect",
+                "absolute_effect_change",
+                "relative_effect",
+                "unadjusted_relative_effect",
+                "standard_error",
+                "unadjusted_standard_error",
+                "standard_error_ratio",
+                "standard_error_reduction",
+                "precision",
+                "unadjusted_precision",
+                "precision_gain",
+                "ci_width",
+                "unadjusted_ci_width",
+                "ci_width_reduction",
+                "pvalue",
+                "unadjusted_pvalue",
+                "balance",
+                "ess_treatment",
+                "ess_control",
+                "ess_treatment_reduction",
+                "ess_control_reduction",
+            ]
+        )
+        cols = [col for col in preferred_cols if col in results_df.columns]
+        return results_df[cols].copy()
+
+    def __drop_precision_impact_columns(self, results_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Remove precision diagnostics from the main results table.
+        """
+        cols_to_drop = [col for col in self.__precision_impact_columns() if col in results_df.columns]
+        return results_df.drop(columns=cols_to_drop) if cols_to_drop else results_df
+
     def get_overlap_coefficient(
         self,
         treatment_scores: np.ndarray,
@@ -1021,6 +1351,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         adjustment: str | None = None,
         bootstrap: bool | None = None,
         compute_marginal_effects: str | bool | None = None,
+        compare_precision: bool | None = None,
     ) -> None:
         """ "
         Calculate effects (uplifts), given the data and experimental units.
@@ -1041,6 +1372,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             - "median": Marginal effect at median
             - True: Same as "overall"
             - False: Return odds ratios / rate ratios
+        compare_precision : bool, optional
+            When True, fit an unadjusted no-covariate reference model for each
+            comparison/outcome and store standard-error reduction, precision gain,
+            CI-width reduction, and effect-estimate change in ``precision_summary``.
+            When bootstrap=True, the unadjusted reference is bootstrapped on the
+            same resamples as the adjusted model. If None, uses the value set in
+            __init__; if that is also None, precision diagnostics are computed
+            automatically when covariates or adjustment methods are used.
 
         Updates
         -------
@@ -1089,9 +1428,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         - prob_abs_effect_gt: P(absolute_effect > prob_threshold_abs).
         - prob_rel_effect_gt: P(relative_effect > prob_threshold_rel).
         - prob_abs_effect_in_rope / _above_rope / _below_rope: probability mass of
-          the absolute effect inside / above / below rope_abs (NaN if rope_abs is None).
+          the absolute effect inside / above / below rope_abs (only emitted when rope_abs is set).
         - prob_rel_effect_in_rope / _above_rope / _below_rope: same for the relative
-          effect and rope_rel (NaN if rope_rel is None).
+          effect and rope_rel (only emitted when rope_rel is set).
 
         Note:
         - Columns with all NaN values are automatically removed from results.
@@ -1115,14 +1454,19 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if min_binary_count is None:
             min_binary_count = self._min_binary_count
 
+        if adjustment is None:
+            adjustment = self._adjustment
+
+        if compare_precision is None:
+            compare_precision = self._compare_precision
+        if compare_precision is None:
+            compare_precision = self.__should_compare_precision(adjustment)
+
         get_balance_method = self._estimator.get_balance_method
 
         temp_results = []
         output = {}
         weights_list = []
-
-        if adjustment is None:
-            adjustment = self._adjustment
 
         if bootstrap is not None:
             original_bootstrap = self._bootstrap
@@ -1132,6 +1476,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         self._balance = []
         self._adjusted_balance = []
+        self._precision_summary = pd.DataFrame()
 
         if self._experiment_identifier:
             grouped_data = self._data.groupby(self._experiment_identifier)
@@ -1694,6 +2039,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     output["rel_effect_lower"] = np.nan
                                     output["rel_effect_upper"] = np.nan
 
+                            if compare_precision:
+                                output.update(
+                                    self.__compute_unadjusted_reference(
+                                        data=comparison_data,
+                                        outcome=outcome,
+                                        model_type=model_type,
+                                        compute_marginal_effects=me_setting,
+                                        is_ratio=_is_ratio,
+                                        ratio_info=_ratio_lin_cols[outcome] if _is_ratio else None,
+                                    )
+                                )
+
                             if self._store_fitted_models and "fitted_model" in output:
                                 if experiment_tuple not in self._fitted_models:
                                     self._fitted_models[experiment_tuple] = {}
@@ -1785,16 +2142,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     output["abs_effect_upper"] = bootstrap_results["abs_effect_upper"]
                                     output["rel_effect_lower"] = bootstrap_results["rel_effect_lower"]
                                     output["rel_effect_upper"] = bootstrap_results["rel_effect_upper"]
-                                    for _prob_key in (
-                                        "prob_abs_effect_gt",
-                                        "prob_rel_effect_gt",
-                                        "prob_abs_effect_in_rope",
-                                        "prob_abs_effect_above_rope",
-                                        "prob_abs_effect_below_rope",
-                                        "prob_rel_effect_in_rope",
-                                        "prob_rel_effect_above_rope",
-                                        "prob_rel_effect_below_rope",
-                                    ):
+                                    for _prob_key in self.__bootstrap_probability_columns():
                                         output[_prob_key] = bootstrap_results[_prob_key]
                                     # Derive significance from whether bootstrap CI excludes zero
                                     # to ensure visual consistency with forest plots
@@ -1804,6 +2152,24 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                         output["stat_significance"] = 1 if (lo > 0 or hi < 0) else 0
                                     else:
                                         output["stat_significance"] = 1 if output["pvalue"] < self._alpha else 0
+
+                                    if compare_precision:
+                                        output.update(
+                                            self.__compute_unadjusted_bootstrap_reference(
+                                                data=comparison_data,
+                                                outcome=outcome,
+                                                model_type=model_type,
+                                                compute_marginal_effects=me_setting,
+                                                min_binary_count=min_binary_count,
+                                                observed_reference=output,
+                                                ratio_cols=(
+                                                    _ratio_lin_cols[outcome][1],
+                                                    _ratio_lin_cols[outcome][2],
+                                                )
+                                                if _is_ratio
+                                                else None,
+                                            )
+                                        )
 
                                     if self._correction:
                                         if experiment_tuple not in self._bootstrap_distributions:
@@ -1934,6 +2300,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "rel_effect_lower",
             "rel_effect_upper",
             "standard_error",
+            "unadjusted_absolute_effect",
+            "unadjusted_relative_effect",
+            "unadjusted_standard_error",
+            "unadjusted_abs_effect_lower",
+            "unadjusted_abs_effect_upper",
+            "unadjusted_pvalue",
+            "unadjusted_df_resid",
             "pvalue",
             "stat_significance",
             "se_intercept",
@@ -1973,18 +2346,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "inference_method" in clean_temp_results.columns
             and (clean_temp_results["inference_method"] == "bootstrap").any()
         ):
-            result_columns.extend(
-                [
-                    "prob_abs_effect_gt",
-                    "prob_rel_effect_gt",
-                    "prob_abs_effect_in_rope",
-                    "prob_abs_effect_above_rope",
-                    "prob_abs_effect_below_rope",
-                    "prob_rel_effect_in_rope",
-                    "prob_rel_effect_above_rope",
-                    "prob_rel_effect_below_rope",
-                ]
-            )
+            result_columns.extend(self.__bootstrap_probability_columns())
 
         final_result_columns = [col for col in result_columns if col in clean_temp_results.columns]
         clean_temp_results = clean_temp_results[final_result_columns]
@@ -2044,13 +2406,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             + z_critical * results_df.loc[no_df, "standard_error"]
                         )
 
+        if compare_precision:
+            results_df = self.__add_precision_impact_columns(results_df)
+            self._precision_summary = self.__build_precision_summary(results_df)
+            results_df = self.__drop_precision_impact_columns(results_df)
+        else:
+            self._precision_summary = pd.DataFrame()
+
         self._results = results_df
 
-        if not results_df.empty:
+        if not self._results.empty:
             cols_to_check = ["rel_effect_lower", "rel_effect_upper", "se_intercept", "cov_coef_intercept"]
             cols_to_drop = []
             for col in cols_to_check:
-                if col in results_df.columns and results_df[col].isna().all():
+                if col in self._results.columns and self._results[col].isna().all():
                     cols_to_drop.append(col)
 
             if cols_to_drop:
@@ -2094,7 +2463,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             (e.g. 0.10 = 10%). Must be > 0.
         cohens_d_bound : float, optional
             Equivalence bound in standardized units (Cohen's d). Converted to
-            raw units via pooled_sd. Only valid for OLS model types.
+            raw units via internally stored pooled_sd. Only valid for OLS model types.
         alpha : float, optional
             Significance level (default 0.05). For TOST the confidence interval
             is (1 - 2*alpha), i.e. 90% by default.
@@ -2607,11 +2976,38 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         Returns the results DataFrame
         """
         if self._results is not None:
-            internal_columns = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param"]
+            internal_columns = [
+                "se_intercept",
+                "cov_coef_intercept",
+                "control_std",
+                "pooled_sd",
+                "alpha_param",
+                "df_resid",
+                "unadjusted_df_resid",
+            ]
             return self._results.drop(columns=[col for col in internal_columns if col in self._results.columns])
         else:
             self._logger.warning("Run the `get_effects` function first!")
             return None
+
+    @property
+    def precision_summary(self) -> pd.DataFrame | None:
+        """
+        Returns precision diagnostics from get_effects().
+        """
+        if self._results is None:
+            self._logger.warning("Run the `get_effects` function first!")
+            return None
+
+        if self._precision_summary is None or self._precision_summary.empty:
+            self._logger.warning(
+                "No precision summary available. Precision diagnostics are generated automatically "
+                "when regression covariates, interaction covariates, or adjustment methods are used. "
+                "You can also run get_effects(compare_precision=True)."
+            )
+            return None
+
+        return self._precision_summary.copy()
 
     @property
     def balance(self) -> pd.DataFrame | None:

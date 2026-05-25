@@ -316,6 +316,84 @@ analyzer.get_effects()
 # adjustment column in results will show "regression+interactions"
 ```
 
+**Comparing precision across adjustment strategies**
+
+When an analysis uses regression covariates, interaction covariates, or an
+adjustment method such as IPW, the analyzer automatically computes a separate
+`precision_summary`. This keeps `analyzer.results` focused on effect estimates,
+while `analyzer.precision_summary` shows how the adjusted estimate compares with
+an unadjusted no-covariate reference on standard errors, confidence interval
+width, and point estimates. See
+[`examples/precision_comparison_simple.py`](examples/precision_comparison_simple.py)
+for a minimal runnable example, or
+[`examples/precision_comparison.py`](examples/precision_comparison.py) for a
+bootstrap version.
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    regression_covariates=["age", "tenure", "pre_revenue"],
+)
+
+analyzer.get_effects()
+print(analyzer.precision_summary)
+```
+
+Use `compare_precision=False` to disable the extra diagnostic computation.
+
+For bootstrap inference, the comparison is bootstrap-to-bootstrap: the unadjusted
+reference is bootstrapped on the same resamples as the adjusted model.
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    treatment_col="treatment",
+    outcomes=["revenue"],
+    regression_covariates=["age", "tenure", "pre_revenue"],
+    bootstrap=True,
+    bootstrap_iterations=1000,
+    bootstrap_seed=42,
+)
+
+analyzer.get_effects()
+print(analyzer.precision_summary)
+```
+
+Common precision columns:
+
+| Column | Meaning |
+|---|---|
+| `standard_error` | SE from the requested adjusted model |
+| `unadjusted_standard_error` | SE from the no-covariate reference model |
+| `standard_error_ratio` | `standard_error / unadjusted_standard_error` |
+| `standard_error_reduction` | `1 - standard_error_ratio`; positive means adjustment reduced SE |
+| `precision` | `1 / standard_error^2` |
+| `unadjusted_precision` | `1 / unadjusted_standard_error^2` |
+| `precision_gain` | `precision / unadjusted_precision - 1`; positive means more precision |
+| `ci_width_reduction` | Proportional CI-width reduction vs the unadjusted reference |
+| `absolute_effect_change` | Adjusted effect minus unadjusted effect |
+
+Example summary columns:
+
+```python
+print(
+    analyzer.precision_summary[
+        [
+            "outcome",
+            "adjustment",
+            "absolute_effect",
+            "unadjusted_absolute_effect",
+            "standard_error",
+            "unadjusted_standard_error",
+            "standard_error_reduction",
+            "precision_gain",
+        ]
+    ]
+)
+```
+
 **Option 4: IPW + Regression (Combined)**
 
 Use both propensity score weighting and regression covariates for extra robustness:
@@ -332,6 +410,27 @@ analyzer = ExperimentAnalyzer(
 )
 
 analyzer.get_effects()
+```
+
+For balance/IPW runs, `precision_summary` also includes effective sample size
+columns when available, so you can see whether better balance came with a loss
+of effective sample size:
+
+```python
+print(
+    analyzer.precision_summary[
+        [
+            "outcome",
+            "adjustment",
+            "method",
+            "balance",
+            "standard_error_reduction",
+            "precision_gain",
+            "ess_treatment",
+            "ess_control",
+        ]
+    ]
+)
 ```
 
 **Option 5: Doubly Robust / AIPW**
@@ -698,6 +797,13 @@ analyzer.get_effects()
 results = analyzer.results
 print(results[["outcome", "absolute_effect", "abs_effect_lower", 
                "abs_effect_upper", "inference_method"]])
+```
+
+With bootstrap and covariate adjustment, `precision_summary` compares adjusted
+and unadjusted bootstrap standard errors on the same resamples:
+
+```python
+print(analyzer.precision_summary[["outcome", "standard_error", "unadjusted_standard_error"]])
 ```
 
 **When to use bootstrap:**
