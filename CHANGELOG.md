@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.13](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.12...v0.5.13) (2026-05-25)
+
+
+### Bug Fixes
+
+* add precision comparison diagnostics to ExperimentAnalyzer ([8b5a9a5](https://github.com/sdaza/experiment-utils-pd/commit/8b5a9a5e78402b598edf31df4692710fe45eeed5))
+
 ## [0.5.12](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.11...v0.5.12) (2026-05-22)
 
 
