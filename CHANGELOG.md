@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.15](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.14...v0.5.15) (2026-06-17)
+
+
+### Bug Fixes
+
+* improve x-axis tick formatting for relative effect plots to prevent duplicate labels ([3dd1c64](https://github.com/sdaza/experiment-utils-pd/commit/3dd1c64329488af2952f116b5794c7d65acc70ad))
+
 ## [0.5.14](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.13...v0.5.14) (2026-06-17)
 
 
