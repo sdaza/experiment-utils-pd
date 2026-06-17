@@ -134,6 +134,45 @@ def test_sample_ratio_check_float_constant(sample_data):
         pytest.fail(f"raised an exception: {e}")
 
 
+def test_srm_alpha_independent_of_experiment_alpha(sample_data):
+    """The SRM test must use srm_alpha (default 0.05), not the experiment alpha."""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        exp_sample_ratio=0.5,
+        alpha=0.5,  # very permissive experiment-level alpha
+    )
+    assert analyzer._srm_alpha == 0.05
+
+    analyzer.get_effects()
+    results = analyzer.results
+    # Detection follows the fixed 0.05 SRM threshold, ignoring alpha=0.5.
+    for _, row in results.iterrows():
+        if pd.notna(row["srm_pvalue"]):
+            assert bool(row["srm_detected"]) == (row["srm_pvalue"] < 0.05)
+
+
+def test_srm_alpha_override(sample_data):
+    """srm_alpha can be set independently to tighten/loosen the SRM threshold."""
+    analyzer = ExperimentAnalyzer(
+        data=sample_data,
+        outcomes="conversion",
+        treatment_col="treatment",
+        experiment_identifier="experiment",
+        exp_sample_ratio=0.5,
+        srm_alpha=0.01,
+    )
+    assert analyzer._srm_alpha == 0.01
+
+    analyzer.get_effects()
+    results = analyzer.results
+    for _, row in results.iterrows():
+        if pd.notna(row["srm_pvalue"]):
+            assert bool(row["srm_detected"]) == (row["srm_pvalue"] < 0.01)
+
+
 def test_no_experiment_identifier(sample_data):
     """Test get_effects no covariates"""
     outcomes = "conversion"

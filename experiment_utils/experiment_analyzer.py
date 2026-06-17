@@ -89,7 +89,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
     instrument_col : str, optional
         Column name for the instrument variable, by default None
     alpha : float, optional
-        Significance level, by default 0.05
+        Significance level for the experiment effect tests (drives
+        ``stat_significance`` and the effect confidence intervals), by default 0.05
+    srm_alpha : float, optional
+        Significance level for the sample ratio mismatch (SRM) test only. Kept
+        independent of ``alpha`` so the SRM check always uses a fixed threshold
+        regardless of the experiment-level significance level. By default 0.05.
     regression_covariates : list[str], optional
         Covariates added as main effects to the regression formula. These columns are also
         subject to the same balance checks as ``balance_covariates`` and do not need to be
@@ -272,6 +277,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         polynomial_ipw: bool = False,
         instrument_col: str | None = None,
         alpha: float = 0.05,
+        srm_alpha: float = 0.05,
         regression_covariates: list[str] | None = None,
         compare_precision: bool | None = None,
         assess_overlap: bool = False,
@@ -390,6 +396,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         self.__check_input()
         self._alpha = alpha
+        self._srm_alpha = srm_alpha
         self._results = None
         self._precision_summary = None
         self._balance = []
@@ -3431,10 +3438,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 )
                 srm_pvalue = p_value
 
-                if p_value < self._alpha:
+                if p_value < self._srm_alpha:
                     srm_detected = True
                     self._logger.info(
-                        f"Significant mismatch detected (p < {self._alpha:.3f}). Observed ratio differs statistically from expected ratio."  # noqa: E501
+                        f"Significant mismatch detected (p < {self._srm_alpha:.3f}). Observed ratio differs statistically from expected ratio."  # noqa: E501
                     )
 
                 return sample_ratio, srm_detected, srm_pvalue
