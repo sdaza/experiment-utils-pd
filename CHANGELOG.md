@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.16](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.15...v0.5.16) (2026-06-17)
+
+
+### Bug Fixes
+
+* add independent srm_alpha parameter for sample ratio mismatch tests ([5b7fcf3](https://github.com/sdaza/experiment-utils-pd/commit/5b7fcf36f72018fd7a233738c3f18dfa21eec7ff))
+
 ## [0.5.15](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.14...v0.5.15) (2026-06-17)
 
 
