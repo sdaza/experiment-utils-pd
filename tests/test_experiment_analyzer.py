@@ -649,6 +649,29 @@ def test_plot_effects_relative_with_mcp_uses_fieller_ci():
     assert min(xs) <= -0.007
 
 
+def test_plot_effects_relative_xaxis_ticks_not_duplicated():
+    """Relative-effect x-ticks should adapt their precision so a tight range does
+    not collapse into duplicate labels (e.g. '2%', '2%', '2%')."""
+    results = pd.DataFrame(
+        {
+            "outcome": ["hours_bought"],
+            "treatment_group": [1],
+            "control_group": [0],
+            "relative_effect": [0.016],
+            "rel_effect_lower": [-0.0146],
+            "rel_effect_upper": [0.0475],
+            "standard_error": [0.0024],
+            "pvalue": [0.2],
+            "stat_significance": [0],
+        }
+    )
+    fig = plot_effects(results, effect="relative")
+    fig.canvas.draw()
+    labels = [t.get_text() for t in fig.axes[0].get_xticklabels() if t.get_text()]
+    assert all("%" in lbl for lbl in labels)
+    assert len(set(labels)) == len(labels), f"duplicate x tick labels: {labels}"
+
+
 def test_plot_effects_meta_analysis(simple_analyzer):
     import matplotlib.figure as mfig
 

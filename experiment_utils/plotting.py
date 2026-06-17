@@ -344,12 +344,16 @@ def _draw_panels_into_axes(
         ax.tick_params(axis="x", labelsize=8.5, colors="#64748b", pad=4)
         ax.set_xlabel(_x_label, fontsize=9.5, color="#64748b", labelpad=6)
         # Format x-axis ticks to match the annotation labels:
-        # relative effect panels: decimals → "15%" to match "+15.4%" annotations
-        # absolute pp panels: already scaled ×100, so ticks already match annotations
+        # relative effect panels are stored as fractions, so render them as
+        # percentages.  ``decimals=None`` lets matplotlib pick just enough
+        # decimal places to keep adjacent ticks distinct — a fixed "{x:.0%}"
+        # collapses a tight range (e.g. 1.5%, 2.0%, 2.2%) into duplicate "2%"
+        # labels.  Absolute pp panels are already scaled ×100, so their ticks
+        # already match the annotations and are left alone.
         if "relative" in eff_col:
-            from matplotlib.ticker import FuncFormatter
+            from matplotlib.ticker import PercentFormatter
 
-            ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0%}"))
+            ax.xaxis.set_major_formatter(PercentFormatter(xmax=1, decimals=None))
         ax.set_ylim(-0.6, n_rows - 0.4)
         ax.invert_yaxis()
         for spine in ("top", "right", "left"):
