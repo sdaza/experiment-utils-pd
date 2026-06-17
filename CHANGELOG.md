@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.14](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.13...v0.5.14) (2026-06-17)
+
+
+### Bug Fixes
+
+* Plot of confidence intervals for relative effects ([30c55e9](https://github.com/sdaza/experiment-utils-pd/commit/30c55e9a9d3f0aaec9644c2cee56215cdf73d622))
+
 ## [0.5.13](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.12...v0.5.13) (2026-05-25)
 
 
