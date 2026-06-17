@@ -7,7 +7,7 @@ from scipy.stats import truncnorm
 matplotlib.use("Agg")
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
-from experiment_utils.plotting import plot_effects
+from experiment_utils.plotting import _resolve_ci_cols, plot_effects
 
 
 @pytest.fixture
@@ -565,6 +565,88 @@ def test_plot_effects_pct_points_tolerates_noisy_zero_control_value():
 
     assert fig.axes[0].get_xlabel() == "Absolute Effect (pp)"
     assert any(text.get_text().startswith("+2.0pp") for text in fig.axes[0].texts)
+
+
+def test_resolve_ci_cols_uses_mcp_relative_columns():
+    """With MCP active, the relative-effect plot must use the precomputed
+    ``rel_effect_lower_mcp`` / ``rel_effect_upper_mcp`` (Fieller) columns, not
+    fabricate a CI from the absolute-effect standard error."""
+    data = pd.DataFrame(
+        {
+            "relative_effect": [0.029, 0.016],
+            "rel_effect_lower": [np.nan, np.nan],  # non-mcp rel CI not computed
+            "rel_effect_upper": [np.nan, np.nan],
+            "rel_effect_lower_mcp": [-0.007725, -0.014555],
+            "rel_effect_upper_mcp": [0.066569, 0.047460],
+            "standard_error": [0.0002025, 0.002437],  # absolute-effect SE (tiny)
+            "pvalue": [0.1, 0.2],
+            "stat_significance_mcp": [0, 0],
+        }
+    )
+    lo, hi, out = _resolve_ci_cols(
+        "rel_effect_lower", "rel_effect_upper", data, "stat_significance_mcp", "relative_effect"
+    )
+    assert lo == "rel_effect_lower_mcp"
+    assert hi == "rel_effect_upper_mcp"
+    # The wide Fieller interval must survive, not a narrow rel ± crit*SE_abs one.
+    assert out[lo].iloc[0] == pytest.approx(-0.007725)
+    assert out[hi].iloc[0] == pytest.approx(0.066569)
+
+
+def test_resolve_ci_cols_does_not_fabricate_relative_ci_from_abs_se():
+    """When MCP relative columns are absent, the helper must NOT reconstruct a
+    relative CI from the absolute standard error (dimensionally wrong)."""
+    data = pd.DataFrame(
+        {
+            "relative_effect": [0.029],
+            "rel_effect_lower": [-0.05],
+            "rel_effect_upper": [0.10],
+            "standard_error": [0.0002],  # absolute-effect SE
+            "pvalue": [0.1],
+            "stat_significance_mcp": [0],
+        }
+    )
+    lo, hi, out = _resolve_ci_cols(
+        "rel_effect_lower", "rel_effect_upper", data, "stat_significance_mcp", "relative_effect"
+    )
+    assert (lo, hi) == ("rel_effect_lower", "rel_effect_upper")
+    # Untouched: the absolute SE was not used to overwrite the relative bounds.
+    assert out[lo].iloc[0] == pytest.approx(-0.05)
+    assert out[hi].iloc[0] == pytest.approx(0.10)
+
+
+def test_plot_effects_relative_with_mcp_uses_fieller_ci():
+    """End-to-end: plotting the relative effect under MCP draws the wide Fieller
+    interval, not the spuriously narrow rel ± crit*SE_abs interval."""
+    results = pd.DataFrame(
+        {
+            "outcome": ["new_tutoring_subscribers"],
+            "treatment_group": [1],
+            "control_group": [0],
+            "relative_effect": [0.029],
+            "rel_effect_lower": [np.nan],
+            "rel_effect_upper": [np.nan],
+            "rel_effect_lower_mcp": [-0.007725],
+            "rel_effect_upper_mcp": [0.066569],
+            "standard_error": [0.0002025],
+            "pvalue": [0.1],
+            "pvalue_mcp": [0.2],
+            "stat_significance_mcp": [0],
+            "mcp_method": ["holm"],
+        }
+    )
+    fig = plot_effects(results, effect="relative")
+    # The drawn horizontal CI (ax.hlines -> LineCollection) should span the
+    # Fieller bounds (width ~0.074), not the bogus rel ± 1.96*SE_abs (~0.0008).
+    xs = [
+        x
+        for coll in fig.axes[0].collections
+        if hasattr(coll, "get_segments")
+        for seg in coll.get_segments()
+        for x, _ in seg
+    ]
+    assert max(xs) >= 0.06
+    assert min(xs) <= -0.007
 
 
 def test_plot_effects_meta_analysis(simple_analyzer):

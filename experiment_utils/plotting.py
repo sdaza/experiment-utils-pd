@@ -100,8 +100,8 @@ def _resolve_ci_cols(
     matches the significance decision.  Without this, a gray (non-significant)
     dot can have a CI that visually excludes 0 — inconsistent with the legend.
     """
-    _mcp_lo = lo_col.replace("_lower", "_lower_mcp").replace("effect_lower", "effect_lower_mcp")
-    _mcp_hi = hi_col.replace("_upper", "_upper_mcp").replace("effect_upper", "effect_upper_mcp")
+    _mcp_lo = f"{lo_col}_mcp"
+    _mcp_hi = f"{hi_col}_mcp"
 
     mcp_cols_exist = _mcp_lo in data.columns and _mcp_hi in data.columns and not data[_mcp_lo].isna().all()
 
@@ -110,6 +110,16 @@ def _resolve_ci_cols(
 
     if mcp_cols_exist:
         return _mcp_lo, _mcp_hi, data
+
+    # mcp CI columns are absent.  We can only derive them from the (Gaussian)
+    # standard_error, which is the standard error of the *absolute* effect.
+    # Re-deriving a relative-effect CI from the absolute SE is dimensionally
+    # wrong (it ignores the control-mean scaling and the Fieller geometry), so
+    # for relative effects we leave the pre-computed columns untouched rather
+    # than fabricate a bogus interval.
+    is_relative = "relative" in (eff_col or lo_col)
+    if is_relative:
+        return lo_col, hi_col, data
 
     # mcp CI columns are absent — compute them from pvalue ratio or row count.
     if "standard_error" not in data.columns or "pvalue" not in data.columns:
@@ -1029,7 +1039,13 @@ def plot_effects(
 
     if len(effects) == 1:
         eff_col, lo_col, hi_col, x_label = _effect_cols(effects[0])
-        if lo_col not in data.columns or data[lo_col].isna().all():
+        # ``standard_error`` is the standard error of the *absolute* effect, so it
+        # can only be used to reconstruct a missing *absolute* CI.  Reconstructing
+        # a relative-effect CI from it is dimensionally wrong (it ignores the
+        # control-mean scaling / Fieller geometry), so we skip the fallback for
+        # relative effects and leave the precomputed columns as-is.
+        is_relative = eff_col == "relative_effect"
+        if not is_relative and (lo_col not in data.columns or data[lo_col].isna().all()):
             df_col = data["df_resid"] if "df_resid" in data.columns else None
             crit = _critical_value(alpha, df_col)
             data[lo_col] = data[eff_col] - crit * data["standard_error"]
@@ -1038,7 +1054,7 @@ def plot_effects(
             meta_df = meta_df.copy()
             if "_label" not in meta_df.columns:
                 meta_df["_label"] = "Pooled"
-            if lo_col not in meta_df.columns or meta_df[lo_col].isna().all():
+            if not is_relative and (lo_col not in meta_df.columns or meta_df[lo_col].isna().all()):
                 z = stats.norm.ppf(1 - alpha / 2)
                 meta_df[lo_col] = meta_df[eff_col] - z * meta_df["standard_error"]
                 meta_df[hi_col] = meta_df[eff_col] + z * meta_df["standard_error"]
