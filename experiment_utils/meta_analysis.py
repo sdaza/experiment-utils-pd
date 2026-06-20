@@ -363,22 +363,34 @@ class MetaAnalysisMixin:
         return meta_results
 
     def aggregate_effects(
-        self, data: pd.DataFrame | None = None, grouping_cols: list[str] | None = None
+        self,
+        data: pd.DataFrame | None = None,
+        grouping_cols: list[str] | None = None,
+        prior_success_rate: float | None = None,
+        power: float = 0.80,
     ) -> pd.DataFrame:
         """
         Aggregate effects using a weighted average based on the size of the treatment group.
 
         Parameters
         ----------
-        data : pd.DataFrame
-            The DataFrame containing the results.
+        data : pd.DataFrame, optional
+            The DataFrame containing the results. Defaults to self._results.
         grouping_cols : list, optional
-            The columns to group by. Defaults to ['outcome']
+            The columns to group by. Defaults to ['outcome'].
+        prior_success_rate : float, optional
+            When provided, appends a ``false_positive_risk`` column computed via
+            Kohavi & Chen (2024). Must be in (0, 1). Use your historical win rate
+            as a starting point (e.g. 0.12 for 12%).
+        power : float
+            Assumed statistical power used for FPR computation. Defaults to 0.80.
 
         Returns
         -------
-        A Pandas DataFrame with combined results
+        pd.DataFrame with combined results, optionally including ``false_positive_risk``.
         """
+        from .utils import false_positive_risk as _fpr
+
         if data is None:
             data = self._results
 
@@ -395,7 +407,15 @@ class MetaAnalysisMixin:
         existing_columns = [col for col in result_columns if col in aggregate_results.columns]
         remaining_columns = [col for col in aggregate_results.columns if col not in existing_columns]
         final_columns = existing_columns + remaining_columns
-        return aggregate_results[final_columns]
+        result = aggregate_results[final_columns]
+
+        if prior_success_rate is not None:
+            if not 0 < prior_success_rate < 1:
+                raise ValueError("prior_success_rate must be strictly between 0 and 1")
+            result = result.copy()
+            result["false_positive_risk"] = _fpr(alpha=self._alpha, power=power, prior_success_rate=prior_success_rate)
+
+        return result
 
     def _compute_weighted_effect(self, group: pd.DataFrame) -> pd.Series:
         weights = group["treatment_units"].astype(float)

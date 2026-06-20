@@ -130,3 +130,50 @@ def test_fpr_summary_invalid_prior():
         ea.fpr_summary(prior_success_rate=0.0)
     with pytest.raises(ValueError):
         ea.fpr_summary(prior_success_rate=1.5)
+
+
+def _make_multi_experiment_analyzer():
+    np.random.seed(7)
+    rows = []
+    for exp_id in [1, 2, 3]:
+        n = 1000
+        treatment = np.random.binomial(1, 0.5, n)
+        outcome = np.random.binomial(1, 0.10 + 0.02 * treatment, n)
+        rows.append(
+            pd.DataFrame(
+                {
+                    "experiment": exp_id,
+                    "treatment": treatment,
+                    "outcome": outcome,
+                }
+            )
+        )
+    df = pd.concat(rows, ignore_index=True)
+    ea = ExperimentAnalyzer(
+        data=df,
+        outcomes=["outcome"],
+        treatment_col="treatment",
+        experiment_identifier=["experiment"],
+        alpha=0.05,
+    )
+    ea.get_effects()
+    return ea
+
+
+def test_aggregate_effects_fpr_column_present():
+    ea = _make_multi_experiment_analyzer()
+    agg = ea.aggregate_effects(prior_success_rate=0.15)
+    assert "false_positive_risk" in agg.columns
+
+
+def test_aggregate_effects_fpr_column_absent_by_default():
+    ea = _make_multi_experiment_analyzer()
+    agg = ea.aggregate_effects()
+    assert "false_positive_risk" not in agg.columns
+
+
+def test_aggregate_effects_fpr_values_valid():
+    ea = _make_multi_experiment_analyzer()
+    agg = ea.aggregate_effects(prior_success_rate=0.15)
+    assert (agg["false_positive_risk"] >= 0).all()
+    assert (agg["false_positive_risk"] <= 1).all()
