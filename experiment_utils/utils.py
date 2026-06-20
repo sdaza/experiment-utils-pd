@@ -959,3 +959,81 @@ def balanced_random_assignment(
         print("\n" + "=" * 70)
 
     return final_assignments
+
+
+def false_positive_risk(alpha: float, power: float, prior_success_rate: float) -> float:
+    """
+    False Positive Risk (FPR) via Bayes Rule — Kohavi & Chen (2024).
+
+    FPR = P(H0 is true | statistically significant result)
+        = (alpha * pi) / (alpha * pi + power * (1 - pi))
+    where pi = 1 - prior_success_rate.
+
+    Parameters
+    ----------
+    alpha : float
+        Significance level (e.g. 0.05).
+    power : float
+        Statistical power (1 - beta), e.g. 0.80.
+    prior_success_rate : float
+        Estimated proportion of experiments with a true positive effect,
+        derived from historical win rates (must be in (0, 1)).
+
+    Returns
+    -------
+    float
+        Probability that a statistically significant result is a false positive.
+
+    Examples
+    --------
+    >>> # alpha=0.10, power=0.80, prior_success_rate=0.12 -> ~47.8% FPR
+    >>> false_positive_risk(alpha=0.10, power=0.80, prior_success_rate=0.12)
+    0.478...
+    """
+    if not 0 < prior_success_rate < 1:
+        raise ValueError("prior_success_rate must be strictly between 0 and 1")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be strictly between 0 and 1")
+    if not 0 < power <= 1:
+        raise ValueError("power must be in (0, 1]")
+    pi = 1.0 - prior_success_rate
+    return (alpha * pi) / (alpha * pi + power * (1.0 - pi))
+
+
+def estimate_true_success_rate(win_rate: float, alpha: float, power: float) -> float:
+    """
+    Estimate the true success rate from the observed win rate — Kohavi & Chen (2024, §4.3).
+
+    Inverts the conditional probability formula:
+        P(SS) = pi * (alpha + beta - 1) + 1 - beta
+    Solving for pi (= 1 - true_success_rate):
+        pi = (power - win_rate) / (power - alpha)
+
+    Result is clamped to [0, 1] — a win_rate below alpha implies all wins are
+    false positives (true success rate → 0).
+
+    Parameters
+    ----------
+    win_rate : float
+        Observed proportion of statistically significant positive results.
+    alpha : float
+        Significance level used in the experiments (e.g. 0.05).
+    power : float
+        Statistical power (1 - beta), e.g. 0.80.
+
+    Returns
+    -------
+    float
+        Estimated proportion of experiments with a genuine positive effect.
+
+    Examples
+    --------
+    >>> # win_rate=0.12, alpha=0.10, power=0.80 -> ~2.9% true success rate
+    >>> estimate_true_success_rate(win_rate=0.12, alpha=0.10, power=0.80)
+    0.028...
+    """
+    if power == alpha:
+        raise ValueError("power and alpha cannot be equal (division by zero)")
+    pi = (power - win_rate) / (power - alpha)
+    pi = float(np.clip(pi, 0.0, 1.0))
+    return 1.0 - pi
