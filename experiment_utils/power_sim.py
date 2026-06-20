@@ -2735,3 +2735,60 @@ class PowerSim:
         llr = PowerSim.msprt_llr(z=z, se=se, tau=tau)
         boundary = PowerSim.msprt_boundary(alpha=alpha)
         return bool(llr >= boundary)
+
+    @staticmethod
+    def goldilocks_alpha_spending(
+        alpha_total: float = 0.05,
+        method: str = "goldilocks",
+    ) -> tuple[float, float]:
+        """
+        Alpha-spending boundaries for two-stage sequential experiment design.
+
+        Returns (alpha1, alpha2) — the significance thresholds for the first and
+        second looks. Each rule is anchored to its canonical two-look nominal
+        alphas at alpha_total=0.05 and scaled proportionally for other targets.
+
+        Parameters
+        ----------
+        alpha_total : float
+            Target overall significance level. Defaults to 0.05.
+        method : str
+            Spending rule:
+
+            - ``'goldilocks'`` (default): (alpha1, alpha2) = (0.01, 0.046) at
+              alpha_total=0.05. Recommended by Kohavi & Chen (2024) —
+              conservative first look, liberal second look.
+            - ``'obrien_fleming'``: (0.005, 0.048) at alpha_total=0.05 — most
+              conservative at the first look.
+            - ``'pocock'``: equal spending at each look — (0.029, 0.029) at
+              alpha_total=0.05.
+
+        Returns
+        -------
+        tuple[float, float]
+            (alpha1, alpha2)
+
+        Examples
+        --------
+        >>> # Design a two-stage test: run 2 weeks, extend if 0.01 < p < 0.10
+        >>> a1, a2 = PowerSim.goldilocks_alpha_spending()
+        >>> print(f"Stop early if p < {a1}, extend and stop if combined p < {a2}")
+        Stop early if p < 0.01, extend and stop if combined p < 0.046
+
+        References
+        ----------
+        Kohavi & Chen (2024), "False Positives in A/B Tests", Section 6.
+        Pocock (1977); O'Brien & Fleming (1979) — canonical two-look boundaries.
+        """
+        # Canonical two-look nominal alphas at alpha_total = 0.05.
+        canonical = {
+            "goldilocks": (0.01, 0.046),
+            "obrien_fleming": (0.005, 0.048),
+            "pocock": (0.029, 0.029),
+        }
+        if method not in canonical:
+            raise ValueError(f"method must be one of {tuple(canonical)}, got '{method}'")
+
+        base1, base2 = canonical[method]
+        scale = alpha_total / 0.05
+        return (float(base1 * scale), float(base2 * scale))
