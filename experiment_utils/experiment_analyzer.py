@@ -1218,8 +1218,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         }.issubset(results_df.columns)
         if has_unadjusted_ci_bounds:
             valid_unadjusted_ci = (
-                results_df["unadjusted_abs_effect_lower"].notna()
-                & results_df["unadjusted_abs_effect_upper"].notna()
+                results_df["unadjusted_abs_effect_lower"].notna() & results_df["unadjusted_abs_effect_upper"].notna()
             )
             results_df["unadjusted_ci_width"] = np.nan
             results_df.loc[valid_unadjusted_ci, "unadjusted_ci_width"] = (
@@ -1268,41 +1267,38 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         """
         Build a separate precision diagnostics table without bloating results.
         """
-        preferred_cols = (
-            self._experiment_identifier
-            + [
-                "outcome",
-                "treatment_group",
-                "control_group",
-                "adjustment",
-                "method",
-                "estimand",
-                "inference_method",
-                "model_type",
-                "absolute_effect",
-                "unadjusted_absolute_effect",
-                "absolute_effect_change",
-                "relative_effect",
-                "unadjusted_relative_effect",
-                "standard_error",
-                "unadjusted_standard_error",
-                "standard_error_ratio",
-                "standard_error_reduction",
-                "precision",
-                "unadjusted_precision",
-                "precision_gain",
-                "ci_width",
-                "unadjusted_ci_width",
-                "ci_width_reduction",
-                "pvalue",
-                "unadjusted_pvalue",
-                "balance",
-                "ess_treatment",
-                "ess_control",
-                "ess_treatment_reduction",
-                "ess_control_reduction",
-            ]
-        )
+        preferred_cols = self._experiment_identifier + [
+            "outcome",
+            "treatment_group",
+            "control_group",
+            "adjustment",
+            "method",
+            "estimand",
+            "inference_method",
+            "model_type",
+            "absolute_effect",
+            "unadjusted_absolute_effect",
+            "absolute_effect_change",
+            "relative_effect",
+            "unadjusted_relative_effect",
+            "standard_error",
+            "unadjusted_standard_error",
+            "standard_error_ratio",
+            "standard_error_reduction",
+            "precision",
+            "unadjusted_precision",
+            "precision_gain",
+            "ci_width",
+            "unadjusted_ci_width",
+            "ci_width_reduction",
+            "pvalue",
+            "unadjusted_pvalue",
+            "balance",
+            "ess_treatment",
+            "ess_control",
+            "ess_treatment_reduction",
+            "ess_control_reduction",
+        ]
         cols = [col for col in preferred_cols if col in results_df.columns]
         return results_df[cols].copy()
 
@@ -2996,6 +2992,65 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         else:
             self._logger.warning("Run the `get_effects` function first!")
             return None
+
+    def fpr_summary(self, prior_success_rate: float, power: float = 0.80) -> pd.DataFrame:
+        """
+        Portfolio-level False Positive Risk summary — Kohavi & Chen (2024).
+
+        Computes, per outcome, the probability that a statistically significant
+        result is actually a false positive, given the organisation's historical
+        win rate as a prior.
+
+        Parameters
+        ----------
+        prior_success_rate : float
+            Estimated proportion of experiments with a true positive effect.
+            Use your historical win rate as a starting point (e.g. 0.12 for 12%).
+            Must be in (0, 1).
+        power : float
+            Assumed statistical power (1 - beta). Defaults to 0.80.
+
+        Returns
+        -------
+        pd.DataFrame with columns:
+            outcome, n_total, n_significant, win_rate,
+            false_positive_risk, estimated_true_success_rate
+
+        Raises
+        ------
+        ValueError
+            If get_effects() has not been called yet, or prior_success_rate is invalid.
+
+        Examples
+        --------
+        >>> ea.get_effects()
+        >>> ea.fpr_summary(prior_success_rate=0.12)
+        """
+        from .utils import estimate_true_success_rate, false_positive_risk
+
+        if self._results is None:
+            raise ValueError("Call get_effects() before fpr_summary().")
+        if not 0 < prior_success_rate < 1:
+            raise ValueError("prior_success_rate must be strictly between 0 and 1")
+
+        rows = []
+        for outcome, grp in self._results.groupby("outcome"):
+            n_total = len(grp)
+            n_sig = int(grp["stat_significance"].sum())
+            win_rate = n_sig / n_total if n_total > 0 else 0.0
+            fpr = false_positive_risk(alpha=self._alpha, power=power, prior_success_rate=prior_success_rate)
+            true_sr = estimate_true_success_rate(win_rate=win_rate, alpha=self._alpha, power=power)
+            rows.append(
+                {
+                    "outcome": outcome,
+                    "n_total": n_total,
+                    "n_significant": n_sig,
+                    "win_rate": round(win_rate, 4),
+                    "false_positive_risk": round(fpr, 4),
+                    "estimated_true_success_rate": round(true_sr, 4),
+                }
+            )
+        return pd.DataFrame(rows)
 
     @property
     def precision_summary(self) -> pd.DataFrame | None:

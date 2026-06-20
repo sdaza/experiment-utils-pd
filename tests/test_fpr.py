@@ -1,5 +1,8 @@
+import numpy as np
+import pandas as pd
 import pytest
 
+from experiment_utils import ExperimentAnalyzer
 from experiment_utils import false_positive_risk as fpr_from_init
 from experiment_utils.utils import estimate_true_success_rate, false_positive_risk
 
@@ -70,3 +73,60 @@ def test_exported_from_init():
     # Verify the function is importable from the top-level package
     result = fpr_from_init(alpha=0.05, power=0.80, prior_success_rate=0.15)
     assert 0 < result < 1
+
+
+def _make_analyzer():
+    np.random.seed(42)
+    n = 2000
+    treatment = np.random.binomial(1, 0.5, n)
+    outcome = np.random.binomial(1, 0.10 + 0.03 * treatment, n)
+    df = pd.DataFrame({"treatment": treatment, "outcome": outcome})
+    ea = ExperimentAnalyzer(data=df, outcomes=["outcome"], treatment_col="treatment", alpha=0.05)
+    ea.get_effects()
+    return ea
+
+
+def test_fpr_summary_returns_dataframe():
+    ea = _make_analyzer()
+    summary = ea.fpr_summary(prior_success_rate=0.15)
+    assert isinstance(summary, pd.DataFrame)
+
+
+def test_fpr_summary_columns():
+    ea = _make_analyzer()
+    summary = ea.fpr_summary(prior_success_rate=0.15)
+    for col in [
+        "outcome",
+        "n_total",
+        "n_significant",
+        "win_rate",
+        "false_positive_risk",
+        "estimated_true_success_rate",
+    ]:
+        assert col in summary.columns, f"Missing column: {col}"
+
+
+def test_fpr_summary_values_in_range():
+    ea = _make_analyzer()
+    summary = ea.fpr_summary(prior_success_rate=0.15)
+    assert (summary["false_positive_risk"] >= 0).all()
+    assert (summary["false_positive_risk"] <= 1).all()
+    assert (summary["estimated_true_success_rate"] >= 0).all()
+    assert (summary["estimated_true_success_rate"] <= 1).all()
+
+
+def test_fpr_summary_requires_get_effects():
+    np.random.seed(0)
+    n = 500
+    df = pd.DataFrame({"treatment": np.random.binomial(1, 0.5, n), "outcome": np.random.binomial(1, 0.1, n)})
+    ea = ExperimentAnalyzer(data=df, outcomes=["outcome"], treatment_col="treatment")
+    with pytest.raises(ValueError, match="get_effects"):
+        ea.fpr_summary(prior_success_rate=0.15)
+
+
+def test_fpr_summary_invalid_prior():
+    ea = _make_analyzer()
+    with pytest.raises(ValueError):
+        ea.fpr_summary(prior_success_rate=0.0)
+    with pytest.raises(ValueError):
+        ea.fpr_summary(prior_success_rate=1.5)
