@@ -3052,6 +3052,115 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             )
         return pd.DataFrame(rows)
 
+    def msprt_summary(
+        self,
+        tau: float | None = None,
+        tau_rel: float | None = None,
+        alpha: float | None = None,
+    ) -> pd.DataFrame:
+        """
+        Always-valid sequential-testing (mSPRT) verdict per comparison — Johari et al. (2017).
+
+        For each row of the results from get_effects(), computes the mixture
+        Sequential Probability Ratio Test log-likelihood ratio and whether the
+        current (accumulated) data is conclusive. Unlike fixed-horizon p-values,
+        this may be evaluated repeatedly over time without inflating type-I error.
+
+        Parameters
+        ----------
+        tau : float, optional
+            Prior standard deviation on the ABSOLUTE effect size, on the same
+            scale as ``standard_error`` (e.g. 0.02 for a 2pp expected lift).
+        tau_rel : float, optional
+            Prior SD expressed as a fraction of the control mean (e.g. 0.10 for an
+            expected ~10% lift). Converted per row as ``tau_rel * |control_value|``.
+        alpha : float, optional
+            Significance level. Defaults to ``self._alpha``.
+
+        Exactly one of ``tau`` / ``tau_rel`` must be supplied, and it must be > 0.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per comparison: identifier columns (outcome, and any of
+            experiment_id / treatment_group / control_group present in results)
+            plus ``z, se, tau, llr, boundary, should_stop``.
+
+        Raises
+        ------
+        ValueError
+            If get_effects() has not been called; if neither or both of tau/tau_rel
+            are given; if the supplied tau/tau_rel is <= 0; or if alpha is not in (0, 1).
+
+        Notes
+        -----
+        mSPRT is a sequential rule: re-run on each accumulating-data snapshot and
+        call this each time. ``should_stop=True`` means the test is conclusive.
+
+        Examples
+        --------
+        >>> ea.get_effects()
+        >>> ea.msprt_summary(tau=0.02)         # absolute prior SD
+        >>> ea.msprt_summary(tau_rel=0.10)     # ~10% relative lift prior
+        """
+        from .power_sim import PowerSim
+
+        if self._results is None:
+            raise ValueError("Call get_effects() before msprt_summary().")
+        if (tau is None) == (tau_rel is None):
+            raise ValueError("Provide exactly one of tau (absolute) or tau_rel (relative).")
+        if tau is not None and tau <= 0:
+            raise ValueError("tau must be positive")
+        if tau_rel is not None and tau_rel <= 0:
+            raise ValueError("tau_rel must be positive")
+
+        alpha = self._alpha if alpha is None else alpha
+        if not 0 < alpha < 1:
+            raise ValueError("alpha must be strictly between 0 and 1")
+
+        boundary = PowerSim.msprt_boundary(alpha)
+        id_cols = [
+            c for c in ["outcome", "experiment_id", "treatment_group", "control_group"] if c in self._results.columns
+        ]
+
+        rows = []
+        for _, r in self._results.iterrows():
+            se = r["standard_error"]
+            effect = r["absolute_effect"]
+            if tau is not None:
+                tau_abs = tau
+            else:
+                ctrl = abs(r["control_value"]) if pd.notna(r["control_value"]) else np.nan
+                tau_abs = tau_rel * ctrl
+
+            valid = pd.notna(se) and se > 0 and pd.notna(effect) and pd.notna(tau_abs) and tau_abs > 0
+            if valid:
+                z = effect / se
+                llr = PowerSim.msprt_llr(z=z, se=se, tau=tau_abs)
+                should_stop = bool(llr >= boundary)
+            else:
+                self._logger.warning(
+                    f"msprt_summary: degenerate row (se={se}, tau={tau_abs}) — returning llr=NaN, should_stop=False"
+                )
+                z = effect / se if (pd.notna(se) and se > 0 and pd.notna(effect)) else np.nan
+                llr = np.nan
+                should_stop = False
+
+            row = {c: r[c] for c in id_cols}
+            row.update(
+                {
+                    "z": z,
+                    "se": se,
+                    "tau": tau_abs,
+                    "llr": llr,
+                    "boundary": boundary,
+                    "should_stop": should_stop,
+                }
+            )
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
     @property
     def precision_summary(self) -> pd.DataFrame | None:
         """
