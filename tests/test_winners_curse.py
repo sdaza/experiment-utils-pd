@@ -1,8 +1,112 @@
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.stats import norm
 
+from experiment_utils import ExperimentAnalyzer
 from experiment_utils.utils import empirical_bayes_shrinkage, winners_curse_estimate
+
+
+def _fitted_analyzer(results: pd.DataFrame) -> ExperimentAnalyzer:
+    # Build an analyzer and inject a synthetic results frame (bypassing get_effects).
+    ea = ExperimentAnalyzer(
+        data=pd.DataFrame({"treatment": [0, 1], "y": [0.0, 1.0]}),
+        outcomes=["y"],
+        treatment_col="treatment",
+    )
+    ea._results = results
+    return ea
+
+
+def _results_frame():
+    return pd.DataFrame(
+        {
+            "outcome": ["rev", "rev", "conv"],
+            "treatment_group": [1, 1, 1],
+            "control_group": [0, 0, 0],
+            "effect_type": ["mean_difference", "mean_difference", "log_odds"],
+            "absolute_effect": [5.0, 0.2, 0.4],
+            "standard_error": [2.0, 2.0, 0.18],
+            "control_value": [50.0, 50.0, 0.1],
+            "stat_significance": [1, 0, 1],
+        }
+    )
+
+
+def test_summary_requires_get_effects():
+    ea = ExperimentAnalyzer(
+        data=pd.DataFrame({"treatment": [0, 1], "y": [0.0, 1.0]}),
+        outcomes=["y"],
+        treatment_col="treatment",
+    )
+    with pytest.raises(ValueError, match="get_effects"):
+        ea.winners_curse_summary()
+
+
+def test_summary_bad_method():
+    ea = _fitted_analyzer(_results_frame())
+    with pytest.raises(ValueError):
+        ea.winners_curse_summary(method="nope")
+
+
+def test_conditional_filters_to_significant():
+    ea = _fitted_analyzer(_results_frame())
+    out = ea.winners_curse_summary(method="conditional")
+    # only the 2 significant rows survive
+    assert len(out) == 2
+    assert {"corrected_effect", "corrected_ci_lower", "corrected_ci_upper", "shrinkage"} <= set(out.columns)
+    # mean_difference row: |corrected| < |observed|
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    assert abs(rev["corrected_effect"]) < 5.0
+
+
+def test_conditional_log_odds_relative_is_exp():
+    ea = _fitted_analyzer(_results_frame())
+    out = ea.winners_curse_summary(method="conditional")
+    conv = out[out["outcome"] == "conv"].iloc[0]
+    assert np.isclose(conv["corrected_relative_effect"], np.exp(conv["corrected_effect"]) - 1)
+    assert np.isclose(conv["corrected_rel_ci_lower"], np.exp(conv["corrected_ci_lower"]) - 1)
+
+
+def test_conditional_additive_relative_divides_control():
+    ea = _fitted_analyzer(_results_frame())
+    out = ea.winners_curse_summary(method="conditional")
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    assert np.isclose(rev["corrected_relative_effect"], rev["corrected_effect"] / 50.0)
+
+
+def test_conditional_degenerate_se_is_nan():
+    df = _results_frame()
+    df.loc[0, "standard_error"] = 0.0
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="conditional")
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    assert pd.isna(rev["corrected_effect"])
+
+
+def test_empirical_bayes_groups_by_effect_type():
+    # 4 mean_difference + 3 log_odds under one outcome -> two separate tau2.
+    df = pd.DataFrame(
+        {
+            "outcome": ["m"] * 7,
+            "effect_type": ["mean_difference"] * 4 + ["log_odds"] * 3,
+            "absolute_effect": [5.0, 1.0, 8.0, 0.5, 0.4, -0.2, 0.9],
+            "standard_error": [2.0, 1.0, 3.0, 0.8, 0.18, 0.2, 0.3],
+            "control_value": [50.0] * 4 + [0.1] * 3,
+            "stat_significance": [1, 1, 1, 1, 1, 1, 1],
+        }
+    )
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="empirical_bayes")
+    assert out["tau2"].nunique() == 2  # one tau2 per effect_type group
+
+
+def test_empirical_bayes_too_few_is_nan():
+    df = _results_frame()  # conv group has only 1 log_odds row
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="empirical_bayes")
+    conv = out[out["outcome"] == "conv"].iloc[0]
+    assert pd.isna(conv["corrected_effect"])
 
 
 def test_returns_documented_keys():

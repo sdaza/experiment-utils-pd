@@ -3161,6 +3161,180 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         return pd.DataFrame(rows)
 
+    def winners_curse_summary(
+        self,
+        method: str = "conditional",
+        alpha: float | None = None,
+        ci: float = 0.95,
+        group_by: str = "outcome",
+    ) -> pd.DataFrame:
+        """
+        Data-driven winner's-curse correction for the effects in get_effects().
+
+        Two modes:
+
+        - ``method="conditional"``: filter to statistically significant rows
+          (MCP-aware) and de-bias each via :func:`winners_curse_estimate`
+          (truncated-normal median-unbiased estimate + selection-adjusted CI).
+        - ``method="empirical_bayes"``: shrink estimates toward 0 within each
+          ``(group_by, effect_type)`` group via :func:`empirical_bayes_shrinkage`.
+
+        The correction runs on ``absolute_effect``/``standard_error``. Relative
+        columns are derived per ``effect_type``: ``exp(corrected) - 1`` for log
+        effect types (``log_odds``, ``log_rate_ratio``, ``log_hazard_ratio``),
+        else ``corrected / control_value`` (treating the control mean as fixed;
+        NaN when ``control_value`` is 0/NaN).
+
+        Returns
+        -------
+        pd.DataFrame
+            Identifier columns plus ``effect_type``, ``absolute_effect``,
+            ``standard_error``, ``control_value``, ``corrected_effect``,
+            ``corrected_ci_lower``, ``corrected_ci_upper``,
+            ``corrected_relative_effect``, ``corrected_rel_ci_lower``,
+            ``corrected_rel_ci_upper``, ``shrinkage`` (and ``tau2`` for
+            empirical Bayes).
+        """
+        from .utils import empirical_bayes_shrinkage, winners_curse_estimate
+
+        if self._results is None:
+            raise ValueError("Call get_effects() before winners_curse_summary().")
+        if method not in {"conditional", "empirical_bayes"}:
+            raise ValueError("method must be 'conditional' or 'empirical_bayes'")
+        alpha = self._alpha if alpha is None else alpha
+        if not 0 < alpha < 1:
+            raise ValueError("alpha must be strictly between 0 and 1")
+        if not 0 < ci < 1:
+            raise ValueError("ci must be strictly between 0 and 1")
+
+        df = self._results
+        id_cols = [c for c in ["outcome", "experiment_id", "treatment_group", "control_group"] if c in df.columns]
+        log_types = {"log_odds", "log_rate_ratio", "log_hazard_ratio"}
+
+        def _relativize(effect_type, control_value, corrected, lo, hi):
+            if pd.isna(corrected):
+                return np.nan, np.nan, np.nan
+            if effect_type in log_types:
+                return np.exp(corrected) - 1.0, np.exp(lo) - 1.0, np.exp(hi) - 1.0
+            if pd.isna(control_value) or control_value == 0:
+                return np.nan, np.nan, np.nan
+            return corrected / control_value, lo / control_value, hi / control_value
+
+        def _base_row(r):
+            row = {c: r[c] for c in id_cols}
+            row.update(
+                {
+                    "effect_type": r.get("effect_type"),
+                    "absolute_effect": r["absolute_effect"],
+                    "standard_error": r["standard_error"],
+                    "control_value": r.get("control_value", np.nan),
+                }
+            )
+            return row
+
+        def _nan_row(r, extra=None):
+            row = _base_row(r)
+            row.update(
+                {
+                    "corrected_effect": np.nan,
+                    "corrected_ci_lower": np.nan,
+                    "corrected_ci_upper": np.nan,
+                    "corrected_relative_effect": np.nan,
+                    "corrected_rel_ci_lower": np.nan,
+                    "corrected_rel_ci_upper": np.nan,
+                    "shrinkage": np.nan,
+                }
+            )
+            if extra:
+                row.update(extra)
+            return row
+
+        rows = []
+
+        if method == "conditional":
+            if "pvalue_mcp" in df.columns and "stat_significance_mcp" in df.columns:
+                sig = df["stat_significance_mcp"] == 1
+            else:
+                sig = df["stat_significance"] == 1
+            df_sig = df[sig]
+            if df_sig.empty:
+                self._logger.warning(
+                    "winners_curse_summary: no statistically significant rows; returning empty DataFrame."
+                )
+                return pd.DataFrame()
+            for _, r in df_sig.iterrows():
+                se, b = r["standard_error"], r["absolute_effect"]
+                if not (pd.notna(se) and se > 0 and pd.notna(b)):
+                    self._logger.warning(
+                        f"winners_curse_summary: degenerate row (se={se}, effect={b}) -> NaN correction."
+                    )
+                    rows.append(_nan_row(r))
+                    continue
+                est = winners_curse_estimate(float(b), float(se), alpha=alpha, ci=ci)
+                rel, rlo, rhi = _relativize(
+                    r.get("effect_type"),
+                    r.get("control_value", np.nan),
+                    est["corrected"],
+                    est["ci_lower"],
+                    est["ci_upper"],
+                )
+                row = _base_row(r)
+                row.update(
+                    {
+                        "corrected_effect": est["corrected"],
+                        "corrected_ci_lower": est["ci_lower"],
+                        "corrected_ci_upper": est["ci_upper"],
+                        "corrected_relative_effect": rel,
+                        "corrected_rel_ci_lower": rlo,
+                        "corrected_rel_ci_upper": rhi,
+                        "shrinkage": est["shrinkage"],
+                    }
+                )
+                rows.append(row)
+            return pd.DataFrame(rows)
+
+        # empirical_bayes
+        if group_by not in df.columns:
+            raise ValueError(f"group_by column '{group_by}' not found in results")
+        for _, grp in df.groupby([group_by, "effect_type"], dropna=False):
+            valid = grp["standard_error"].notna() & (grp["standard_error"] > 0) & grp["absolute_effect"].notna()
+            gv = grp[valid]
+            if len(gv) < 3:
+                self._logger.warning(
+                    f"winners_curse_summary: group has {len(gv)} usable estimate(s) (<3); EB skipped, NaN returned."
+                )
+                for _, r in grp.iterrows():
+                    rows.append(_nan_row(r, extra={"tau2": np.nan}))
+                continue
+            eb = empirical_bayes_shrinkage(
+                gv["absolute_effect"].to_numpy(float), gv["standard_error"].to_numpy(float), prior_mean=0.0, ci=ci
+            )
+            for i, (_, r) in enumerate(gv.iterrows()):
+                rel, rlo, rhi = _relativize(
+                    r.get("effect_type"),
+                    r.get("control_value", np.nan),
+                    eb["shrunk"][i],
+                    eb["ci_lower"][i],
+                    eb["ci_upper"][i],
+                )
+                row = _base_row(r)
+                row.update(
+                    {
+                        "corrected_effect": eb["shrunk"][i],
+                        "corrected_ci_lower": eb["ci_lower"][i],
+                        "corrected_ci_upper": eb["ci_upper"][i],
+                        "corrected_relative_effect": rel,
+                        "corrected_rel_ci_lower": rlo,
+                        "corrected_rel_ci_upper": rhi,
+                        "shrinkage": eb["shrinkage_factor"][i],
+                        "tau2": eb["tau2"],
+                    }
+                )
+                rows.append(row)
+            for _, r in grp[~valid].iterrows():
+                rows.append(_nan_row(r, extra={"tau2": eb["tau2"]}))
+        return pd.DataFrame(rows)
+
     @property
     def precision_summary(self) -> pd.DataFrame | None:
         """
