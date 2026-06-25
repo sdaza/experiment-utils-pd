@@ -4,6 +4,7 @@ assumptions about the format of input data.
 """
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -1058,6 +1059,12 @@ def winners_curse_estimate(
     scale ``effect``/``standard_error`` are supplied on (for GLMs that is the
     log/coefficient scale).
 
+    The function assumes ``|effect| >= z* * standard_error`` (i.e. the effect
+    was selected by significance). If this precondition is violated a
+    ``RuntimeWarning`` is emitted and the computation proceeds; it does not
+    raise so downstream pipelines that pass already-screened rows are not
+    disrupted when the screening threshold differs slightly from ``alpha``.
+
     Parameters
     ----------
     effect : float
@@ -1088,6 +1095,15 @@ def winners_curse_estimate(
     s = float(standard_error)
     b = float(effect)
     c = norm.ppf(1.0 - alpha / 2.0) * s  # selection threshold on the effect scale
+
+    if abs(b) < c:
+        warnings.warn(
+            "winners_curse_estimate: |effect| is below the significance threshold; "
+            "the correction assumes the estimate was selected by significance.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     observed_z = b / s
 
     def cond_cdf(beta: float) -> float:
@@ -1114,7 +1130,12 @@ def winners_curse_estimate(
         try:
             return float(brentq(f, lo, hi, xtol=1e-8, rtol=1e-12, maxiter=200))
         except ValueError:
-            return b  # fall back to observed if bracketing failed
+            warnings.warn(
+                "winners_curse_estimate: root-finding failed to bracket; returning NaN.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return float("nan")
 
     gamma = 1.0 - ci
     corrected = invert(0.5)

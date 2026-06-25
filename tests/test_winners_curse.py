@@ -57,6 +57,11 @@ def test_raises_on_bad_alpha_ci():
         winners_curse_estimate(effect=4.0, standard_error=1.0, ci=0.0)
 
 
+def test_warns_below_threshold():
+    with pytest.warns(RuntimeWarning):
+        winners_curse_estimate(effect=1.0, standard_error=1.0, alpha=0.05)  # z=1.0 < 1.96
+
+
 def _selected_draws(beta_true, s, alpha, n, seed):
     rng = np.random.default_rng(seed)
     c = norm.ppf(1 - alpha / 2) * s
