@@ -1525,6 +1525,8 @@ winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05)
 
 # A family of estimates -> empirical-Bayes shrinkage
 empirical_bayes_shrinkage(effects=[5.0, 1.2, 8.1, 0.3], standard_errors=[2.0, 1.1, 3.9, 0.9])
+# -> {'shrunk': array, 'shrinkage_factor': array, 'posterior_sd': array,
+#     'ci_lower': array, 'ci_upper': array, 'tau2': float, 'prior_mean': 0.0}
 
 # Via the analyzer (operates on get_effects() results)
 ea.get_effects()
