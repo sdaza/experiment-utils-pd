@@ -28,13 +28,7 @@ df = pd.DataFrame(
 )
 
 # Outcome depends strongly on pre_spend, so regression adjustment should reduce SE.
-df["revenue"] = (
-    20
-    + 3.0 * df["treatment"]
-    + 0.2 * df["age"]
-    + 0.8 * df["pre_spend"]
-    + rng.normal(0, 20, n)
-)
+df["revenue"] = 20 + 3.0 * df["treatment"] + 0.2 * df["age"] + 0.8 * df["pre_spend"] + rng.normal(0, 20, n)
 
 analyzer = ExperimentAnalyzer(
     data=df,

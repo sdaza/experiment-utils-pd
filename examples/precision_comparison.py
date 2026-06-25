@@ -9,7 +9,6 @@ the treatment effect estimate. With bootstrap=True, both the adjusted model and
 the unadjusted reference are bootstrapped on the same resamples.
 """
 
-
 # %% setup
 import os
 import tempfile
@@ -30,14 +29,7 @@ def make_data(n: int = 1200, seed: int = 42) -> pd.DataFrame:
     tenure = rng.exponential(2.5, n)
     pre_revenue = rng.normal(100, 25, n)
 
-    revenue = (
-        40
-        + 4.0 * treatment
-        + 0.15 * age
-        + 1.5 * tenure
-        + 0.75 * pre_revenue
-        + rng.normal(0, 18, n)
-    )
+    revenue = 40 + 4.0 * treatment + 0.15 * age + 1.5 * tenure + 0.75 * pre_revenue + rng.normal(0, 18, n)
 
     return pd.DataFrame(
         {
