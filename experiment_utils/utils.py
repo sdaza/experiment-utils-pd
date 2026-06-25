@@ -1111,8 +1111,10 @@ def winners_curse_estimate(
         p_sel = norm.cdf((-c - beta) / s) + norm.sf((c - beta) / s)
         if b >= c:
             num = norm.cdf((-c - beta) / s) + norm.cdf((b - beta) / s) - norm.cdf((c - beta) / s)
-        else:
+        elif b <= -c:
             num = norm.cdf((b - beta) / s)
+        else:  # excluded gap (-c, c): only the lower selected tail (-inf, -c] is <= b
+            num = norm.cdf((-c - beta) / s)
         return num / p_sel
 
     def invert(target: float) -> float:

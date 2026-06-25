@@ -179,11 +179,28 @@ def test_raises_on_bad_alpha_ci():
         winners_curse_estimate(effect=4.0, standard_error=1.0, alpha=1.5)
     with pytest.raises(ValueError):
         winners_curse_estimate(effect=4.0, standard_error=1.0, ci=0.0)
+    with pytest.raises(ValueError):
+        winners_curse_estimate(effect=4.0, standard_error=1.0, alpha=1.0)
+    with pytest.raises(ValueError):
+        winners_curse_estimate(effect=4.0, standard_error=1.0, ci=1.0)
 
 
 def test_warns_below_threshold():
     with pytest.warns(RuntimeWarning):
         winners_curse_estimate(effect=1.0, standard_error=1.0, alpha=0.05)  # z=1.0 < 1.96
+
+
+def test_below_threshold_corrects_toward_zero():
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", RuntimeWarning)
+        out = winners_curse_estimate(effect=1.0, standard_error=1.0, alpha=0.05)  # z=1.0 < 1.96 (gap)
+    # gap input must yield a finite, valid correction shrunk toward null, with an ordered CI
+    assert np.isfinite(out["corrected"])
+    assert abs(out["corrected"]) < 1.0  # heavily shrunk relative to the observed 1.0
+    assert abs(out["corrected"]) < 0.2  # gap maps essentially to ~0
+    assert out["ci_lower"] < out["corrected"] < out["ci_upper"]
 
 
 def _selected_draws(beta_true, s, alpha, n, seed):
