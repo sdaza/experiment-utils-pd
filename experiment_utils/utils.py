@@ -1150,3 +1150,77 @@ def winners_curse_estimate(
         "observed_z": observed_z,
         "shrinkage": shrinkage,
     }
+
+
+def _paule_mandel_tau2(y: np.ndarray, v: np.ndarray, prior_mean: float = 0.0) -> float:
+    """
+    Method-of-moments (Paule-Mandel style) between-estimate variance with the
+    prior mean FIXED at ``prior_mean``. Solves, for tau2 >= 0,
+    ``sum (y_i - prior_mean)^2 / (v_i + tau2) = k``. Monotone decreasing, so
+    a single root via brentq; returns 0 when the estimates are no more
+    dispersed than their standard errors imply.
+    """
+    k = y.size
+    resid2 = (y - prior_mean) ** 2
+
+    def g(tau2: float) -> float:
+        return float(np.sum(resid2 / (v + tau2)) - k)
+
+    if g(0.0) <= 0:
+        return 0.0
+    hi = 100.0 * float(np.max(v))
+    steps = 0
+    while g(hi) > 0 and steps < 80:
+        hi *= 2.0
+        steps += 1
+    return float(brentq(g, 0.0, hi, xtol=1e-12, rtol=1e-12, maxiter=200))
+
+
+def empirical_bayes_shrinkage(
+    effects,
+    standard_errors,
+    prior_mean: float = 0.0,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Empirical-Bayes (normal-prior) shrinkage of a family of estimates.
+
+    Assumes ``beta_i ~ N(prior_mean, tau2)`` with ``effect_i | beta_i ~
+    N(beta_i, se_i**2)``, estimates ``tau2`` by method of moments
+    (:func:`_paule_mandel_tau2`), and returns posterior means and credible
+    intervals. High-variance "winners" shrink most. All inputs must be on the
+    same scale (e.g. all log-odds, or all mean differences).
+
+    Returns
+    -------
+    dict
+        ``shrunk`` (posterior means), ``shrinkage_factor`` (= tau2/(tau2+se^2)),
+        ``posterior_sd``, ``ci_lower``, ``ci_upper`` (np.ndarray aligned with
+        inputs), plus scalar ``tau2`` and ``prior_mean``.
+    """
+    y = np.asarray(effects, dtype=float)
+    s = np.asarray(standard_errors, dtype=float)
+    if y.ndim != 1 or y.shape != s.shape:
+        raise ValueError("effects and standard_errors must be 1-D arrays of equal length")
+    if y.size < 3:
+        raise ValueError("empirical Bayes requires at least 3 estimates to learn a prior")
+    if not (np.all(np.isfinite(y)) and np.all(np.isfinite(s))) or np.any(s <= 0):
+        raise ValueError("all standard_errors must be positive and finite, and effects finite")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    v = s**2
+    tau2 = _paule_mandel_tau2(y, v, prior_mean=prior_mean)
+    shrinkage_factor = tau2 / (tau2 + v)
+    shrunk = prior_mean + shrinkage_factor * (y - prior_mean)
+    posterior_sd = np.sqrt(tau2 * v / (tau2 + v))
+    z = norm.ppf(1.0 - (1.0 - ci) / 2.0)
+    return {
+        "shrunk": shrunk,
+        "shrinkage_factor": shrinkage_factor,
+        "posterior_sd": posterior_sd,
+        "ci_lower": shrunk - z * posterior_sd,
+        "ci_upper": shrunk + z * posterior_sd,
+        "tau2": float(tau2),
+        "prior_mean": float(prior_mean),
+    }

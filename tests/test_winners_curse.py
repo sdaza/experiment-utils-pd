@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
-from experiment_utils.utils import winners_curse_estimate
+from experiment_utils.utils import empirical_bayes_shrinkage, winners_curse_estimate
 
 
 def test_returns_documented_keys():
@@ -88,3 +88,43 @@ def test_sim_conditional_ci_coverage():
         ]
     )
     assert 0.93 <= cov <= 0.97
+
+
+def test_eb_returns_keys_and_shapes():
+    out = empirical_bayes_shrinkage([1.0, -0.5, 0.8, 0.2], [0.4, 0.4, 0.4, 0.4])
+    assert set(out) == {"shrunk", "shrinkage_factor", "posterior_sd", "ci_lower", "ci_upper", "tau2", "prior_mean"}
+    assert out["shrunk"].shape == (4,)
+
+
+def test_eb_shrinkage_factor_formula():
+    se = np.array([0.3, 0.5, 0.7, 0.9, 1.1])
+    out = empirical_bayes_shrinkage([1.0, -0.5, 0.8, 0.2, -1.1], se)
+    expected = out["tau2"] / (out["tau2"] + se**2)
+    assert np.allclose(out["shrinkage_factor"], expected)
+    assert np.allclose(out["shrunk"], out["shrinkage_factor"] * np.array([1.0, -0.5, 0.8, 0.2, -1.1]))
+
+
+def test_eb_high_variance_shrinks_more():
+    out = empirical_bayes_shrinkage([1.0, 1.0, 1.0, 1.0], [0.1, 0.5, 1.0, 2.0])
+    assert out["shrinkage_factor"][0] > out["shrinkage_factor"][-1]
+
+
+def test_eb_requires_three():
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([1.0, 2.0], [0.5, 0.5])
+
+
+def test_eb_raises_on_bad_se():
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([1.0, 2.0, 3.0], [0.5, -0.5, 0.5])
+
+
+def test_eb_sim_mse_reduction():
+    rng = np.random.default_rng(0)
+    k, tau2_true = 200, 0.5
+    s = np.sqrt(rng.uniform(0.2, 2.0, size=k))
+    beta = rng.normal(0.0, np.sqrt(tau2_true), size=k)
+    y = rng.normal(beta, s)
+    out = empirical_bayes_shrinkage(y, s, prior_mean=0.0)
+    assert np.mean((out["shrunk"] - beta) ** 2) < np.mean((y - beta) ** 2)
+    assert abs(out["tau2"] - tau2_true) < 0.2
