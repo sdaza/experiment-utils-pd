@@ -45,8 +45,28 @@ def test_summary_requires_get_effects():
 
 def test_summary_bad_method():
     ea = _fitted_analyzer(_results_frame())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="method"):
         ea.winners_curse_summary(method="nope")
+
+
+def test_conditional_zero_control_value_relative_is_nan():
+    df = _results_frame()
+    df.loc[0, "control_value"] = 0.0  # significant mean_difference row
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="conditional")
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    assert not pd.isna(rev["corrected_effect"])  # point estimate still computed
+    assert pd.isna(rev["corrected_relative_effect"])
+    assert pd.isna(rev["corrected_rel_ci_lower"])
+    assert pd.isna(rev["corrected_rel_ci_upper"])
+
+
+def test_summary_bad_alpha_ci():
+    ea = _fitted_analyzer(_results_frame())
+    with pytest.raises(ValueError):
+        ea.winners_curse_summary(method="conditional", alpha=1.5)
+    with pytest.raises(ValueError):
+        ea.winners_curse_summary(method="conditional", ci=0.0)
 
 
 def test_conditional_filters_to_significant():
