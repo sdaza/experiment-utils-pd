@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `winners_curse_estimate()` — conditional truncated-normal winner's-curse correction (median-unbiased estimate + selection-adjusted CI).
+- `empirical_bayes_shrinkage()` — normal-prior empirical-Bayes shrinkage across a family of estimates.
+- `ExperimentAnalyzer.winners_curse_summary(method=...)` — applies either correction to `get_effects()` results, with relative/ratio propagation per `effect_type`.
+
+### Removed (breaking)
+- `calculate_retrodesign()` no longer emits `trimmed_abs_effect` (a circular, assume-the-truth correction). Use `winners_curse_summary()` instead. Type S/M / power outputs are unchanged.
+
 ## [0.5.16](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.15...v0.5.16) (2026-06-17)
 
 

@@ -29,6 +29,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, and non-superiority following Lakens (2017), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
+- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI, plus empirical-Bayes shrinkage across a family of estimates (`winners_curse_estimate`, `empirical_bayes_shrinkage`, `ExperimentAnalyzer.winners_curse_summary`)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
 ## Table of Contents
@@ -1501,7 +1502,7 @@ analyzer.get_effects()
 retro = analyzer.calculate_retrodesign(true_effect=0.02)
 
 print(retro[["outcome", "power", "type_s_error", "type_m_error",
-             "relative_bias", "trimmed_abs_effect"]])
+             "relative_bias"]])
 ```
 
 **Metrics explained:**
@@ -1509,7 +1510,32 @@ print(retro[["outcome", "power", "type_s_error", "type_m_error",
 - `type_s_error`: Probability of wrong sign when significant (if underpowered)
 - `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
 - `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
-- `trimmed_abs_effect`: Bias-corrected effect estimate (`absolute_effect / relative_bias`); deflates the observed effect by the sign-preserving exaggeration factor to approximate the true effect
+
+### Winner's-Curse Correction
+
+Retrodesign *quantifies* the winner's curse (Type S/M). To get a **de-biased
+estimate** inferred from the data itself:
+
+```python
+from experiment_utils import winners_curse_estimate, empirical_bayes_shrinkage
+
+# Single significant test: observed +5.0, SE 2.0
+winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05)
+# -> {'corrected': ..., 'ci_lower': ..., 'ci_upper': ..., 'observed_z': 2.5, 'shrinkage': ...}
+
+# A family of estimates -> empirical-Bayes shrinkage
+empirical_bayes_shrinkage(effects=[5.0, 1.2, 8.1, 0.3], standard_errors=[2.0, 1.1, 3.9, 0.9])
+
+# Via the analyzer (operates on get_effects() results)
+ea.get_effects()
+ea.winners_curse_summary(method="conditional")      # de-bias each significant winner
+ea.winners_curse_summary(method="empirical_bayes")  # shrink within (outcome x effect_type)
+```
+
+The correction runs on the estimation scale (`absolute_effect`); for logistic /
+count / Cox models that is the log scale, and relative columns are
+`exp(corrected) - 1` (exact). For additive metrics the relative effect is
+`corrected / control_value` (denominator treated as fixed).
 
 ## Power Analysis
 
