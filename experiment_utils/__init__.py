@@ -5,9 +5,11 @@ from .utils import (
     balanced_random_assignment,
     check_covariate_balance,
     detect_categorical_covariates,
+    empirical_bayes_shrinkage,
     estimate_true_success_rate,
     false_positive_risk,
     generate_comparison_pairs,
+    winners_curse_estimate,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "detect_categorical_covariates",
     "false_positive_risk",
     "estimate_true_success_rate",
+    "empirical_bayes_shrinkage",
+    "winners_curse_estimate",
 ]

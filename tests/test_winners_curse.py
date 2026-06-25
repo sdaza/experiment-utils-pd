@@ -139,3 +139,10 @@ def test_eb_sim_mse_reduction():
     out = empirical_bayes_shrinkage(y, s, prior_mean=0.0)
     assert np.mean((out["shrunk"] - beta) ** 2) < np.mean((y - beta) ** 2)
     assert abs(out["tau2"] - tau2_true) < 0.2
+
+
+def test_top_level_exports():
+    import experiment_utils as eu
+
+    assert hasattr(eu, "winners_curse_estimate")
+    assert hasattr(eu, "empirical_bayes_shrinkage")
