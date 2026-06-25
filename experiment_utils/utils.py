@@ -7,6 +7,8 @@ import logging
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import brentq
+from scipy.stats import norm
 
 
 def turn_off_package_logger(package: str) -> None:
@@ -1037,3 +1039,93 @@ def estimate_true_success_rate(win_rate: float, alpha: float, power: float) -> f
     pi = (power - win_rate) / (power - alpha)
     pi = float(np.clip(pi, 0.0, 1.0))
     return 1.0 - pi
+
+
+def winners_curse_estimate(
+    effect: float,
+    standard_error: float,
+    alpha: float = 0.05,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Winner's-curse correction for a single estimate selected by significance.
+
+    Models ``effect ~ N(beta, standard_error**2)`` truncated to the two-sided
+    significance region ``|effect| >= z* * standard_error``, where
+    ``z* = Phi^{-1}(1 - alpha/2)``. Returns the median-unbiased estimate of
+    ``beta`` (the value whose conditional CDF at ``effect`` equals 0.5) and a
+    selection-adjusted equal-tailed confidence interval. Operates on whatever
+    scale ``effect``/``standard_error`` are supplied on (for GLMs that is the
+    log/coefficient scale).
+
+    Parameters
+    ----------
+    effect : float
+        The observed (significant) point estimate.
+    standard_error : float
+        Its standard error; must be > 0.
+    alpha : float
+        Two-sided significance level that defined selection (default 0.05).
+    ci : float
+        Confidence level for the adjusted interval (default 0.95).
+
+    Returns
+    -------
+    dict
+        ``corrected`` (median-unbiased estimate), ``ci_lower``, ``ci_upper``
+        (selection-adjusted interval), ``observed_z`` (= effect/standard_error),
+        ``shrinkage`` (= corrected/effect).
+    """
+    if not np.isfinite(effect):
+        raise ValueError("effect must be finite")
+    if not (np.isfinite(standard_error) and standard_error > 0):
+        raise ValueError("standard_error must be positive and finite")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be strictly between 0 and 1")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    s = float(standard_error)
+    b = float(effect)
+    c = norm.ppf(1.0 - alpha / 2.0) * s  # selection threshold on the effect scale
+    observed_z = b / s
+
+    def cond_cdf(beta: float) -> float:
+        # P(X in S | beta) for S = (-inf, -c] U [c, inf); always >= alpha, so stable.
+        p_sel = norm.cdf((-c - beta) / s) + norm.sf((c - beta) / s)
+        if b >= c:
+            num = norm.cdf((-c - beta) / s) + norm.cdf((b - beta) / s) - norm.cdf((c - beta) / s)
+        else:
+            num = norm.cdf((b - beta) / s)
+        return num / p_sel
+
+    def invert(target: float) -> float:
+        # cond_cdf is monotone DECREASING in beta (1 at -inf, 0 at +inf).
+        f = lambda beta: cond_cdf(beta) - target  # noqa: E731
+        lo, hi = b - 2.0 * s, b + 2.0 * s
+        steps = 0
+        while f(lo) < 0 and steps < 80:
+            lo -= 2.0 * s
+            steps += 1
+        steps = 0
+        while f(hi) > 0 and steps < 80:
+            hi += 2.0 * s
+            steps += 1
+        try:
+            return float(brentq(f, lo, hi, xtol=1e-8, rtol=1e-12, maxiter=200))
+        except ValueError:
+            return b  # fall back to observed if bracketing failed
+
+    gamma = 1.0 - ci
+    corrected = invert(0.5)
+    ci_lower = invert(1.0 - gamma / 2.0)  # decreasing CDF: high target -> small beta
+    ci_upper = invert(gamma / 2.0)
+    shrinkage = corrected / b if b != 0 else float("nan")
+
+    return {
+        "corrected": corrected,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "observed_z": observed_z,
+        "shrinkage": shrinkage,
+    }
