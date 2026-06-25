@@ -104,6 +104,15 @@ def test_eb_shrinkage_factor_formula():
     assert np.allclose(out["shrunk"], out["shrinkage_factor"] * np.array([1.0, -0.5, 0.8, 0.2, -1.1]))
 
 
+def test_eb_nonzero_prior_mean_offset():
+    se = np.array([0.3, 0.5, 0.7, 0.9, 1.1])
+    effects = np.array([1.0, -0.5, 0.8, 0.2, -1.1])
+    out = empirical_bayes_shrinkage(effects, se, prior_mean=0.5)
+    expected = 0.5 + out["shrinkage_factor"] * (effects - 0.5)
+    assert np.allclose(out["shrunk"], expected)
+    assert out["prior_mean"] == 0.5
+
+
 def test_eb_high_variance_shrinks_more():
     out = empirical_bayes_shrinkage([1.0, 1.0, 1.0, 1.0], [0.1, 0.5, 1.0, 2.0])
     assert out["shrinkage_factor"][0] > out["shrinkage_factor"][-1]
@@ -117,6 +126,8 @@ def test_eb_requires_three():
 def test_eb_raises_on_bad_se():
     with pytest.raises(ValueError):
         empirical_bayes_shrinkage([1.0, 2.0, 3.0], [0.5, -0.5, 0.5])
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([1.0, 2.0, 3.0], [0.5, np.nan, 0.5])
 
 
 def test_eb_sim_mse_reduction():
