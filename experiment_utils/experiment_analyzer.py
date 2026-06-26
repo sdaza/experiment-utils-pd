@@ -1812,12 +1812,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 if isinstance(experiment_tuple, tuple)
                                 else str(experiment_tuple)
                             )
-                            plot_overlap(
+                            overlap_fig = plot_overlap(
                                 comparison_data,
                                 treatment_col=self._treatment_col,
                                 propensity_col="propensity_score",
                                 title=f"Common Support — {exp_label}",
                             )
+                            # plot_overlap closes the figure to avoid a double
+                            # render, so display it explicitly here (notebook only).
+                            if overlap_fig is not None:
+                                try:
+                                    from IPython.display import display as _ipy_display
+
+                                    _ipy_display(overlap_fig)
+                                except Exception:
+                                    pass
                         else:
                             self._logger.warning("Propensity score column not found, skipping overlap plot.")
                 elif len(final_covariates) == 0 and adjustment in ("balance", "aipw"):

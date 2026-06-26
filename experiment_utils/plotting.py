@@ -1337,6 +1337,11 @@ def plot_overlap(
 
         ax.tick_params(axis="both", labelsize=8.5, colors="#64748b")
         plt.tight_layout()
+        # Close so the inline (notebook) backend does not auto-display the open
+        # figure in addition to the repr of the returned object — that double
+        # render is the "plot appears twice" symptom. savefig and the cell-output
+        # repr both still work on a closed figure.
+        plt.close(fig)
         return fig
 
     gc = ([group_by] if isinstance(group_by, str) else list(group_by)) if group_by else []
