@@ -219,3 +219,32 @@ def test_get_effects_fe_warns_and_falls_back_for_logistic(caplog):
         assert pd.isna(res.iloc[0]["n_switchers"])
     if "fe_absorbed" in res.columns:
         assert res.iloc[0]["fe_absorbed"] in ("", None) or pd.isna(res.iloc[0]["fe_absorbed"])
+
+
+def test_non_fe_run_schema_has_no_fe_columns():
+    """Without fixed_effects, FE diagnostic columns are absent (schema unchanged)."""
+    df = analyzer_df(seed=13)
+    a = ExperimentAnalyzer(data=df, outcomes=["y"], treatment_col="treatment")
+    a.get_effects()
+    res = a.results
+    for col in ["n_units", "n_switchers", "pct_switchers", "fe_absorbed"]:
+        assert col not in res.columns
+
+
+def test_fe_diagnostic_columns_present_after_standard_columns():
+    """With fixed_effects, FE diagnostic columns are present and appear after the effect columns."""
+    df = analyzer_df(seed=14)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        regression_covariates=["cov"],
+        fixed_effects=["unit"],
+    )
+    a.get_effects()
+    res = a.results
+    for col in ["n_units", "n_switchers", "pct_switchers", "fe_absorbed"]:
+        assert col in res.columns
+    cols = list(res.columns)
+    assert cols.index("fe_absorbed") > cols.index("absolute_effect")
+    assert res.iloc[0]["fe_absorbed"] == "unit"
