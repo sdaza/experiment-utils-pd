@@ -96,9 +96,7 @@ print(f"    shrinkage factor            = {wc['shrinkage']:.2f}")
 
 # %%
 sample = winners[:2000]
-corrected = np.array(
-    [winners_curse_estimate(effect=e, standard_error=SE, alpha=ALPHA)["corrected"] for e in sample]
-)
+corrected = np.array([winners_curse_estimate(effect=e, standard_error=SE, alpha=ALPHA)["corrected"] for e in sample])
 print("  Across 2,000 winners:")
 print(f"    mean |observed|   = {np.abs(sample).mean():.3f}   (true = {TRUE_EFFECT})")
 print(f"    mean |corrected|  = {np.abs(corrected).mean():.3f}")
@@ -120,7 +118,7 @@ eb = empirical_bayes_shrinkage(portfolio_effects, portfolio_ses, prior_mean=0.0,
 print(f"  learned prior variance tau^2 = {eb['tau2']:.4f}\n")
 print(f"  {'observed':>9}  {'se':>5}  {'shrunk':>7}  {'shrink_f':>8}  {'95% CI':>20}")
 for obs, se, sh, sf, lo, hi in zip(
-    portfolio_effects, portfolio_ses, eb["shrunk"], eb["shrinkage_factor"], eb["ci_lower"], eb["ci_upper"]
+    portfolio_effects, portfolio_ses, eb["shrunk"], eb["shrinkage_factor"], eb["ci_lower"], eb["ci_upper"], strict=False
 ):
     print(f"  {obs:>9.3f}  {se:>5.2f}  {sh:>7.3f}  {sf:>8.2f}  [{lo:>6.3f}, {hi:>6.3f}]")
 
@@ -166,11 +164,7 @@ print(ea.results[["experiment_id", "absolute_effect", "standard_error", "pvalue"
 # %%
 retro = ea.calculate_retrodesign(true_effect={"converted": TRUE_LIFT}, nsim=2000, seed=1)
 if not retro.empty:
-    print(
-        retro[
-            ["experiment_id", "absolute_effect", "true_effect", "power", "type_s_error", "type_m_error"]
-        ].round(4)
-    )
+    print(retro[["experiment_id", "absolute_effect", "true_effect", "power", "type_s_error", "type_m_error"]].round(4))
 else:
     print("  (no statistically significant effects this run)")
 
@@ -204,10 +198,6 @@ else:
 
 # %%
 wc_eb = ea.winners_curse_summary(method="empirical_bayes", group_by="outcome")
-print(
-    wc_eb[
-        ["experiment_id", "absolute_effect", "corrected_effect", "shrinkage", "tau2"]
-    ].round(4)
-)
+print(wc_eb[["experiment_id", "absolute_effect", "corrected_effect", "shrinkage", "tau2"]].round(4))
 
 # %%
