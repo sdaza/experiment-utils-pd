@@ -366,6 +366,12 @@ class Estimators:
 
         Notes
         -----
+        - ``min_switcher_pct`` is a *gate*: if the share of ``fixed_effects[0]`` units
+          observed in both arms ("switchers") is below it, the fit is skipped and a NaN
+          result with switcher diagnostics is returned. Within-FE effects are identified
+          only off switchers, so below the threshold the design is (near-)singular and
+          pyfixest would drop singletons and invert a degenerate X'X. Set it to ``0`` to
+          force the fit regardless (you will get the singleton/matmul warnings).
         - ``cluster_col`` -> ``vcov={"CRV1": cluster_col}``; otherwise ``"hetero"``.
         - ``df_resid`` is set to ``float(fit._df_t)`` so the analyzer's downstream
           Wald CI reconstruction reproduces pyfixest's CI exactly.
@@ -401,10 +407,30 @@ class Estimators:
         n_switchers = int((states > 1).sum())
         pct_switchers = round(100.0 * n_switchers / n_units, 1) if n_units else float("nan")
         fe_absorbed = "+".join(fixed_effects)
+        treatment_units = int((data[self._treatment_col] == 1).sum())
+        control_units = int((data[self._treatment_col] == 0).sum())
+        control_mean = data.loc[data[self._treatment_col] == 0, outcome_variable].mean()
+
+        # Gate on switcher share: a within-FE estimate is identified only off units
+        # observed in both arms. Below the threshold the design is (near-)singular, so
+        # skip the fit instead of letting pyfixest drop singletons and invert a
+        # degenerate X'X (divide-by-zero/NaN matmul warnings). Return NaN diagnostics.
         if n_units and pct_switchers < min_switcher_pct:
             self._logger.warning(
-                f"Only {pct_switchers}% of '{unit_fe}' are switchers (observed in both arms); "
-                f"the fixed-effects estimate for '{outcome_variable}' is identified off a thin sample."
+                f"Only {pct_switchers}% of '{unit_fe}' are switchers (observed in both arms), "
+                f"below min_switcher_pct={min_switcher_pct}; skipping the fixed-effects fit for "
+                f"'{outcome_variable}' (no effect is identified). Lower min_switcher_pct to force it."
+            )
+            return self.__fixed_effects_nan_output(
+                outcome_variable,
+                model_type,
+                treatment_units,
+                control_units,
+                control_mean,
+                n_units,
+                n_switchers,
+                pct_switchers,
+                fe_absorbed,
             )
 
         # Build the pyfixest formula from already-standardized z_ columns.
@@ -414,9 +440,6 @@ class Estimators:
         formula = f"{outcome_variable} ~ {rhs} | {' + '.join(fixed_effects)}"
 
         vcov = {"CRV1": cluster_col} if cluster_col else "hetero"
-        treatment_units = int((data[self._treatment_col] == 1).sum())
-        control_units = int((data[self._treatment_col] == 0).sum())
-        control_mean = data.loc[data[self._treatment_col] == 0, outcome_variable].mean()
 
         if model_type == "poisson":
             pois_kwargs = {"fml": formula, "data": data, "vcov": vcov}
