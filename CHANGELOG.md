@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.16...v1.0.0) (2026-06-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove circular trimmed_abs_effect from calculate_retrodesign
+
+### Features
+
+* add empirical_bayes_shrinkage with Paule-Mandel tau2 solver ([9a7bce5](https://github.com/sdaza/experiment-utils-pd/commit/9a7bce5d1f31a379888964e808ba18956165831b))
+* add ExperimentAnalyzer.winners_curse_summary (conditional + empirical Bayes) ([de4acfa](https://github.com/sdaza/experiment-utils-pd/commit/de4acfa502ebcfb23b2d838d8bb34f910fca0dd7))
+* add false_positive_risk and estimate_true_success_rate (Kohavi & Chen 2024) ([75338f0](https://github.com/sdaza/experiment-utils-pd/commit/75338f0b77e18390485f9284beb576c1c31f6313))
+* add fpr_summary() to ExperimentAnalyzer ([2a0996e](https://github.com/sdaza/experiment-utils-pd/commit/2a0996e2cb3f52bc1a71d57fcab2abc7123e4297))
+* add goldilocks_alpha_spending() to PowerSim for two-stage sequential design ([5b0b87c](https://github.com/sdaza/experiment-utils-pd/commit/5b0b87c7677782f9fc99a5946aff4dab938b93eb))
+* add interactive testing example and exaggeration bias correction notebook; remove unused interactive exploring example ([788cad1](https://github.com/sdaza/experiment-utils-pd/commit/788cad149d777aeef1c45bb8928ecea7b1346833))
+* add msprt_boundary, msprt_llr, msprt_should_stop to PowerSim ([2b5ab5a](https://github.com/sdaza/experiment-utils-pd/commit/2b5ab5af494b18d8d2b76ebb88f34dca07cb9d83))
+* add msprt_summary() to ExperimentAnalyzer for always-valid sequential testing ([dc3b178](https://github.com/sdaza/experiment-utils-pd/commit/dc3b1781ea4ef939aa5f304871012380ea8daab8))
+* add prior_success_rate param to aggregate_effects() for FPR annotation ([7cd0318](https://github.com/sdaza/experiment-utils-pd/commit/7cd0318de226c1951ad7a722a00835c5fd94acb0))
+* add winners_curse_estimate (conditional truncated-normal correction) ([177015c](https://github.com/sdaza/experiment-utils-pd/commit/177015c75a0c0f52e7cba5a8dd0c43288bcb7f81))
+* export winners_curse_estimate and empirical_bayes_shrinkage ([7b3e59e](https://github.com/sdaza/experiment-utils-pd/commit/7b3e59eeeb902cb7c26fd2e06e90b5f5379cf666))
+* False Positive Risk & sequential testing (mSPRT, Goldilocks) ([dbbdd3e](https://github.com/sdaza/experiment-utils-pd/commit/dbbdd3ec2335ba5f82f9343cffa5083d16549db8))
+
+
+### Bug Fixes
+
+* add sub-threshold warning and NaN fallback to winners_curse_estimate ([b4b3f19](https://github.com/sdaza/experiment-utils-pd/commit/b4b3f19c0720943dabf51ed4dfc259d64d838188))
+* correct cond_cdf gap branch and add boundary/gap tests for winners_curse ([372e156](https://github.com/sdaza/experiment-utils-pd/commit/372e156c463bc2feda4351e80be13ee08ee436b1))
+
+
+### Documentation
+
+* add empirical_bayes_shrinkage return-key hint to README example ([7270827](https://github.com/sdaza/experiment-utils-pd/commit/7270827094c3bf2d165c23c37d59175ab9c361b4))
+* document winner's-curse correction; note trimmed_abs_effect removal ([71b4d3d](https://github.com/sdaza/experiment-utils-pd/commit/71b4d3dfad398518e852471bda5bb10608f8bef7))
+
+
+### Code Refactoring
+
+* remove circular trimmed_abs_effect from calculate_retrodesign ([663193e](https://github.com/sdaza/experiment-utils-pd/commit/663193e6ef4bc4cdef6f8ace059f09c485880fc9))
+
 ## [Unreleased]
 
 ### Added
