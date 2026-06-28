@@ -109,3 +109,34 @@ def test_compute_relative_ci_false_nans_relative_bounds():
     assert np.isnan(out["rel_effect_upper"])
     assert np.isfinite(out["absolute_effect"])
     assert np.isfinite(out["standard_error"])
+
+
+def make_count_panel(n_units=60, n_periods=6, log_irr=0.3, seed=0):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for u in range(n_units):
+        fe = rng.normal(0, 0.3)
+        for t in range(n_periods):
+            treat = int((u + t) % 2 == 0)
+            z = rng.normal()
+            mu = np.exp(0.2 + log_irr * treat + 0.1 * z + fe)
+            rows.append((u, t, treat, z, rng.poisson(mu)))
+    df = pd.DataFrame(rows, columns=["unit", "period", "treatment", "cov", "count"])
+    df["z_cov"] = (df["cov"] - df["cov"].mean()) / df["cov"].std()
+    return df
+
+
+def test_poisson_fe_recovers_irr():
+    df = make_count_panel(log_irr=0.3, seed=7)
+    out = est().fixed_effects_regression(
+        data=df,
+        outcome_variable="count",
+        fixed_effects=["unit"],
+        covariates=["cov"],
+        model_type="poisson",
+    )
+    assert out["model_type"] == "poisson"
+    assert out["effect_type"] == "log_rate_ratio"
+    assert out["incidence_rate_ratio"] == pytest.approx(np.exp(0.3), abs=0.25)
+    assert out["relative_effect"] == pytest.approx(out["incidence_rate_ratio"] - 1)
+    assert out["n_switchers"] == 60
