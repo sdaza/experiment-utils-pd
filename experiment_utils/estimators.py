@@ -419,7 +419,10 @@ class Estimators:
         control_mean = data.loc[data[self._treatment_col] == 0, outcome_variable].mean()
 
         if model_type == "poisson":
-            fit = pf.fepois(formula, data=data, vcov=vcov)
+            pois_kwargs = {"fml": formula, "data": data, "vcov": vcov}
+            if weight_column:
+                pois_kwargs["weights"] = weight_column
+            fit = pf.fepois(**pois_kwargs)
         else:
             fit_kwargs = {"fml": formula, "data": data, "vcov": vcov}
             if weight_column:

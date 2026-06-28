@@ -75,7 +75,8 @@ def test_relative_effect_is_control_mean_delta():
 def test_collinear_treatment_returns_nan_with_diagnostics():
     """Between-unit treatment is collinear with unit FE -> pyfixest drops it."""
     df = make_panel(seed=5, between_unit=True)
-    out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
+    with pytest.warns(UserWarning):
+        out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
     assert np.isnan(out["absolute_effect"])
     assert out["n_switchers"] == 0
     assert out["pct_switchers"] == 0.0
@@ -279,3 +280,45 @@ def test_fe_estimator_dropna_alignment():
     assert out["n_units"] == cleaned["unit"].nunique()
     expected_switchers = int((cleaned.groupby("unit")["treatment"].nunique() > 1).sum())
     assert out["n_switchers"] == expected_switchers
+
+
+def test_bootstrap_with_fe_keeps_analytic_se_and_warns(capsys):
+    """bootstrap=True + fixed_effects: FE rows keep analytic SE/p-value (no NaN), with a warning."""
+    df = analyzer_df(seed=21)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        regression_covariates=["cov"],
+        fixed_effects=["unit"],
+        bootstrap=True,
+    )
+    a.get_effects()
+    captured = capsys.readouterr()
+    res = a.results
+    row = res.iloc[0]
+    assert np.isfinite(row["standard_error"])
+    assert np.isfinite(row["pvalue"])
+    assert np.isfinite(row["absolute_effect"])
+    assert "fixed-effects" in captured.err.lower()
+
+
+def test_ols_fe_ci_matches_pyfixest_clustered():
+    """The df_resid coupling reproduces pyfixest's CI under CRV1 clustering too."""
+    df = make_panel(seed=22)
+    out = est().fixed_effects_regression(
+        data=df,
+        outcome_variable="y",
+        fixed_effects=["unit"],
+        covariates=["cov"],
+        cluster_col="unit",
+    )
+    fit = pf.feols("y ~ z_cov + treatment | unit", data=df, vcov={"CRV1": "unit"})
+    ci = fit.confint(alpha=0.05).loc["treatment"]
+    from scipy import stats
+
+    t_crit = stats.t.ppf(0.975, out["df_resid"])
+    lo = out["absolute_effect"] - t_crit * out["standard_error"]
+    hi = out["absolute_effect"] + t_crit * out["standard_error"]
+    assert lo == pytest.approx(float(ci.iloc[0]), abs=1e-6)
+    assert hi == pytest.approx(float(ci.iloc[1]), abs=1e-6)

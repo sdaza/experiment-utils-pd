@@ -1493,6 +1493,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         else:
             original_bootstrap = None
 
+        if self._bootstrap and self._fixed_effects:
+            self._logger.warning(
+                "bootstrap=True is ignored for fixed-effects outcomes; analytic pyfixest "
+                "standard errors are used for fixed-effects estimates."
+            )
+
         self._balance = []
         self._adjusted_balance = []
         self._precision_summary = pd.DataFrame()
@@ -2112,7 +2118,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 else:
                                     self._fitted_models[experiment_tuple][comp_key][outcome] = fitted
 
-                            if self._bootstrap:
+                            if self._bootstrap and not use_fe:
                                 skip_bootstrap = False
                                 if model_type == "cox" and self._skip_bootstrap_for_survival:
                                     self._logger.info(
@@ -2235,7 +2241,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 output["rel_effect_lower"] = output.get("rel_effect_lower", np.nan)
                                 output["rel_effect_upper"] = output.get("rel_effect_upper", np.nan)
 
-                            output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
+                            output["inference_method"] = (
+                                "bootstrap" if (self._bootstrap and not use_fe) else "asymptotic"
+                            )
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
