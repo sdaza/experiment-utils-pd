@@ -450,8 +450,13 @@ class Estimators:
         standard_error = float(row["Std. Error"])
         pvalue = float(row["Pr(>|t|)"])
         df_resid = float(fit._df_t)
-        ci = fit.confint(alpha=self._alpha).loc[self._treatment_col]
-        ci_lower, ci_upper = float(ci.iloc[0]), float(ci.iloc[1])
+
+        # Relative-effect CI bounds (skip during bootstrap: percentiles fill them later).
+        if compute_relative_ci:
+            ci = fit.confint(alpha=self._alpha).loc[self._treatment_col]
+            ci_lower, ci_upper = float(ci.iloc[0]), float(ci.iloc[1])
+        else:
+            ci_lower, ci_upper = np.nan, np.nan
 
         if model_type == "poisson":
             irr = float(np.exp(coefficient))
@@ -471,14 +476,19 @@ class Estimators:
                 "marginal_effect": None,
                 "model_type": "poisson",
                 "effect_type": "log_rate_ratio",
-                "rel_effect_lower": float(np.exp(ci_lower) - 1),
-                "rel_effect_upper": float(np.exp(ci_upper) - 1),
+                "rel_effect_lower": float(np.exp(ci_lower) - 1) if compute_relative_ci else np.nan,
+                "rel_effect_upper": float(np.exp(ci_upper) - 1) if compute_relative_ci else np.nan,
                 "se_intercept": np.nan,
                 "cov_coef_intercept": np.nan,
                 "df_resid": df_resid,
             }
         else:
             rel = coefficient / control_mean if control_mean else np.nan
+            if compute_relative_ci and control_mean:
+                rel_effect_lower = ci_lower / control_mean
+                rel_effect_upper = ci_upper / control_mean
+            else:
+                rel_effect_lower, rel_effect_upper = np.nan, np.nan
             output = {
                 "outcome": outcome_variable,
                 "treatment_units": treatment_units,
@@ -490,8 +500,8 @@ class Estimators:
                 "pvalue": pvalue,
                 "stat_significance": 1 if pvalue < self._alpha else 0,
                 "relative_effect": rel,
-                "rel_effect_lower": (ci_lower / control_mean) if control_mean else np.nan,
-                "rel_effect_upper": (ci_upper / control_mean) if control_mean else np.nan,
+                "rel_effect_lower": rel_effect_lower,
+                "rel_effect_upper": rel_effect_upper,
                 "se_intercept": np.nan,
                 "cov_coef_intercept": np.nan,
                 "df_resid": df_resid,

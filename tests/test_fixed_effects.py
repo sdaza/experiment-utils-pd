@@ -93,3 +93,19 @@ def test_clustered_vcov_differs_from_hetero():
     )
     assert hetero["absolute_effect"] == pytest.approx(clustered["absolute_effect"])
     assert hetero["standard_error"] != pytest.approx(clustered["standard_error"])
+
+
+def test_compute_relative_ci_false_nans_relative_bounds():
+    """compute_relative_ci=False (bootstrap path) NaNs relative bounds but keeps point/SE."""
+    df = make_panel(seed=7)
+    out = est().fixed_effects_regression(
+        data=df,
+        outcome_variable="y",
+        fixed_effects=["unit"],
+        covariates=["cov"],
+        compute_relative_ci=False,
+    )
+    assert np.isnan(out["rel_effect_lower"])
+    assert np.isnan(out["rel_effect_upper"])
+    assert np.isfinite(out["absolute_effect"])
+    assert np.isfinite(out["standard_error"])
