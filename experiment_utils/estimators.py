@@ -341,6 +341,226 @@ class Estimators:
 
         return output
 
+    def fixed_effects_regression(
+        self,
+        data: pd.DataFrame,
+        outcome_variable: str,
+        fixed_effects: list[str],
+        covariates: list[str] | None = None,
+        cluster_col: str | None = None,
+        model_type: str = "ols",
+        interaction_covariates: list[str] | None = None,
+        weight_column: str | None = None,
+        store_model: bool = False,
+        min_switcher_pct: float = 10.0,
+        compute_relative_ci: bool = True,
+        **kwargs,
+    ) -> dict[str, str | int | float]:
+        """
+        Fixed-effects regression via pyfixest (OLS=feols, Poisson=fepois).
+
+        Absorbs ``fixed_effects`` (e.g. ["tutor_id", "week"]); the treatment effect is
+        identified from within-fixed-effect variation. Returns the same result dict as
+        ``linear_regression``/``poisson_regression`` plus switcher diagnostics
+        (``n_units``, ``n_switchers``, ``pct_switchers``, ``fe_absorbed``).
+
+        Notes
+        -----
+        - ``cluster_col`` -> ``vcov={"CRV1": cluster_col}``; otherwise ``"hetero"``.
+        - ``df_resid`` is set to ``float(fit._df_t)`` so the analyzer's downstream
+          Wald CI reconstruction reproduces pyfixest's CI exactly.
+        - Under FE the intercept is absorbed, so relative effects are taken against the
+          control-group mean of the estimation sample (delta approximation); Fieller
+          fields are NaN.
+        """
+        try:
+            import pyfixest as pf
+        except ImportError:
+            log_and_raise_error(
+                self._logger,
+                "fixed_effects requires pyfixest. Install with `uv add pyfixest`.",
+            )
+
+        covariates = covariates or []
+        interaction_covariates = interaction_covariates or []
+        z_covs = [f"z_{c}" for c in covariates]
+        z_ints = [f"z_{c}" for c in interaction_covariates]
+
+        # Drop NA on model columns FIRST so switcher counts match the fitted rows.
+        model_cols = list(dict.fromkeys([outcome_variable, self._treatment_col, *z_covs, *z_ints, *fixed_effects]))
+        if cluster_col:
+            model_cols.append(cluster_col)
+        if weight_column:
+            model_cols.append(weight_column)
+        data = data.dropna(subset=model_cols).copy()
+
+        # Switcher diagnostics on the first FE column (the documented "unit" dimension).
+        unit_fe = fixed_effects[0]
+        states = data.groupby(unit_fe)[self._treatment_col].nunique()
+        n_units = int(states.size)
+        n_switchers = int((states > 1).sum())
+        pct_switchers = round(100.0 * n_switchers / n_units, 1) if n_units else float("nan")
+        fe_absorbed = "+".join(fixed_effects)
+        if n_units and pct_switchers < min_switcher_pct:
+            self._logger.warning(
+                f"Only {pct_switchers}% of '{unit_fe}' are switchers (observed in both arms); "
+                f"the fixed-effects estimate for '{outcome_variable}' is identified off a thin sample."
+            )
+
+        # Build the pyfixest formula from already-standardized z_ columns.
+        rhs = " + ".join(z_covs + [self._treatment_col]) if z_covs else self._treatment_col
+        for c in interaction_covariates:
+            rhs += f" + z_{c} + {self._treatment_col}:z_{c}"
+        formula = f"{outcome_variable} ~ {rhs} | {' + '.join(fixed_effects)}"
+
+        vcov = {"CRV1": cluster_col} if cluster_col else "hetero"
+        treatment_units = int((data[self._treatment_col] == 1).sum())
+        control_units = int((data[self._treatment_col] == 0).sum())
+        control_mean = data.loc[data[self._treatment_col] == 0, outcome_variable].mean()
+
+        if model_type == "poisson":
+            pois_kwargs = {"fml": formula, "data": data, "vcov": vcov}
+            if weight_column:
+                pois_kwargs["weights"] = weight_column
+            fit = pf.fepois(**pois_kwargs)
+        else:
+            fit_kwargs = {"fml": formula, "data": data, "vcov": vcov}
+            if weight_column:
+                fit_kwargs["weights"] = weight_column
+            fit = pf.feols(**fit_kwargs)
+
+        tidy = fit.tidy()
+        if self._treatment_col not in tidy.index:
+            # Treatment was dropped (collinear with FE: no within-FE variation).
+            self._logger.error(
+                f"Treatment '{self._treatment_col}' is collinear with fixed effects for "
+                f"'{outcome_variable}' (n_switchers={n_switchers}); no effect is identified."
+            )
+            return self.__fixed_effects_nan_output(
+                outcome_variable,
+                model_type,
+                treatment_units,
+                control_units,
+                control_mean,
+                n_units,
+                n_switchers,
+                pct_switchers,
+                fe_absorbed,
+            )
+
+        row = tidy.loc[self._treatment_col]
+        coefficient = float(row["Estimate"])
+        standard_error = float(row["Std. Error"])
+        pvalue = float(row["Pr(>|t|)"])
+        df_resid = float(fit._df_t)
+
+        # Relative-effect CI bounds (skip during bootstrap: percentiles fill them later).
+        if compute_relative_ci:
+            ci = fit.confint(alpha=self._alpha).loc[self._treatment_col]
+            ci_lower, ci_upper = float(ci.iloc[0]), float(ci.iloc[1])
+        else:
+            ci_lower, ci_upper = np.nan, np.nan
+
+        if model_type == "poisson":
+            irr = float(np.exp(coefficient))
+            output = {
+                "outcome": outcome_variable,
+                "treatment_units": treatment_units,
+                "control_units": control_units,
+                "control_value": control_mean,
+                "treatment_value": control_mean * irr,
+                "absolute_effect": coefficient,
+                "relative_effect": irr - 1,
+                "standard_error": standard_error,
+                "pvalue": pvalue,
+                "stat_significance": 1 if pvalue < self._alpha else 0,
+                "incidence_rate_ratio": irr,
+                "log_irr": coefficient,
+                "marginal_effect": None,
+                "model_type": "poisson",
+                "effect_type": "log_rate_ratio",
+                "rel_effect_lower": float(np.exp(ci_lower) - 1) if compute_relative_ci else np.nan,
+                "rel_effect_upper": float(np.exp(ci_upper) - 1) if compute_relative_ci else np.nan,
+                "se_intercept": np.nan,
+                "cov_coef_intercept": np.nan,
+                "df_resid": df_resid,
+            }
+        else:
+            rel = coefficient / control_mean if control_mean else np.nan
+            if compute_relative_ci and control_mean:
+                rel_effect_lower = ci_lower / control_mean
+                rel_effect_upper = ci_upper / control_mean
+            else:
+                rel_effect_lower, rel_effect_upper = np.nan, np.nan
+            output = {
+                "outcome": outcome_variable,
+                "treatment_units": treatment_units,
+                "control_units": control_units,
+                "control_value": control_mean,
+                "treatment_value": control_mean + coefficient,
+                "absolute_effect": coefficient,
+                "standard_error": standard_error,
+                "pvalue": pvalue,
+                "stat_significance": 1 if pvalue < self._alpha else 0,
+                "relative_effect": rel,
+                "rel_effect_lower": rel_effect_lower,
+                "rel_effect_upper": rel_effect_upper,
+                "se_intercept": np.nan,
+                "cov_coef_intercept": np.nan,
+                "df_resid": df_resid,
+                "model_type": "ols",
+                "effect_type": "mean_difference",
+            }
+
+        output.update(
+            {
+                "n_units": n_units,
+                "n_switchers": n_switchers,
+                "pct_switchers": pct_switchers,
+                "fe_absorbed": fe_absorbed,
+            }
+        )
+        if store_model:
+            output["fitted_model"] = fit
+        return output
+
+    def __fixed_effects_nan_output(
+        self,
+        outcome_variable,
+        model_type,
+        treatment_units,
+        control_units,
+        control_mean,
+        n_units,
+        n_switchers,
+        pct_switchers,
+        fe_absorbed,
+    ) -> dict:
+        """NaN-effect result (treatment collinear with FE) carrying diagnostics."""
+        return {
+            "outcome": outcome_variable,
+            "treatment_units": treatment_units,
+            "control_units": control_units,
+            "control_value": control_mean,
+            "treatment_value": np.nan,
+            "absolute_effect": np.nan,
+            "relative_effect": np.nan,
+            "standard_error": np.nan,
+            "pvalue": np.nan,
+            "stat_significance": 0,
+            "rel_effect_lower": np.nan,
+            "rel_effect_upper": np.nan,
+            "se_intercept": np.nan,
+            "cov_coef_intercept": np.nan,
+            "df_resid": np.nan,
+            "model_type": model_type,
+            "effect_type": "mean_difference" if model_type == "ols" else "log_rate_ratio",
+            "n_units": n_units,
+            "n_switchers": n_switchers,
+            "pct_switchers": pct_switchers,
+            "fe_absorbed": fe_absorbed,
+        }
+
     def weighted_least_squares(
         self,
         data: pd.DataFrame,

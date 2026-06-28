@@ -520,6 +520,62 @@ print(analyzer.results[["outcome", "absolute_effect", "trimmed_units"]])
 | When overlap is poor | Handles gracefully | May drop many units |
 | Use as robustness check | Yes | Yes |
 
+### Fixed Effects (Panel / Within-Unit Estimation)
+
+Use `fixed_effects` to absorb unit-level (or strata-level) variation in panel and switchback designs, where the same unit appears in both treatment and control conditions across time.
+
+**When to use:**
+- Repeated-measures / panel experiments where units switch between treatment and control (e.g. switchback A/B tests on tutors, drivers, or listings).
+- Designs with strong unit-level heterogeneity you want to partial out (e.g. within-tutor or within-store effects).
+- Strata fixed effects to control for known grouping structure.
+
+**New constructor parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `fixed_effects` | `list[str] \| str \| None` | `None` | Column(s) whose levels are absorbed as fixed effects |
+| `fixed_effects_min_switcher_pct` | `float` | `10.0` | Warn when the share of switcher units drops below this threshold (%) |
+
+**Switcher identification:** with unit fixed effects, only units observed in **both** treatment and control conditions ("switchers") identify the treatment effect. The results DataFrame includes three diagnostic columns:
+
+| Column | Description |
+|---|---|
+| `n_units` | Total unique units in the estimation sample |
+| `n_switchers` | Units observed in both treatment and control |
+| `pct_switchers` | `n_switchers / n_units × 100` |
+| `fe_absorbed` | Name(s) of the absorbed fixed-effect column(s) |
+
+A warning is emitted when `pct_switchers` falls below `fixed_effects_min_switcher_pct`.
+
+**Backend and supported models:**
+
+Fixed effects estimation uses [pyfixest](https://github.com/py-econometrics/pyfixest) (`feols` for OLS, `fepois` for Poisson). Fixed effects are supported for `ols` and `poisson` model types combined with `adjustment=None` or `adjustment="balance"`. For `logistic`, `negative_binomial`, `cox`, or IV/AIPW estimators, a warning is issued and the analysis runs **without** fixed effects.
+
+Variance estimation: clustered (`CRV1`) when `cluster_col` is provided; heteroskedasticity-robust (`"hetero"`) otherwise.
+
+> **Note on relative effects under OLS fixed effects:** the intercept is absorbed, so relative effects are computed against the control-group mean of the estimation sample (a delta approximation). The Fieller-based exact relative CI does not apply in this case.
+
+**Example:**
+
+```python
+analyzer = ExperimentAnalyzer(
+    data=df,
+    outcomes=["revenue"],
+    treatment_col="treatment",
+    regression_covariates=["tenure_days"],  # time-varying control
+    fixed_effects=["tutor_id"],             # within-tutor identification
+    cluster_col="tutor_id",                 # optional clustered SEs
+)
+
+analyzer.get_effects()
+res = analyzer.results
+
+# res includes n_units, n_switchers, pct_switchers, fe_absorbed
+print(res[["outcome", "absolute_effect", "pvalue", "n_units", "n_switchers", "pct_switchers", "fe_absorbed"]])
+```
+
+See [`examples/fixed_effects_example.py`](examples/fixed_effects_example.py) for a full runnable demonstration with synthetic panel data.
+
 ### Outcome Models
 
 By default, all outcomes are analyzed with OLS. Use `outcome_models` to specify different model types:

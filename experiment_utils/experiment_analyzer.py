@@ -306,6 +306,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         store_fitted_models: bool = True,
         event_col: str | None = None,
         interaction_covariates: list[str] | None = None,
+        fixed_effects: list[str] | str | None = None,
+        fixed_effects_min_switcher_pct: float = 10.0,
         ratio_outcomes: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
@@ -374,6 +376,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self._store_fitted_models = store_fitted_models
         self._event_col = event_col
         self._interaction_covariates = self.__ensure_list(interaction_covariates)
+        self._fixed_effects = self.__ensure_list(fixed_effects)
+        self._fixed_effects_min_switcher_pct = fixed_effects_min_switcher_pct
         self._all_covariates = list(dict.fromkeys(self._balance_covariates + self._regression_covariates))
 
         # Validate and store ratio outcomes: {name: (numerator_col, denominator_col)}
@@ -447,6 +451,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         # Collect numerator and denominator columns for ratio outcomes
         ratio_raw_cols = [col for pair in self._ratio_outcomes.values() for col in pair]
 
+        # Validate fixed_effects before building required_columns so missing FE
+        # columns are dropped from self._fixed_effects (warn+drop) and surviving
+        # FE columns are retained in self._data by the subset below.
+        if self._fixed_effects:
+            missing_fe = [c for c in self._fixed_effects if c not in self._data.columns]
+            if missing_fe:
+                self._logger.warning(f"fixed_effects columns not found in data and will be skipped: {missing_fe}")
+                self._fixed_effects = [c for c in self._fixed_effects if c in self._data.columns]
+            if self._treatment_col in self._fixed_effects:
+                log_and_raise_error(self._logger, "treatment_col cannot be listed in fixed_effects.")
+
         required_columns = (
             self._experiment_identifier
             + [self._treatment_col]
@@ -459,6 +474,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
             + (self._interaction_covariates if self._interaction_covariates else [])
+            + (self._fixed_effects if self._fixed_effects else [])
             + ratio_raw_cols
         )
 
@@ -1477,6 +1493,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         else:
             original_bootstrap = None
 
+        if self._bootstrap and self._fixed_effects:
+            self._logger.warning(
+                "bootstrap=True is ignored for fixed-effects outcomes; analytic pyfixest "
+                "standard errors are used for fixed-effects estimates."
+            )
+
         self._balance = []
         self._adjusted_balance = []
         self._precision_summary = pd.DataFrame()
@@ -2002,6 +2024,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     f"with model_type='{model_type}' — only supported for OLS."
                                 )
 
+                            use_fe = (
+                                bool(self._fixed_effects)
+                                and model_type in {"ols", "poisson"}
+                                and adjustment in {None, "balance"}
+                            )
+                            if self._fixed_effects and not use_fe:
+                                self._logger.warning(
+                                    f"fixed_effects ignored for outcome '{outcome}' "
+                                    f"(model_type='{model_type}', adjustment={adjustment}): "
+                                    "FE is supported only for ols/poisson without IV/AIPW."
+                                )
+                            if use_fe:
+                                estimator_func = self._estimator.fixed_effects_regression
+                                estimator_params["fixed_effects"] = self._fixed_effects
+                                estimator_params["model_type"] = model_type
+                                estimator_params["min_switcher_pct"] = self._fixed_effects_min_switcher_pct
+                                # marginal-effects flag is not used by the FE estimator
+                                estimator_params.pop("compute_marginal_effects", None)
+
                             output = estimator_func(**estimator_params)
 
                             # Compute control group SD for retrodesign simulation
@@ -2077,7 +2118,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 else:
                                     self._fitted_models[experiment_tuple][comp_key][outcome] = fitted
 
-                            if self._bootstrap:
+                            if self._bootstrap and not use_fe:
                                 skip_bootstrap = False
                                 if model_type == "cox" and self._skip_bootstrap_for_survival:
                                     self._logger.info(
@@ -2200,7 +2241,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                 output["rel_effect_lower"] = output.get("rel_effect_lower", np.nan)
                                 output["rel_effect_upper"] = output.get("rel_effect_upper", np.nan)
 
-                            output["inference_method"] = "bootstrap" if self._bootstrap else "asymptotic"
+                            output["inference_method"] = (
+                                "bootstrap" if (self._bootstrap and not use_fe) else "asymptotic"
+                            )
                             output["adjustment"] = adjustment_label
                             if adjustment in ("balance", "aipw"):
                                 output["method"] = self._balance_method
@@ -2351,6 +2394,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             result_columns.append("srm_pvalue")
         if self._trim_ps and "trimmed_units" not in result_columns:
             result_columns.append("trimmed_units")
+
+        # FE diagnostic columns: include when fixed_effects are configured
+        if self._fixed_effects:
+            for _fe_col in ("n_units", "n_switchers", "pct_switchers", "fe_absorbed"):
+                if _fe_col not in result_columns:
+                    result_columns.append(_fe_col)
 
         # Bootstrap-only probability columns: include whenever the bootstrap
         # path populated them (i.e., any row has inference_method="bootstrap").
