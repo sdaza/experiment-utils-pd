@@ -306,6 +306,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         store_fitted_models: bool = True,
         event_col: str | None = None,
         interaction_covariates: list[str] | None = None,
+        fixed_effects: list[str] | str | None = None,
+        fixed_effects_min_switcher_pct: float = 10.0,
         ratio_outcomes: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
@@ -374,6 +376,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self._store_fitted_models = store_fitted_models
         self._event_col = event_col
         self._interaction_covariates = self.__ensure_list(interaction_covariates)
+        self._fixed_effects = self.__ensure_list(fixed_effects)
+        self._fixed_effects_min_switcher_pct = fixed_effects_min_switcher_pct
         self._all_covariates = list(dict.fromkeys(self._balance_covariates + self._regression_covariates))
 
         # Validate and store ratio outcomes: {name: (numerator_col, denominator_col)}
@@ -447,6 +451,17 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         # Collect numerator and denominator columns for ratio outcomes
         ratio_raw_cols = [col for pair in self._ratio_outcomes.values() for col in pair]
 
+        # Validate fixed_effects before building required_columns so missing FE
+        # columns are dropped from self._fixed_effects (warn+drop) and surviving
+        # FE columns are retained in self._data by the subset below.
+        if self._fixed_effects:
+            missing_fe = [c for c in self._fixed_effects if c not in self._data.columns]
+            if missing_fe:
+                self._logger.warning(f"fixed_effects columns not found in data and will be skipped: {missing_fe}")
+                self._fixed_effects = [c for c in self._fixed_effects if c in self._data.columns]
+            if self._treatment_col in self._fixed_effects:
+                log_and_raise_error(self._logger, "treatment_col cannot be listed in fixed_effects.")
+
         required_columns = (
             self._experiment_identifier
             + [self._treatment_col]
@@ -459,6 +474,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             + ([self._cluster_col] if self._cluster_col is not None else [])
             + ([self._event_col] if self._event_col is not None else [])
             + (self._interaction_covariates if self._interaction_covariates else [])
+            + (self._fixed_effects if self._fixed_effects else [])
             + ratio_raw_cols
         )
 

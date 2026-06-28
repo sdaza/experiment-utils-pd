@@ -4,6 +4,7 @@ import pyfixest as pf
 import pytest
 
 from experiment_utils.estimators import Estimators
+from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
 
 def make_panel(n_units=60, n_periods=6, effect=1.5, seed=0, between_unit=False):
@@ -140,3 +141,42 @@ def test_poisson_fe_recovers_irr():
     assert out["incidence_rate_ratio"] == pytest.approx(np.exp(0.3), abs=0.25)
     assert out["relative_effect"] == pytest.approx(out["incidence_rate_ratio"] - 1)
     assert out["n_switchers"] == 60
+
+
+def analyzer_df(seed=10):
+    df = make_panel(seed=seed)
+    return df
+
+
+def test_init_stores_fixed_effects_as_list():
+    df = analyzer_df()
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        fixed_effects="unit",  # string normalized to list
+    )
+    assert a._fixed_effects == ["unit"]
+    assert a._fixed_effects_min_switcher_pct == 10.0
+
+
+def test_init_missing_fe_column_warns_and_drops(caplog):
+    df = analyzer_df()
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        fixed_effects=["unit", "does_not_exist"],
+    )
+    assert a._fixed_effects == ["unit"]
+
+
+def test_fe_column_retained_in_data_after_init():
+    df = analyzer_df()
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        fixed_effects=["unit"],
+    )
+    assert "unit" in a._data.columns
