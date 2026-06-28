@@ -248,3 +248,34 @@ def test_fe_diagnostic_columns_present_after_standard_columns():
     cols = list(res.columns)
     assert cols.index("fe_absorbed") > cols.index("absolute_effect")
     assert res.iloc[0]["fe_absorbed"] == "unit"
+
+
+def test_fe_composes_with_interactions_and_clustering():
+    """FE + regression covariates + CUPED interactions + clustered SEs runs end-to-end."""
+    df = analyzer_df(seed=15)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        regression_covariates=["cov"],
+        interaction_covariates=["cov"],
+        fixed_effects=["unit"],
+        cluster_col="unit",
+    )
+    a.get_effects()
+    res = a.results
+    assert len(res) >= 1
+    assert res.iloc[0]["fe_absorbed"] == "unit"
+    assert np.isfinite(res.iloc[0]["absolute_effect"])
+    assert res.iloc[0]["n_switchers"] > 0
+
+
+def test_fe_estimator_dropna_alignment():
+    """dropna happens first, so switcher counts match the rows pyfixest fits."""
+    df = make_panel(seed=16)
+    df.loc[df.index[:20], "y"] = np.nan  # introduce missingness in the outcome
+    out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
+    cleaned = df.dropna(subset=["y", "treatment", "z_cov", "unit"])
+    assert out["n_units"] == cleaned["unit"].nunique()
+    expected_switchers = int((cleaned.groupby("unit")["treatment"].nunique() > 1).sum())
+    assert out["n_switchers"] == expected_switchers
