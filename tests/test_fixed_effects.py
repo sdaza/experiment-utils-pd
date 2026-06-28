@@ -180,3 +180,42 @@ def test_fe_column_retained_in_data_after_init():
         fixed_effects=["unit"],
     )
     assert "unit" in a._data.columns
+
+
+def test_get_effects_uses_fe_and_adds_diagnostic_columns():
+    df = analyzer_df(seed=11)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        regression_covariates=["cov"],
+        fixed_effects=["unit"],
+        cluster_col="unit",
+    )
+    a.get_effects()
+    res = a._results
+    assert {"n_units", "n_switchers", "pct_switchers", "fe_absorbed"}.issubset(res.columns)
+    row = res.iloc[0]
+    assert row["fe_absorbed"] == "unit"
+    assert row["n_switchers"] > 0
+    assert row["absolute_effect"] == pytest.approx(1.5, abs=0.3)
+
+
+def test_get_effects_fe_warns_and_falls_back_for_logistic(caplog):
+    df = analyzer_df(seed=12)
+    df["bin"] = (df["y"] > df["y"].median()).astype(int)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["bin"],
+        treatment_col="treatment",
+        outcome_models={"bin": "logistic"},
+        fixed_effects=["unit"],
+    )
+    a.get_effects()
+    res = a._results
+    # logistic ran (no FE), so FE diagnostics are absent or NaN for this row
+    assert res.iloc[0]["model_type"] == "logistic"
+    if "n_switchers" in res.columns:
+        assert pd.isna(res.iloc[0]["n_switchers"])
+    if "fe_absorbed" in res.columns:
+        assert res.iloc[0]["fe_absorbed"] in ("", None) or pd.isna(res.iloc[0]["fe_absorbed"])

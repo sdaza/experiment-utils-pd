@@ -2018,6 +2018,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                                     f"with model_type='{model_type}' — only supported for OLS."
                                 )
 
+                            use_fe = (
+                                bool(self._fixed_effects)
+                                and model_type in {"ols", "poisson"}
+                                and adjustment in {None, "balance"}
+                            )
+                            if self._fixed_effects and not use_fe:
+                                self._logger.warning(
+                                    f"fixed_effects ignored for outcome '{outcome}' "
+                                    f"(model_type='{model_type}', adjustment={adjustment}): "
+                                    "FE is supported only for ols/poisson without IV/AIPW."
+                                )
+                            if use_fe:
+                                estimator_func = self._estimator.fixed_effects_regression
+                                estimator_params["fixed_effects"] = self._fixed_effects
+                                estimator_params["model_type"] = model_type
+                                estimator_params["min_switcher_pct"] = self._fixed_effects_min_switcher_pct
+                                # marginal-effects flag is not used by the FE estimator
+                                estimator_params.pop("compute_marginal_effects", None)
+
                             output = estimator_func(**estimator_params)
 
                             # Compute control group SD for retrodesign simulation
@@ -2367,6 +2386,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             result_columns.append("srm_pvalue")
         if self._trim_ps and "trimmed_units" not in result_columns:
             result_columns.append("trimmed_units")
+
+        # FE diagnostic columns: include when fixed_effects are configured
+        if self._fixed_effects:
+            for _fe_col in ("n_units", "n_switchers", "pct_switchers", "fe_absorbed"):
+                if _fe_col not in result_columns:
+                    result_columns.append(_fe_col)
 
         # Bootstrap-only probability columns: include whenever the bootstrap
         # path populated them (i.e., any row has inference_method="bootstrap").
