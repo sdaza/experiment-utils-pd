@@ -341,3 +341,20 @@ def test_retrodesign_true_effect_dict_skips_missing_outcomes(count_df, binary_df
     )
 
     assert "count" not in retro["outcome"].values, "count should be excluded because it is not in the true_effect dict"
+
+
+def test_no_trimmed_abs_effect_column():
+    import numpy as np
+    import pandas as pd
+
+    from experiment_utils import ExperimentAnalyzer
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    t = rng.integers(0, 2, n)
+    y = rng.normal(0.3 * t, 1.0, n)
+    ea = ExperimentAnalyzer(data=pd.DataFrame({"treatment": t, "y": y}), outcomes=["y"], treatment_col="treatment")
+    ea.get_effects()
+    retro = ea.calculate_retrodesign(nsim=500, seed=1)
+    assert "trimmed_abs_effect" not in retro.columns
+    assert {"power", "type_s_error", "type_m_error", "relative_bias"} <= set(retro.columns)

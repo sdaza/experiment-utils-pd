@@ -4,9 +4,12 @@ assumptions about the format of input data.
 """
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import brentq
+from scipy.stats import norm
 
 
 def turn_off_package_logger(package: str) -> None:
@@ -959,3 +962,267 @@ def balanced_random_assignment(
         print("\n" + "=" * 70)
 
     return final_assignments
+
+
+def false_positive_risk(alpha: float, power: float, prior_success_rate: float) -> float:
+    """
+    False Positive Risk (FPR) via Bayes Rule — Kohavi & Chen (2024).
+
+    FPR = P(H0 is true | statistically significant result)
+        = (alpha * pi) / (alpha * pi + power * (1 - pi))
+    where pi = 1 - prior_success_rate.
+
+    Parameters
+    ----------
+    alpha : float
+        Significance level (e.g. 0.05).
+    power : float
+        Statistical power (1 - beta), e.g. 0.80.
+    prior_success_rate : float
+        Estimated proportion of experiments with a true positive effect,
+        derived from historical win rates (must be in (0, 1)).
+
+    Returns
+    -------
+    float
+        Probability that a statistically significant result is a false positive.
+
+    Examples
+    --------
+    >>> # alpha=0.10, power=0.80, prior_success_rate=0.12 -> ~47.8% FPR
+    >>> false_positive_risk(alpha=0.10, power=0.80, prior_success_rate=0.12)
+    0.478...
+    """
+    if not 0 < prior_success_rate < 1:
+        raise ValueError("prior_success_rate must be strictly between 0 and 1")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be strictly between 0 and 1")
+    if not 0 < power <= 1:
+        raise ValueError("power must be in (0, 1]")
+    pi = 1.0 - prior_success_rate
+    return (alpha * pi) / (alpha * pi + power * (1.0 - pi))
+
+
+def estimate_true_success_rate(win_rate: float, alpha: float, power: float) -> float:
+    """
+    Estimate the true success rate from the observed win rate — Kohavi & Chen (2024, §4.3).
+
+    Inverts the conditional probability formula:
+        P(SS) = pi * (alpha + beta - 1) + 1 - beta
+    Solving for pi (= 1 - true_success_rate):
+        pi = (power - win_rate) / (power - alpha)
+
+    Result is clamped to [0, 1] — a win_rate below alpha implies all wins are
+    false positives (true success rate → 0).
+
+    Parameters
+    ----------
+    win_rate : float
+        Observed proportion of statistically significant positive results.
+    alpha : float
+        Significance level used in the experiments (e.g. 0.05).
+    power : float
+        Statistical power (1 - beta), e.g. 0.80.
+
+    Returns
+    -------
+    float
+        Estimated proportion of experiments with a genuine positive effect.
+
+    Examples
+    --------
+    >>> # win_rate=0.12, alpha=0.10, power=0.80 -> ~2.9% true success rate
+    >>> estimate_true_success_rate(win_rate=0.12, alpha=0.10, power=0.80)
+    0.028...
+    """
+    if power == alpha:
+        raise ValueError("power and alpha cannot be equal (division by zero)")
+    pi = (power - win_rate) / (power - alpha)
+    pi = float(np.clip(pi, 0.0, 1.0))
+    return 1.0 - pi
+
+
+def winners_curse_estimate(
+    effect: float,
+    standard_error: float,
+    alpha: float = 0.05,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Winner's-curse correction for a single estimate selected by significance.
+
+    Models ``effect ~ N(beta, standard_error**2)`` truncated to the two-sided
+    significance region ``|effect| >= z* * standard_error``, where
+    ``z* = Phi^{-1}(1 - alpha/2)``. Returns the median-unbiased estimate of
+    ``beta`` (the value whose conditional CDF at ``effect`` equals 0.5) and a
+    selection-adjusted equal-tailed confidence interval. Operates on whatever
+    scale ``effect``/``standard_error`` are supplied on (for GLMs that is the
+    log/coefficient scale).
+
+    The function assumes ``|effect| >= z* * standard_error`` (i.e. the effect
+    was selected by significance). If this precondition is violated a
+    ``RuntimeWarning`` is emitted and the computation proceeds; it does not
+    raise so downstream pipelines that pass already-screened rows are not
+    disrupted when the screening threshold differs slightly from ``alpha``.
+
+    Parameters
+    ----------
+    effect : float
+        The observed (significant) point estimate.
+    standard_error : float
+        Its standard error; must be > 0.
+    alpha : float
+        Two-sided significance level that defined selection (default 0.05).
+    ci : float
+        Confidence level for the adjusted interval (default 0.95).
+
+    Returns
+    -------
+    dict
+        ``corrected`` (median-unbiased estimate), ``ci_lower``, ``ci_upper``
+        (selection-adjusted interval), ``observed_z`` (= effect/standard_error),
+        ``shrinkage`` (= corrected/effect).
+    """
+    if not np.isfinite(effect):
+        raise ValueError("effect must be finite")
+    if not (np.isfinite(standard_error) and standard_error > 0):
+        raise ValueError("standard_error must be positive and finite")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be strictly between 0 and 1")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    s = float(standard_error)
+    b = float(effect)
+    c = norm.ppf(1.0 - alpha / 2.0) * s  # selection threshold on the effect scale
+
+    if abs(b) < c:
+        warnings.warn(
+            "winners_curse_estimate: |effect| is below the significance threshold; "
+            "the correction assumes the estimate was selected by significance.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    observed_z = b / s
+
+    def cond_cdf(beta: float) -> float:
+        # P(X in S | beta) for S = (-inf, -c] U [c, inf); always >= alpha, so stable.
+        p_sel = norm.cdf((-c - beta) / s) + norm.sf((c - beta) / s)
+        if b >= c:
+            num = norm.cdf((-c - beta) / s) + norm.cdf((b - beta) / s) - norm.cdf((c - beta) / s)
+        elif b <= -c:
+            num = norm.cdf((b - beta) / s)
+        else:  # excluded gap (-c, c): only the lower selected tail (-inf, -c] is <= b
+            num = norm.cdf((-c - beta) / s)
+        return num / p_sel
+
+    def invert(target: float) -> float:
+        # cond_cdf is monotone DECREASING in beta (1 at -inf, 0 at +inf).
+        f = lambda beta: cond_cdf(beta) - target  # noqa: E731
+        lo, hi = b - 2.0 * s, b + 2.0 * s
+        steps = 0
+        while f(lo) < 0 and steps < 80:
+            lo -= 2.0 * s
+            steps += 1
+        steps = 0
+        while f(hi) > 0 and steps < 80:
+            hi += 2.0 * s
+            steps += 1
+        try:
+            return float(brentq(f, lo, hi, xtol=1e-8, rtol=1e-12, maxiter=200))
+        except ValueError:
+            warnings.warn(
+                "winners_curse_estimate: root-finding failed to bracket; returning NaN.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return float("nan")
+
+    gamma = 1.0 - ci
+    corrected = invert(0.5)
+    ci_lower = invert(1.0 - gamma / 2.0)  # decreasing CDF: high target -> small beta
+    ci_upper = invert(gamma / 2.0)
+    shrinkage = corrected / b if b != 0 else float("nan")
+
+    return {
+        "corrected": corrected,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "observed_z": observed_z,
+        "shrinkage": shrinkage,
+    }
+
+
+def _paule_mandel_tau2(y: np.ndarray, v: np.ndarray, prior_mean: float = 0.0) -> float:
+    """
+    Method-of-moments (Paule-Mandel style) between-estimate variance with the
+    prior mean FIXED at ``prior_mean``. Solves, for tau2 >= 0,
+    ``sum (y_i - prior_mean)^2 / (v_i + tau2) = k``. Monotone decreasing, so
+    a single root via brentq; returns 0 when the estimates are no more
+    dispersed than their standard errors imply.
+    """
+    k = y.size
+    resid2 = (y - prior_mean) ** 2
+
+    def g(tau2: float) -> float:
+        return float(np.sum(resid2 / (v + tau2)) - k)
+
+    if g(0.0) <= 0:
+        return 0.0
+    hi = 100.0 * float(np.max(v))
+    steps = 0
+    while g(hi) > 0 and steps < 80:
+        hi *= 2.0
+        steps += 1
+    return float(brentq(g, 0.0, hi, xtol=1e-12, rtol=1e-12, maxiter=200))
+
+
+def empirical_bayes_shrinkage(
+    effects,
+    standard_errors,
+    prior_mean: float = 0.0,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Empirical-Bayes (normal-prior) shrinkage of a family of estimates.
+
+    Assumes ``beta_i ~ N(prior_mean, tau2)`` with ``effect_i | beta_i ~
+    N(beta_i, se_i**2)``, estimates ``tau2`` by method of moments
+    (:func:`_paule_mandel_tau2`), and returns posterior means and credible
+    intervals. High-variance "winners" shrink most. All inputs must be on the
+    same scale (e.g. all log-odds, or all mean differences).
+
+    Returns
+    -------
+    dict
+        ``shrunk`` (posterior means), ``shrinkage_factor`` (= tau2/(tau2+se^2)),
+        ``posterior_sd``, ``ci_lower``, ``ci_upper`` (np.ndarray aligned with
+        inputs), plus scalar ``tau2`` and ``prior_mean``.
+    """
+    y = np.asarray(effects, dtype=float)
+    s = np.asarray(standard_errors, dtype=float)
+    if y.ndim != 1 or y.shape != s.shape:
+        raise ValueError("effects and standard_errors must be 1-D arrays of equal length")
+    if y.size < 3:
+        raise ValueError("empirical Bayes requires at least 3 estimates to learn a prior")
+    if not (np.all(np.isfinite(y)) and np.all(np.isfinite(s))) or np.any(s <= 0):
+        raise ValueError("all standard_errors must be positive and finite, and effects finite")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    v = s**2
+    tau2 = _paule_mandel_tau2(y, v, prior_mean=prior_mean)
+    shrinkage_factor = tau2 / (tau2 + v)
+    shrunk = prior_mean + shrinkage_factor * (y - prior_mean)
+    posterior_sd = np.sqrt(tau2 * v / (tau2 + v))
+    z = norm.ppf(1.0 - (1.0 - ci) / 2.0)
+    return {
+        "shrunk": shrunk,
+        "shrinkage_factor": shrinkage_factor,
+        "posterior_sd": posterior_sd,
+        "ci_lower": shrunk - z * posterior_sd,
+        "ci_upper": shrunk + z * posterior_sd,
+        "tau2": float(tau2),
+        "prior_mean": float(prior_mean),
+    }

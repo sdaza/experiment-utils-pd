@@ -154,9 +154,6 @@ class RetrodesignMixin:
             - type_s_error: Probability of wrong sign when significant
             - type_m_error: Expected exaggeration ratio (absolute values)
             - relative_bias: Expected bias ratio preserving signs
-            - trimmed_abs_effect: Bias-corrected effect estimate
-              (absolute_effect / relative_bias). NaN when relative_bias < 1
-              or type_s_error ≥ 0.10.
             - retrodesign_method: Always "powersim"
 
         Examples
@@ -208,7 +205,7 @@ class RetrodesignMixin:
             return pd.DataFrame()
 
         # drop existing retrodesign columns if they exist (from previous calls)
-        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias", "trimmed_abs_effect"]
+        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias"]
         existing_retro_cols = [col for col in retro_cols if col in df_filtered.columns]
         if existing_retro_cols:
             df_filtered = df_filtered.drop(columns=existing_retro_cols)
@@ -316,34 +313,6 @@ class RetrodesignMixin:
 
         retro_df = pd.DataFrame(results, index=df_filtered.index)
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
-
-        # trimmed_abs_effect: observed effect deflated by relative_bias to approximate the true effect.
-        # relative_bias = E[estimated / true] among significant estimates, so dividing the
-        # observed effect by it yields a sign-preserving, bias-corrected estimate.
-        # Set to NaN when type_s_error >= 0.10 (high sign error rates contaminate relative_bias)
-        # or when relative_bias < 1 (correction would inflate rather than deflate the observed effect).
-        TYPE_S_TRIM_THRESHOLD = 0.10
-        rb = df_filtered["relative_bias"]
-        type_s = df_filtered["type_s_error"]
-
-        unreliable_mask = (type_s >= TYPE_S_TRIM_THRESHOLD) | (rb < 1)
-
-        if (type_s >= TYPE_S_TRIM_THRESHOLD).any():
-            flagged_outcomes = df_filtered.loc[type_s >= TYPE_S_TRIM_THRESHOLD, "outcome"].tolist()
-            self._logger.warning(
-                f"trimmed_abs_effect set to NaN for {(type_s >= TYPE_S_TRIM_THRESHOLD).sum()} row(s) where "
-                f"type_s_error >= {TYPE_S_TRIM_THRESHOLD} (outcomes: {flagged_outcomes}). "
-                "High sign-error rates make the bias correction unreliable."
-            )
-
-        df_filtered["trimmed_abs_effect"] = df_filtered["absolute_effect"].where(
-            rb.isna() | (rb == 0) | unreliable_mask,
-            df_filtered["absolute_effect"] / rb,
-        )
-        df_filtered.loc[unreliable_mask, "trimmed_abs_effect"] = np.nan
-
-        if df_filtered["trimmed_abs_effect"].isna().all():
-            df_filtered = df_filtered.drop(columns=["trimmed_abs_effect"])
 
         # Drop internal columns not meant for display
         internal_cols = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param"]

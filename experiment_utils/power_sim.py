@@ -2644,3 +2644,151 @@ class PowerSim:
         if isinstance(value, list | np.ndarray):
             return list(value)
         return [value]
+
+    @staticmethod
+    def msprt_boundary(alpha: float) -> float:
+        """
+        Log-likelihood boundary for the mixture Sequential Probability Ratio Test (mSPRT).
+
+        The experiment should stop when msprt_llr() exceeds this value.
+
+        Parameters
+        ----------
+        alpha : float
+            Significance level (e.g. 0.05).
+
+        Returns
+        -------
+        float
+            log(1 / alpha)
+
+        References
+        ----------
+        Johari et al. (2017), "Peeking at A/B Tests".
+        Change & Measure simulation (changeandmeasure.com).
+        """
+        if not 0 < alpha < 1:
+            raise ValueError("alpha must be strictly between 0 and 1")
+        return float(np.log(1.0 / alpha))
+
+    @staticmethod
+    def msprt_llr(z: float, se: float, tau: float) -> float:
+        """
+        Log-likelihood ratio for the mSPRT (mixture Sequential Probability Ratio Test).
+
+        Uses a normal mixture prior N(0, tau²) on the true effect, giving an
+        analytically tractable LLR that can be monitored continuously without
+        inflating type-I error.
+
+        LLR = 0.5 * [log(se² / (se² + τ²)) + z² * τ² / (se² + τ²)]
+
+        Parameters
+        ----------
+        z : float
+            Observed z-score (effect estimate / standard error).
+        se : float
+            Standard error of the effect estimate at the current sample size. Must be > 0.
+        tau : float
+            Prior standard deviation on the effect size. Set to the expected effect
+            magnitude (e.g. MDE / 2). Must be > 0.
+
+        Returns
+        -------
+        float
+            Log-likelihood ratio. Compare against msprt_boundary(alpha) to decide.
+        """
+        if se <= 0:
+            raise ValueError("se must be positive")
+        if tau <= 0:
+            raise ValueError("tau must be positive")
+        se2 = se**2
+        tau2 = tau**2
+        return 0.5 * (np.log(se2 / (se2 + tau2)) + z**2 * tau2 / (se2 + tau2))
+
+    @staticmethod
+    def msprt_should_stop(z: float, se: float, tau: float, alpha: float = 0.05) -> bool:
+        """
+        Return True if the mSPRT boundary has been crossed — the experiment can stop.
+
+        Parameters
+        ----------
+        z : float
+            Observed z-score at the current sample size.
+        se : float
+            Standard error of the effect estimate. Must be > 0.
+        tau : float
+            Prior standard deviation on the effect size (expected effect magnitude).
+        alpha : float
+            Significance level. Defaults to 0.05.
+
+        Returns
+        -------
+        bool
+            True if LLR >= log(1/alpha), i.e. the test is conclusive.
+
+        Examples
+        --------
+        >>> # After 2 weeks of data: z=3.1, se=0.008, tau=0.01
+        >>> PowerSim.msprt_should_stop(z=3.1, se=0.008, tau=0.01, alpha=0.05)
+        True
+        """
+        llr = PowerSim.msprt_llr(z=z, se=se, tau=tau)
+        boundary = PowerSim.msprt_boundary(alpha=alpha)
+        return bool(llr >= boundary)
+
+    @staticmethod
+    def goldilocks_alpha_spending(
+        alpha_total: float = 0.05,
+        method: str = "goldilocks",
+    ) -> tuple[float, float]:
+        """
+        Alpha-spending boundaries for two-stage sequential experiment design.
+
+        Returns (alpha1, alpha2) — the significance thresholds for the first and
+        second looks. Each rule is anchored to its canonical two-look nominal
+        alphas at alpha_total=0.05 and scaled proportionally for other targets.
+
+        Parameters
+        ----------
+        alpha_total : float
+            Target overall significance level. Defaults to 0.05.
+        method : str
+            Spending rule:
+
+            - ``'goldilocks'`` (default): (alpha1, alpha2) = (0.01, 0.046) at
+              alpha_total=0.05. Recommended by Kohavi & Chen (2024) —
+              conservative first look, liberal second look.
+            - ``'obrien_fleming'``: (0.005, 0.048) at alpha_total=0.05 — most
+              conservative at the first look.
+            - ``'pocock'``: equal spending at each look — (0.029, 0.029) at
+              alpha_total=0.05.
+
+        Returns
+        -------
+        tuple[float, float]
+            (alpha1, alpha2)
+
+        Examples
+        --------
+        >>> # Design a two-stage test: run 2 weeks, extend if 0.01 < p < 0.10
+        >>> a1, a2 = PowerSim.goldilocks_alpha_spending()
+        >>> print(f"Stop early if p < {a1}, extend and stop if combined p < {a2}")
+        Stop early if p < 0.01, extend and stop if combined p < 0.046
+
+        References
+        ----------
+        Kohavi & Chen (2024), "False Positives in A/B Tests", Section 6.
+        Pocock (1977); O'Brien & Fleming (1979) — canonical two-look boundaries.
+        """
+        # Canonical two-look nominal alphas at alpha_total = 0.05.
+        canonical = {
+            "goldilocks": (0.01, 0.046),
+            "obrien_fleming": (0.005, 0.048),
+            "pocock": (0.029, 0.029),
+        }
+        if method not in canonical:
+            raise ValueError(f"method must be one of {tuple(canonical)}, got '{method}'")
+
+        base1, base2 = canonical[method]
+        scale = alpha_total / 0.05
+        return (float(base1 * scale), float(base2 * scale))
