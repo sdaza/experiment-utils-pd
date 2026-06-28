@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.0...v1.1.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* add min_switcher_pct gate for fixed-effects estimation and update release config ([a01f352](https://github.com/sdaza/experiment-utils-pd/commit/a01f3521a6f25cd06e882fd7eb01483f69d8dcdc))
+
 ## [1.1.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.0.0...v1.1.0) (2026-06-28)
 
 
