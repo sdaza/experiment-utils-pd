@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.0.0...v1.1.0) (2026-06-28)
+
+
+### Features
+
+* add fixed_effects params + validation to ExperimentAnalyzer ([6cefa2e](https://github.com/sdaza/experiment-utils-pd/commit/6cefa2ed30c8583c87d28a61783fd34920d17322))
+* add fixed_effects_regression (feols) estimator with switcher diagnostics ([84d34b7](https://github.com/sdaza/experiment-utils-pd/commit/84d34b7d20c160c26c65ae1ec40124dab5176def))
+* route ols/poisson outcomes to FE estimator when fixed_effects set ([d8f3e23](https://github.com/sdaza/experiment-utils-pd/commit/d8f3e23fd4dcd8cca3dada415eb584e83acf186b))
+
+
+### Bug Fixes
+
+* guard bootstrap+FE (analytic SEs) and forward IPW weights to fepois ([c771546](https://github.com/sdaza/experiment-utils-pd/commit/c77154653d9b83d00df06117ea477bec0c08507a))
+* honor compute_relative_ci in fixed_effects_regression (NaN relative bounds on bootstrap path) ([d9d95b4](https://github.com/sdaza/experiment-utils-pd/commit/d9d95b4040f0d20ce989cb3c9624d4aaa55e2794))
+
+
+### Documentation
+
+* document fixed_effects support + add example ([ab753b7](https://github.com/sdaza/experiment-utils-pd/commit/ab753b722980a8dc95485e89b00ec4a129df6ad5))
+
 ## [1.0.0](https://github.com/sdaza/experiment-utils-pd/compare/v0.5.16...v1.0.0) (2026-06-28)
 
 
