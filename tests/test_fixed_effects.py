@@ -72,11 +72,11 @@ def test_relative_effect_is_control_mean_delta():
     assert np.isnan(out["cov_coef_intercept"])
 
 
-def test_collinear_treatment_returns_nan_with_diagnostics():
-    """Between-unit treatment is collinear with unit FE -> pyfixest drops it."""
+def test_collinear_treatment_returns_nan_with_diagnostics(capsys):
+    """Between-unit treatment has 0% switchers -> switcher gate skips the fit."""
     df = make_panel(seed=5, between_unit=True)
-    with pytest.warns(UserWarning):
-        out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
+    out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
+    assert "switchers" in capsys.readouterr().err
     assert np.isnan(out["absolute_effect"])
     assert out["n_switchers"] == 0
     assert out["pct_switchers"] == 0.0
