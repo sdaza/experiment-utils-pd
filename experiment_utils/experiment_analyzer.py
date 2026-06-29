@@ -1604,9 +1604,25 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     bin_covariates=binary_covariates,
                 )
 
-                comp_numeric_covariates = [c for c in numeric_covariates if comparison_data[c].std(ddof=0) != 0]
+                # A covariate is usable only if it has variance AND is finite. The
+                # finiteness guard matters because impute_missing_values fills NaN but
+                # not inf (e.g. a ratio covariate that divided by zero upstream); an
+                # inf/NaN column passes a bare `std != 0` test (its std is inf/NaN) and
+                # then poisons standardize_covariates -> z_ becomes NaN -> the
+                # ps-logistic propensity fit trips divide-by-zero/overflow/invalid in
+                # sklearn's matmul. Drop such covariates here so every downstream
+                # consumer (SMD, IPW, regression) sees the same clean list.
+                comp_numeric_covariates = [
+                    c
+                    for c in numeric_covariates
+                    if comparison_data[c].std(ddof=0) != 0 and np.isfinite(comparison_data[c]).all()
+                ]
                 comp_binary_covariates = [c for c in binary_covariates if comparison_data[c].sum() >= min_binary_count]
-                comp_binary_covariates = [c for c in comp_binary_covariates if comparison_data[c].std(ddof=0) != 0]
+                comp_binary_covariates = [
+                    c
+                    for c in comp_binary_covariates
+                    if comparison_data[c].std(ddof=0) != 0 and np.isfinite(comparison_data[c]).all()
+                ]
 
                 # exclude dummies that only appear in one treatment group
                 removed_single_group = []
@@ -1626,7 +1642,13 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             comp_binary_covariates_filtered.append(c)
                     comp_binary_covariates = comp_binary_covariates_filtered
 
-                removed_numeric_var = set(numeric_covariates) - set(comp_numeric_covariates)
+                # Split numeric removals into non-finite (inf/NaN) vs zero variance so
+                # the log points at the real culprit instead of mislabelling everything
+                # as "zero variance".
+                removed_numeric_nonfinite = [c for c in numeric_covariates if not np.isfinite(comparison_data[c]).all()]
+                removed_numeric_var = (
+                    set(numeric_covariates) - set(comp_numeric_covariates) - set(removed_numeric_nonfinite)
+                )
                 removed_binary_freq = [c for c in binary_covariates if comparison_data[c].sum() < min_binary_count]
                 removed_binary_var = [
                     c for c in binary_covariates if c not in removed_binary_freq and comparison_data[c].std(ddof=0) == 0
@@ -1635,8 +1657,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 final_covariates = comp_numeric_covariates + comp_binary_covariates
                 self._final_covariates = final_covariates
 
-                if removed_numeric_var or removed_binary_freq or removed_binary_var or removed_single_group:
+                if (
+                    removed_numeric_var
+                    or removed_numeric_nonfinite
+                    or removed_binary_freq
+                    or removed_binary_var
+                    or removed_single_group
+                ):
                     self._logger.warning(f"Removed covariates for comparison {treatment_val} vs {control_val}:")
+                    if removed_numeric_nonfinite:
+                        self._logger.warning(
+                            f"  - Non-finite values (inf/NaN, numeric): {sorted(removed_numeric_nonfinite)}"
+                        )
                     if removed_numeric_var:
                         self._logger.warning(f"  - Zero variance (numeric): {sorted(removed_numeric_var)}")
                     if removed_binary_freq:
