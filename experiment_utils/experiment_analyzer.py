@@ -20,7 +20,7 @@ from .utils import (
     generate_comparison_pairs,
     get_logger,
     log_and_raise_error,
-    suppress_matmul_warnings,
+    suppress_fit_warnings,
 )
 
 
@@ -1856,7 +1856,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             X_diag = comparison_data[z_covs]
                             y_diag = comparison_data[self._treatment_col]
                             lr = LogisticRegression(max_iter=1000)
-                            with suppress_matmul_warnings():
+                            with suppress_fit_warnings():
                                 lr.fit(X_diag, y_diag)
                                 comparison_data["propensity_score"] = lr.predict_proba(X_diag)[:, 1]
                             self._logger.info(
@@ -2461,7 +2461,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         # FE diagnostic columns: include when fixed_effects are configured
         if self._fixed_effects:
-            for _fe_col in ("n_units", "n_switchers", "pct_switchers", "fe_absorbed"):
+            for _fe_col in (
+                "n_units",
+                "n_switchers",
+                "pct_switchers",
+                "fe_absorbed",
+                "n_obs",
+                "n_singletons_dropped",
+            ):
                 if _fe_col not in result_columns:
                     result_columns.append(_fe_col)
 

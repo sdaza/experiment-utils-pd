@@ -14,19 +14,28 @@ from scipy.stats import norm
 
 
 @contextmanager
-def suppress_matmul_warnings():
-    """Silence numpy's benign "encountered in matmul" RuntimeWarnings.
+def suppress_fit_warnings():
+    """Silence benign, noisy warnings emitted while fitting a model.
 
-    A (quasi-)separated logistic fit or a near-singular fixed-effects design
-    makes the solver produce huge coefficients, so the ``X @ beta`` step
-    overflows and numpy emits divide-by-zero/overflow/invalid RuntimeWarnings
-    from inside matmul (e.g. sklearn's ``_linear_loss`` or pyfixest's residual
-    computation). The fitted results are still returned and validated/NaN-guarded
-    downstream, so wrap only the fit/predict call to keep these out of callers'
-    logs without hiding genuine warnings elsewhere.
+    Two families are suppressed:
+
+    - numpy's ``"encountered in matmul"`` RuntimeWarnings. A (quasi-)separated
+      logistic fit or a near-singular fixed-effects design makes the solver
+      produce huge coefficients, so the ``X @ beta`` step overflows and numpy
+      emits divide-by-zero/overflow/invalid warnings from inside matmul (e.g.
+      sklearn's ``_linear_loss`` or pyfixest's residual computation).
+    - pyfixest's ``"singleton fixed effect(s) dropped"`` UserWarning. Singleton
+      FE groups (one observation) are absorbed by their own dummy and contribute
+      nothing to identification, so pyfixest drops them; the effective sample
+      size is reported in the estimator output instead.
+
+    The fitted results are still returned and validated/NaN-guarded downstream,
+    so wrap only the fit/predict call to keep these out of callers' logs without
+    hiding genuine warnings elsewhere.
     """
     with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore", invalid="ignore"):
         warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*encountered in matmul")
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*singleton fixed effect.*")
         yield
 
 

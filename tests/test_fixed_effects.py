@@ -7,7 +7,7 @@ import pytest
 
 from experiment_utils.estimators import Estimators
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
-from experiment_utils.utils import suppress_matmul_warnings
+from experiment_utils.utils import suppress_fit_warnings
 
 
 def make_panel(n_units=60, n_periods=6, effect=1.5, seed=0, between_unit=False):
@@ -343,15 +343,43 @@ def test_numeric_covariate_status_classifies_ok_nonfinite_degenerate():
     assert status(pd.Series([1.0, 2.0, np.nan, 4.0])) == "nonfinite"
 
 
-def test_suppress_matmul_warnings_silences_only_matmul():
+def test_suppress_fit_warnings_silences_only_known_noise():
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        with suppress_matmul_warnings():
+        with suppress_fit_warnings():
             warnings.warn("divide by zero encountered in matmul", RuntimeWarning, stacklevel=2)
+            warnings.warn("29855 singleton fixed effect(s) dropped from the model.", UserWarning, stacklevel=2)
         warnings.warn("a genuine unrelated warning", RuntimeWarning, stacklevel=2)  # must survive
     messages = [str(w.message) for w in rec]
     assert not any("matmul" in m for m in messages)
+    assert not any("singleton" in m for m in messages)
     assert any("unrelated" in m for m in messages)
+
+
+def test_fe_reports_effective_sample_size_and_drops_singletons():
+    """Singleton FE units are dropped silently; n_obs/n_singletons_dropped report the gap."""
+    df = make_panel(n_units=40, seed=24)  # 40 units x 6 periods, all switchers
+    # Append 10 singleton units (one observation each) -> pyfixest drops them.
+    extra = pd.DataFrame(
+        {
+            "unit": range(1000, 1010),
+            "period": 0,
+            "treatment": [i % 2 for i in range(10)],
+            "cov": np.linspace(-1, 1, 10),
+            "y": np.linspace(0, 1, 10),
+        }
+    )
+    extra["z_cov"] = (extra["cov"] - extra["cov"].mean()) / extra["cov"].std()
+    df = pd.concat([df, extra], ignore_index=True)
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        out = est().fixed_effects_regression(data=df, outcome_variable="y", fixed_effects=["unit"], covariates=["cov"])
+
+    assert not any("singleton" in str(w.message) for w in rec)  # warning suppressed
+    assert out["n_obs"] == 40 * 6  # 10 singleton rows dropped from 250
+    assert out["n_singletons_dropped"] == 10
+    assert np.isfinite(out["absolute_effect"])
 
 
 def test_near_constant_numeric_covariate_dropped_from_propensity_fit():

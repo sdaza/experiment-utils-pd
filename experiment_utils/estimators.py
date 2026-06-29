@@ -9,7 +9,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from xgboost import XGBClassifier
 
 from .entbal import EntropyBalance
-from .utils import get_logger, log_and_raise_error, suppress_matmul_warnings
+from .utils import get_logger, log_and_raise_error, suppress_fit_warnings
 
 
 class Estimators:
@@ -400,6 +400,10 @@ class Estimators:
             model_cols.append(weight_column)
         data = data.dropna(subset=model_cols).copy()
 
+        # Rows entering the fit (post-dropna). pyfixest may still drop singleton FE
+        # groups internally; the gap is reported as n_singletons_dropped below.
+        n_obs_input = int(len(data))
+
         # Switcher diagnostics on the first FE column (the documented "unit" dimension).
         unit_fe = fixed_effects[0]
         states = data.groupby(unit_fe)[self._treatment_col].nunique()
@@ -421,6 +425,7 @@ class Estimators:
                 f"below min_switcher_pct={min_switcher_pct}; skipping the fixed-effects fit for "
                 f"'{outcome_variable}' (no effect is identified). Lower min_switcher_pct to force it."
             )
+            # Fit was skipped, so no singletons were dropped; report the full input count.
             return self.__fixed_effects_nan_output(
                 outcome_variable,
                 model_type,
@@ -431,6 +436,8 @@ class Estimators:
                 n_switchers,
                 pct_switchers,
                 fe_absorbed,
+                n_obs=n_obs_input,
+                n_singletons_dropped=0,
             )
 
         # Build the pyfixest formula from already-standardized z_ columns.
@@ -450,14 +457,20 @@ class Estimators:
             pois_kwargs = {"fml": formula, "data": data, "vcov": vcov}
             if weight_column:
                 pois_kwargs["weights"] = weight_column
-            with suppress_matmul_warnings():
+            with suppress_fit_warnings():
                 fit = pf.fepois(**pois_kwargs)
         else:
             fit_kwargs = {"fml": formula, "data": data, "vcov": vcov}
             if weight_column:
                 fit_kwargs["weights"] = weight_column
-            with suppress_matmul_warnings():
+            with suppress_fit_warnings():
                 fit = pf.feols(**fit_kwargs)
+
+        # Effective sample size: pyfixest's fit._N counts rows actually used after
+        # singleton FE groups are dropped. Surface it (and the count dropped) so the
+        # silenced "singleton ... dropped" warning becomes an inspectable output field.
+        n_obs = int(getattr(fit, "_N", n_obs_input))
+        n_singletons_dropped = max(0, n_obs_input - n_obs)
 
         tidy = fit.tidy()
         if self._treatment_col not in tidy.index:
@@ -476,6 +489,8 @@ class Estimators:
                 n_switchers,
                 pct_switchers,
                 fe_absorbed,
+                n_obs=n_obs,
+                n_singletons_dropped=n_singletons_dropped,
             )
 
         row = tidy.loc[self._treatment_col]
@@ -548,6 +563,8 @@ class Estimators:
                 "n_switchers": n_switchers,
                 "pct_switchers": pct_switchers,
                 "fe_absorbed": fe_absorbed,
+                "n_obs": n_obs,
+                "n_singletons_dropped": n_singletons_dropped,
             }
         )
         if store_model:
@@ -565,6 +582,8 @@ class Estimators:
         n_switchers,
         pct_switchers,
         fe_absorbed,
+        n_obs=np.nan,
+        n_singletons_dropped=0,
     ) -> dict:
         """NaN-effect result (treatment collinear with FE) carrying diagnostics."""
         return {
@@ -589,6 +608,8 @@ class Estimators:
             "n_switchers": n_switchers,
             "pct_switchers": pct_switchers,
             "fe_absorbed": fe_absorbed,
+            "n_obs": n_obs,
+            "n_singletons_dropped": n_singletons_dropped,
         }
 
     def weighted_least_squares(
@@ -1854,7 +1875,7 @@ class Estimators:
         # tripping numpy's "encountered in matmul" RuntimeWarnings in sklearn's
         # logistic loss. PS scores are clipped to [min_ps, max_ps] below, so the
         # fit stays usable; suppress the noisy warnings around fit/predict only.
-        with suppress_matmul_warnings():
+        with suppress_fit_warnings():
             logistic_model.fit(X, y)
 
             if not logistic_model.n_iter_[0] < logistic_model.max_iter:
