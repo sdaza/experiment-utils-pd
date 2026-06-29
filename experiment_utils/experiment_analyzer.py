@@ -15,7 +15,13 @@ from .bootstrap import BootstrapMixin
 from .estimators import Estimators
 from .meta_analysis import MetaAnalysisMixin
 from .retrodesign import RetrodesignMixin
-from .utils import detect_categorical_covariates, generate_comparison_pairs, get_logger, log_and_raise_error
+from .utils import (
+    detect_categorical_covariates,
+    generate_comparison_pairs,
+    get_logger,
+    log_and_raise_error,
+    suppress_matmul_warnings,
+)
 
 
 def _clean_category_name(cat):
@@ -840,6 +846,36 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
 
         return data, summary
 
+    @staticmethod
+    def _numeric_covariate_status(series: pd.Series) -> str:
+        """Classify a numeric covariate for the propensity/regression design.
+
+        Returns one of:
+
+        - ``"nonfinite"`` — the column contains inf/NaN. ``impute_missing_values``
+          fills NaN but not inf, so these slip through a bare ``std != 0`` test.
+        - ``"degenerate"`` — no usable variance: constant, or std so small
+          relative to the column's scale that standardizing ``(x - mean) / std``
+          overflows to inf. Either way it adds no signal and would feed huge/inf
+          values into the fit, tripping numpy's divide-by-zero/overflow/invalid
+          "encountered in matmul" RuntimeWarnings (e.g. sklearn's logistic loss).
+        - ``"ok"`` — finite and well-scaled; safe to standardize and fit.
+
+        ``std`` uses ddof=1 to match :meth:`standardize_covariates`.
+        """
+        values = series.to_numpy(dtype="float64", copy=False)
+        if not np.isfinite(values).all():
+            return "nonfinite"
+        std = values.std(ddof=1)
+        scale = max(abs(float(values.mean())), float(np.abs(values).max()), 1.0)
+        # Near-constant relative to scale -> standardization blows up. The 1e-10
+        # floor only catches floating-point "dust"; legitimate covariates clear it.
+        if not np.isfinite(std) or std <= scale * 1e-10:
+            return "degenerate"
+        if not np.isfinite((values - values.mean()) / std).all():
+            return "degenerate"
+        return "ok"
+
     def standardize_covariates(self, data: pd.DataFrame, covariates: list[str]) -> pd.DataFrame:
         """
         Standardize covariates in the data.
@@ -1604,19 +1640,16 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     bin_covariates=binary_covariates,
                 )
 
-                # A covariate is usable only if it has variance AND is finite. The
-                # finiteness guard matters because impute_missing_values fills NaN but
-                # not inf (e.g. a ratio covariate that divided by zero upstream); an
-                # inf/NaN column passes a bare `std != 0` test (its std is inf/NaN) and
-                # then poisons standardize_covariates -> z_ becomes NaN -> the
-                # ps-logistic propensity fit trips divide-by-zero/overflow/invalid in
-                # sklearn's matmul. Drop such covariates here so every downstream
-                # consumer (SMD, IPW, regression) sees the same clean list.
-                comp_numeric_covariates = [
-                    c
-                    for c in numeric_covariates
-                    if comparison_data[c].std(ddof=0) != 0 and np.isfinite(comparison_data[c]).all()
-                ]
+                # A numeric covariate is usable only if it is finite AND has enough
+                # variance to standardize without overflowing. _numeric_covariate_status
+                # classifies each one ("nonfinite"/"degenerate"/"ok"); only "ok" columns
+                # survive. This matters because impute_missing_values fills NaN but not
+                # inf, and a near-constant column standardizes to inf — either poisons
+                # the z_ columns and trips divide-by-zero/overflow in the downstream fit
+                # (sklearn's logistic loss / pyfixest). Drop them here so every consumer
+                # (SMD, IPW, regression) sees the same clean list.
+                numeric_status = {c: self._numeric_covariate_status(comparison_data[c]) for c in numeric_covariates}
+                comp_numeric_covariates = [c for c in numeric_covariates if numeric_status[c] == "ok"]
                 comp_binary_covariates = [c for c in binary_covariates if comparison_data[c].sum() >= min_binary_count]
                 comp_binary_covariates = [
                     c
@@ -1642,13 +1675,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             comp_binary_covariates_filtered.append(c)
                     comp_binary_covariates = comp_binary_covariates_filtered
 
-                # Split numeric removals into non-finite (inf/NaN) vs zero variance so
-                # the log points at the real culprit instead of mislabelling everything
-                # as "zero variance".
-                removed_numeric_nonfinite = [c for c in numeric_covariates if not np.isfinite(comparison_data[c]).all()]
-                removed_numeric_var = (
-                    set(numeric_covariates) - set(comp_numeric_covariates) - set(removed_numeric_nonfinite)
-                )
+                # Split numeric removals into non-finite (inf/NaN) vs (near-)zero
+                # variance so the log points at the real culprit instead of
+                # mislabelling everything as "zero variance".
+                removed_numeric_nonfinite = [c for c in numeric_covariates if numeric_status[c] == "nonfinite"]
+                removed_numeric_var = [c for c in numeric_covariates if numeric_status[c] == "degenerate"]
                 removed_binary_freq = [c for c in binary_covariates if comparison_data[c].sum() < min_binary_count]
                 removed_binary_var = [
                     c for c in binary_covariates if c not in removed_binary_freq and comparison_data[c].std(ddof=0) == 0
@@ -1670,7 +1701,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             f"  - Non-finite values (inf/NaN, numeric): {sorted(removed_numeric_nonfinite)}"
                         )
                     if removed_numeric_var:
-                        self._logger.warning(f"  - Zero variance (numeric): {sorted(removed_numeric_var)}")
+                        self._logger.warning(f"  - Zero/near-zero variance (numeric): {sorted(removed_numeric_var)}")
                     if removed_binary_freq:
                         self._logger.warning(f"  - Low frequency (< {min_binary_count}): {sorted(removed_binary_freq)}")
                     if removed_binary_var:
@@ -1825,8 +1856,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             X_diag = comparison_data[z_covs]
                             y_diag = comparison_data[self._treatment_col]
                             lr = LogisticRegression(max_iter=1000)
-                            lr.fit(X_diag, y_diag)
-                            comparison_data["propensity_score"] = lr.predict_proba(X_diag)[:, 1]
+                            with suppress_matmul_warnings():
+                                lr.fit(X_diag, y_diag)
+                                comparison_data["propensity_score"] = lr.predict_proba(X_diag)[:, 1]
                             self._logger.info(
                                 "Computed propensity scores via logistic regression for overlap diagnostics "
                                 "(entropy balancing weights used for estimation)."

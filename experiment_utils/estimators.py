@@ -9,7 +9,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from xgboost import XGBClassifier
 
 from .entbal import EntropyBalance
-from .utils import get_logger, log_and_raise_error
+from .utils import get_logger, log_and_raise_error, suppress_matmul_warnings
 
 
 class Estimators:
@@ -441,16 +441,23 @@ class Estimators:
 
         vcov = {"CRV1": cluster_col} if cluster_col else "hetero"
 
+        # A (near-)singular FE design makes pyfixest's internal solve produce a
+        # huge beta_hat, so `X @ beta_hat` overflows and numpy emits noisy
+        # "encountered in matmul" RuntimeWarnings. The fit still returns usable
+        # numbers (and we NaN-guard a dropped treatment below), so silence those
+        # specific warnings. The switcher gate above already rejects the worst case.
         if model_type == "poisson":
             pois_kwargs = {"fml": formula, "data": data, "vcov": vcov}
             if weight_column:
                 pois_kwargs["weights"] = weight_column
-            fit = pf.fepois(**pois_kwargs)
+            with suppress_matmul_warnings():
+                fit = pf.fepois(**pois_kwargs)
         else:
             fit_kwargs = {"fml": formula, "data": data, "vcov": vcov}
             if weight_column:
                 fit_kwargs["weights"] = weight_column
-            fit = pf.feols(**fit_kwargs)
+            with suppress_matmul_warnings():
+                fit = pf.feols(**fit_kwargs)
 
         tidy = fit.tidy()
         if self._treatment_col not in tidy.index:
@@ -1843,14 +1850,19 @@ class Estimators:
             X = data[covariates]
 
         y = data[self._treatment_col]
-        logistic_model.fit(X, y)
+        # Quasi-separation drives coefficients large, overflowing X @ weights and
+        # tripping numpy's "encountered in matmul" RuntimeWarnings in sklearn's
+        # logistic loss. PS scores are clipped to [min_ps, max_ps] below, so the
+        # fit stays usable; suppress the noisy warnings around fit/predict only.
+        with suppress_matmul_warnings():
+            logistic_model.fit(X, y)
 
-        if not logistic_model.n_iter_[0] < logistic_model.max_iter:
-            self._logger.warning(
-                "Logistic regression model did not converge. Consider increasing the number of iterations or adjusting other parameters."  # noqa: E501
-            )  # noqa: E501
+            if not logistic_model.n_iter_[0] < logistic_model.max_iter:
+                self._logger.warning(
+                    "Logistic regression model did not converge. Consider increasing the number of iterations or adjusting other parameters."  # noqa: E501
+                )  # noqa: E501
 
-        data["propensity_score"] = logistic_model.predict_proba(X)[:, 1]
+            data["propensity_score"] = logistic_model.predict_proba(X)[:, 1]
         data["propensity_score"] = np.minimum(self._max_ps_score, data["propensity_score"])
         data["propensity_score"] = np.maximum(self._min_ps_score, data["propensity_score"])
 

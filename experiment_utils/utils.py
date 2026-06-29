@@ -5,11 +5,29 @@ assumptions about the format of input data.
 
 import logging
 import warnings
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import brentq
 from scipy.stats import norm
+
+
+@contextmanager
+def suppress_matmul_warnings():
+    """Silence numpy's benign "encountered in matmul" RuntimeWarnings.
+
+    A (quasi-)separated logistic fit or a near-singular fixed-effects design
+    makes the solver produce huge coefficients, so the ``X @ beta`` step
+    overflows and numpy emits divide-by-zero/overflow/invalid RuntimeWarnings
+    from inside matmul (e.g. sklearn's ``_linear_loss`` or pyfixest's residual
+    computation). The fitted results are still returned and validated/NaN-guarded
+    downstream, so wrap only the fit/predict call to keep these out of callers'
+    logs without hiding genuine warnings elsewhere.
+    """
+    with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*encountered in matmul")
+        yield
 
 
 def turn_off_package_logger(package: str) -> None:

@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pyfixest as pf
@@ -5,6 +7,7 @@ import pytest
 
 from experiment_utils.estimators import Estimators
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
+from experiment_utils.utils import suppress_matmul_warnings
 
 
 def make_panel(n_units=60, n_periods=6, effect=1.5, seed=0, between_unit=False):
@@ -322,3 +325,70 @@ def test_ols_fe_ci_matches_pyfixest_clustered():
     hi = out["absolute_effect"] + t_crit * out["standard_error"]
     assert lo == pytest.approx(float(ci.iloc[0]), abs=1e-6)
     assert hi == pytest.approx(float(ci.iloc[1]), abs=1e-6)
+
+
+# --- numeric covariate finiteness/variance guard + matmul warning suppression ---
+
+
+def test_numeric_covariate_status_classifies_ok_nonfinite_degenerate():
+    status = ExperimentAnalyzer._numeric_covariate_status
+    rng = np.random.default_rng(0)
+    assert status(pd.Series(rng.normal(size=200))) == "ok"
+    assert status(pd.Series([5.0] * 100)) == "degenerate"  # exactly constant
+    # near-constant: std tiny relative to scale -> standardizing is meaningless
+    # and risks overflow; must be rejected even though std != 0.
+    near_constant = pd.Series([1e6 + (i % 2) * 1e-5 for i in range(100)])
+    assert status(near_constant) == "degenerate"
+    assert status(pd.Series([1.0, 2.0, np.inf, 4.0])) == "nonfinite"
+    assert status(pd.Series([1.0, 2.0, np.nan, 4.0])) == "nonfinite"
+
+
+def test_suppress_matmul_warnings_silences_only_matmul():
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        with suppress_matmul_warnings():
+            warnings.warn("divide by zero encountered in matmul", RuntimeWarning, stacklevel=2)
+        warnings.warn("a genuine unrelated warning", RuntimeWarning, stacklevel=2)  # must survive
+    messages = [str(w.message) for w in rec]
+    assert not any("matmul" in m for m in messages)
+    assert any("unrelated" in m for m in messages)
+
+
+def test_near_constant_numeric_covariate_dropped_from_propensity_fit():
+    """A near-constant numeric covariate is dropped (not fed to the ps-logistic fit)."""
+    df = analyzer_df(seed=23)
+    rng = np.random.default_rng(23)
+    # >2 unique values => treated as numeric; std tiny relative to ~1e6 scale.
+    df["dust"] = 1e6 + rng.normal(0, 1e-5, size=len(df))
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        balance_covariates=["cov", "dust"],
+        adjustment="balance",
+        balance_method="ps-logistic",
+    )
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        a.get_effects()
+    assert "dust" not in a._final_covariates
+    assert "cov" in a._final_covariates
+    assert not any("matmul" in str(w.message) for w in rec)
+
+
+def test_fe_fit_does_not_leak_matmul_warnings():
+    """Near-singular FE design (interactions + clustering) must not leak matmul warnings."""
+    df = analyzer_df(seed=15)
+    a = ExperimentAnalyzer(
+        data=df,
+        outcomes=["y"],
+        treatment_col="treatment",
+        regression_covariates=["cov"],
+        interaction_covariates=["cov"],
+        fixed_effects=["unit"],
+        cluster_col="unit",
+    )
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        a.get_effects()
+    assert not any("matmul" in str(w.message) for w in rec)
