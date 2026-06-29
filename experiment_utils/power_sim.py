@@ -1410,7 +1410,7 @@ class PowerSim:
             True if a hypothesis is rejected, False if not.
         """
 
-        m = len(pvals)
+        m, pvals = len(pvals), np.asarray(pvals)
         sort_ind = np.argsort(pvals)
         k = [i for i, p in enumerate(pvals[sort_ind]) if p < (i + 1.0) * q / m]
         significant = np.zeros(m, dtype="bool")
