@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.3...v1.1.4) (2026-06-29)
+
+
+### Bug Fixes
+
+* replace suppress_matmul_warnings with suppress_fit_warnings for clarity and consistency ([3396cf9](https://github.com/sdaza/experiment-utils-pd/commit/3396cf9db8e1ced5db6942acfe24cce592693d4d))
+
 ## [1.1.3](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.2...v1.1.3) (2026-06-29)
 
 
