@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.1...v1.1.2) (2026-06-29)
+
+
+### Bug Fixes
+
+* minor lock change ([519cd89](https://github.com/sdaza/experiment-utils-pd/commit/519cd89160b9b26864688383af853900cca1aa60))
+
 ## [1.1.1](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.0...v1.1.1) (2026-06-28)
 
 
