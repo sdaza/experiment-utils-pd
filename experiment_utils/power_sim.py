@@ -735,7 +735,16 @@ class PowerSim:
         if use_parallel:
             from joblib import Parallel, delayed
 
-            if self.parallel_strategy == "hybrid":
+            # Hybrid materializes all datasets up front and ships them to loky worker
+            # processes; that only pays off when the per-simulation test is CPU-bound.
+            # Only "count" (Poisson GLM fit) is heavy enough to benefit. For "proportion"
+            # (z-test) and "average" (t-test) the test is cheap, so the pickling + memory
+            # overhead dominates and can trigger loky worker-churn warnings — use threading.
+            effective_strategy = self.parallel_strategy
+            if effective_strategy == "hybrid" and self.metric != "count":
+                effective_strategy = "threading"
+
+            if effective_strategy == "hybrid":
                 if show_progress:
                     self.logger.info(
                         f"Running {self.nsim} power simulations with hybrid parallelization "
@@ -771,7 +780,7 @@ class PowerSim:
                     )
                 )
 
-            elif self.parallel_strategy == "threading":
+            elif effective_strategy == "threading":
                 # threading only (memory-efficient but GIL-limited)
                 if show_progress:
                     self.logger.info(f"Running {self.nsim} power simulations in parallel (threading)...")
