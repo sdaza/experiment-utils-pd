@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.3](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.2...v1.1.3) (2026-06-29)
+
+
+### Bug Fixes
+
+* add suppress_matmul_warnings context manager and enhance numeric covariate handling ([8f41826](https://github.com/sdaza/experiment-utils-pd/commit/8f4182619894837ad0f49e77cb8965495c6cd12e))
+* enhance covariate filtering to handle non-finite values and improve logging ([8bb2516](https://github.com/sdaza/experiment-utils-pd/commit/8bb25169d5656731249e71b637135bfc0578613b))
+
 ## [1.1.2](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.1...v1.1.2) (2026-06-29)
 
 
