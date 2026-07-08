@@ -40,8 +40,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
     ----------
     data : pd.DataFrame
         Pandas Dataframe
-    outcomes : List
-        List of outcome variables
+    outcomes : List, optional
+        List of outcome variables. Optional when ``ratio_outcomes`` is provided —
+        at least one of ``outcomes`` or ``ratio_outcomes`` is required. Ratio
+        numerator/denominator columns do not need to be listed here; include them
+        only if you also want their individual effects estimated.
     balance_covariates : list[str], optional
         Covariates used exclusively for balance checking (SMD tables). They are never
         included in the regression formula. Can include:
@@ -265,8 +268,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
     def __init__(
         self,
         data: pd.DataFrame,
-        outcomes: list[str],
-        treatment_col: str,
+        outcomes: list[str] | None = None,
+        treatment_col: str | None = None,
         experiment_identifier: list[str] | None = None,
         balance_covariates: list[str] | None = None,
         covariates: list[str] | None = None,
@@ -318,6 +321,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
     ) -> None:
         self._logger = get_logger("Experiment Analyzer")
         self._data = data.copy()
+
+        if treatment_col is None:
+            log_and_raise_error(self._logger, "treatment_col is required.")
 
         # process outcomes - can be strings or tuples for Cox models
         self._outcomes = []
@@ -403,6 +409,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             f"Column '{col}' not found in data (required for ratio outcome '{name}').",
                         )
                 self._ratio_outcomes[name] = (num_col, den_col)
+
+        if not self._outcomes and not self._ratio_outcomes:
+            log_and_raise_error(self._logger, "Provide at least one of `outcomes` or `ratio_outcomes`.")
 
         self.__check_input()
         self._alpha = alpha
@@ -3294,7 +3303,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         self,
         method: str = "conditional",
         alpha: float | None = None,
-        ci: float = 0.95,
+        ci: float | None = None,
         group_by: str = "outcome",
     ) -> pd.DataFrame:
         """
@@ -3313,6 +3322,19 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         effect types (``log_odds``, ``log_rate_ratio``, ``log_hazard_ratio``),
         else ``corrected / control_value`` (treating the control mean as fixed;
         NaN when ``control_value`` is 0/NaN).
+
+        Parameters
+        ----------
+        method : str
+            ``"conditional"`` or ``"empirical_bayes"``. By default ``"conditional"``.
+        alpha : float, optional
+            Two-sided significance level that defined selection. Defaults to the
+            analyzer's ``alpha``.
+        ci : float, optional
+            Confidence level for the corrected intervals. Defaults to ``1 - alpha``
+            so the corrected CIs match the coverage of the analyzer's results.
+        group_by : str
+            Grouping column for empirical Bayes shrinkage. By default ``"outcome"``.
 
         Returns
         -------
@@ -3333,6 +3355,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         alpha = self._alpha if alpha is None else alpha
         if not 0 < alpha < 1:
             raise ValueError("alpha must be strictly between 0 and 1")
+        ci = 1 - alpha if ci is None else ci
         if not 0 < ci < 1:
             raise ValueError("ci must be strictly between 0 and 1")
 
