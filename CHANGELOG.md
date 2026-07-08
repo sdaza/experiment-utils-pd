@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.6](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.5...v1.1.6) (2026-07-08)
+
+
+### Bug Fixes
+
+* minor adjustments ([6e3e098](https://github.com/sdaza/experiment-utils-pd/commit/6e3e09849f7a9868c6fdb58d30aea5dbd1ec0422))
+
 ## [1.1.5](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.4...v1.1.5) (2026-07-08)
 
 
