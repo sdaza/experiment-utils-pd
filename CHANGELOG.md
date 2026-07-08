@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.5](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.4...v1.1.5) (2026-07-08)
+
+
+### Bug Fixes
+
+* adjust parallel strategy handling in PowerSim for improved performance ([733a4cb](https://github.com/sdaza/experiment-utils-pd/commit/733a4cb1b4672b6e1f85dce04ee88ccbe2ec7e37))
+* update outcomes and treatment_col parameters to be optional in ExperimentAnalyzer ([ff5d2eb](https://github.com/sdaza/experiment-utils-pd/commit/ff5d2eb382e9918a7bd8991b85ace91fae902cff))
+* update p-value handling in PowerSim class for improved accuracy ([ab40f61](https://github.com/sdaza/experiment-utils-pd/commit/ab40f6116b756d3d06e5ddb27f26bd31a3d3a3cd))
+
 ## [1.1.4](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.3...v1.1.4) (2026-06-29)
 
 
