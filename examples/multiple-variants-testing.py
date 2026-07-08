@@ -6,9 +6,9 @@ ps = PowerSim(
     metric="proportion",
     relative_effect=True,
     variants=3,
-    nsim=5000,
+    nsim=10000,
     alpha=0.05,
-    correction="dunnett",  # Benjamini-Hochberg (linear step-up)
+    # correction="dunnett",  # Benjamini-Hochberg (linear step-up)
     alternative="two-tailed",
     early_stopping=False,
     comparisons=[(0, 1), (0, 2), (0, 3)]
@@ -46,5 +46,29 @@ ps.find_sample_size(
     max_sample_size=500000, 
     # step_size=100,
     tolerance=0.001,
-    correction="fdr",
+    correction="sidak",
 )
+
+# %% 
+ps.find_sample_size(
+    baseline=0.10,
+    effect=0.05,
+    power=0.8,
+    min_sample_size=10000,
+    max_sample_size=500000, 
+    # step_size=100,
+    tolerance=0.001,
+    correction="bonferroni",
+)
+
+# %%
+ps.find_sample_size(
+    baseline=0.10,
+    effect=0.05,
+    power=0.8,
+    min_sample_size=10000,
+    max_sample_size=500000, 
+    # step_size=100,
+    tolerance=0.001,
+    correction="fdr")
+
