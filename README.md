@@ -1641,6 +1641,14 @@ power_result = power_sim.get_power(
 print(power_result[["comparison", "power"]])
 ```
 
+> **The comparison family and corrections.** With multiple variants, `comparisons` at
+> `PowerSim(...)` init defaults to **all pairwise comparisons** (including variant vs
+> variant), and multiple-comparison corrections are always applied across that full
+> family — the `comparisons` argument of `get_power` / `find_sample_size` only selects
+> which results are reported. If you will only test control vs each variant, declare it
+> at init (`PowerSim(..., comparisons=[(0, 1), (0, 2)])`): a smaller family means a less
+> strict correction and higher power at the same sample size.
+
 ### Power from Real Data
 
 When your data doesn't follow standard parametric assumptions, estimate power by bootstrapping directly from observed data using `get_power_from_data()`. Instead of generating synthetic data from a distribution, it repeatedly samples from your actual dataset and injects the specified effect:
