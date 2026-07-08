@@ -61,7 +61,9 @@ class PowerSim:
             One minus statistical confidence
         correction : str
             Type of multiple-comparison correction: 'bonferroni', 'holm', 'hochberg',
-            'sidak', 'fdr' or None (default: None, no correction)
+            'sidak', 'fdr', 'dunnett' or None (default: None, no correction).
+            'dunnett' controls the FWER for control-vs-variant comparisons sharing
+            the same control group and is more powerful than bonferroni/sidak there.
         fdr_method : 'indep' | 'negcorr'
             If 'indep' it implements Benjamini/Hochberg for independent or if
             'negcorr' it corresponds to Benjamini/Yekutieli.
@@ -101,6 +103,7 @@ class PowerSim:
         self.alpha = alpha
         self.correction = correction
         self.fdr_method = fdr_method
+        self._dunnett_cache = {}
 
     def __run_experiment(
         self,
@@ -346,7 +349,11 @@ class PowerSim:
             "fdr": self.lsu,
         }
 
-        if self.correction in correction_methods:
+        if self.correction == "dunnett":
+            # single-step threshold from the family structure; valid for subsets too
+            threshold = self.dunnett_alpha(sample_size)
+            significant = [p < threshold for p in l_pvalues]
+        elif self.correction in correction_methods:
             if len(self.comparisons) == 1:
                 significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
             elif len(l_pvalues) < len(self.comparisons):
@@ -535,7 +542,11 @@ class PowerSim:
             "fdr": self.lsu,
         }
 
-        if self.correction in correction_methods:
+        if self.correction == "dunnett":
+            # single-step threshold from the family structure; valid for subsets too
+            threshold = self.dunnett_alpha(sample_size)
+            significant = [p < threshold for p in l_pvalues]
+        elif self.correction in correction_methods:
             # apply correction using the full family size, even when computing a subset
             if len(self.comparisons) == 1:
                 significant = [l_pvalues[0] < self.alpha / pvalue_adjustment[self.alternative]]
@@ -753,7 +764,7 @@ class PowerSim:
             ('two-tailed', 'greater', or 'smaller').
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none' (or None).
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none' (or None).
 
         Returns
         -------
@@ -1135,7 +1146,9 @@ class PowerSim:
                 "sidak": self.sidak,
                 "fdr": self.lsu,
             }
-            if self.correction in correction_methods:
+            if self.correction == "dunnett":
+                significances = np.array(np.array(iter_pvals) < self.dunnett_alpha(sample_size))
+            elif self.correction in correction_methods:
                 significances = correction_methods[self.correction](
                     np.array(iter_pvals), self.alpha / pvalue_adjustment[self.alternative]
                 )
@@ -1220,7 +1233,7 @@ class PowerSim:
             Whether to plot the results after the grid is computed.
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none'
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none'
             (or None to use the instance default).
         alpha : float, optional
             Override the instance significance level for this call only.
@@ -1549,6 +1562,92 @@ class PowerSim:
             significant[sort_ind[0 : k[-1] + 1]] = True
         return significant
 
+    def dunnett_alpha(self, sample_size: list[int]) -> float:
+        """Per-comparison p-value threshold for the single-step Dunnett procedure.
+
+        Dunnett's many-to-one procedure controls the FWER for comparing several
+        treatments against a SHARED control. Unlike Bonferroni/Sidak it accounts
+        for the positive correlation the shared control induces between the test
+        statistics (rho_ij = lambda_i * lambda_j, lambda_i = sqrt(n_i / (n_i + n_control))),
+        so it is uniformly more powerful while giving the same FWER guarantee.
+
+        All comparisons defined on the instance must share the same control group
+        (e.g. [(0, 1), (0, 2), (0, 3)]); variant-vs-variant comparisons are not
+        supported by this procedure.
+
+        Parameters
+        ----------
+        sample_size : list[int]
+            Sample size per group (control + variants). Only the allocation
+            ratios matter for the threshold, not the absolute sizes.
+
+        Returns
+        -------
+        float
+            Threshold to compare (two-sided) test p-values against: a p-value is
+            significant when p < threshold. For one-sided alternatives the
+            threshold is expressed on the two-sided p-value scale, consistent
+            with the other correction methods in this class.
+        """
+        cache_key = (tuple(sample_size), self.alpha, self.alternative, tuple(self.comparisons))
+        cached = self._dunnett_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        controls = {j for j, _h in self.comparisons}
+        if len(controls) != 1:
+            log_and_raise_error(
+                self.logger,
+                f"Dunnett correction requires all comparisons to share the same control group, "
+                f"got comparisons {self.comparisons}. Use e.g. "
+                f"PowerSim(..., comparisons=[(0, 1), (0, 2)], correction='dunnett').",
+            )
+        control = controls.pop()
+        n_control = sample_size[control]
+        if n_control <= 0:
+            log_and_raise_error(self.logger, "Dunnett correction requires a non-empty control group")
+
+        from scipy.optimize import brentq
+        from scipy.stats import norm
+
+        # correlation of each z-statistic with the shared control component
+        lambdas = np.array(
+            [np.sqrt(sample_size[h] / (sample_size[h] + n_control)) for _j, h in self.comparisons if sample_size[h] > 0]
+        )
+        s = np.sqrt(1.0 - lambdas**2)
+        m = len(lambdas)
+        two_sided = self.alternative == "two-tailed"
+
+        # P(max |Z_i| <= c) via the shared-factor representation Z_i = lambda_i*U + s_i*V_i:
+        # integrate the conditional product over the common factor U
+        u = np.linspace(-8.0, 8.0, 4001)
+        phi_u = norm.pdf(u)
+
+        def coverage(c):
+            if two_sided:
+                cond = norm.cdf((c - lambdas[:, None] * u) / s[:, None]) - norm.cdf(
+                    (-c - lambdas[:, None] * u) / s[:, None]
+                )
+            else:
+                cond = norm.cdf((c - lambdas[:, None] * u) / s[:, None])
+            return np.trapezoid(phi_u * np.prod(cond, axis=0), u)
+
+        target = 1.0 - self.alpha
+        if m == 1:
+            critical = norm.ppf(1 - self.alpha / 2) if two_sided else norm.ppf(1 - self.alpha)
+        else:
+            # Dunnett's critical value lies between the uncorrected and Bonferroni ones
+            if two_sided:
+                lo, hi = norm.ppf(1 - self.alpha / 2), norm.ppf(1 - self.alpha / (2 * m))
+            else:
+                lo, hi = norm.ppf(1 - self.alpha), norm.ppf(1 - self.alpha / m)
+            critical = brentq(lambda c: coverage(c) - target, lo - 1e-9, hi + 1e-9, xtol=1e-8)
+
+        # express as a threshold on two-sided p-values (one-sided uses the p/2 convention)
+        threshold = 2 * (1 - norm.cdf(critical))
+        self._dunnett_cache[cache_key] = threshold
+        return threshold
+
     def _optimize_allocation(
         self,
         power_dict: dict,
@@ -1835,7 +1934,7 @@ class PowerSim:
             Step size for initial coarse search (default: 100).
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'none' (or None).
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none' (or None).
         alpha : float, optional
             Override the instance significance level for this call only.
         alternative : str, optional
