@@ -17,7 +17,7 @@ ps = PowerSim(
     metric="proportion",
     relative_effect=True,
     variants=3,
-    nsim=5000,
+    nsim=10000,
     alpha=0.05,
     correction="dunnett",
     alternative="two-tailed",
@@ -53,6 +53,7 @@ for corr in ["none", "fdr", "dunnett", "sidak", "bonferroni"]:
         min_sample_size=10000,
         max_sample_size=500000,
         step_size=2000,
+        tolerance=0.001,        
         correction=corr,
     )
     results[corr] = res.iloc[0]["total_sample_size"]
@@ -76,7 +77,7 @@ ps.find_sample_size(
     power=0.8,
     min_sample_size=10000,
     max_sample_size=500000,
-    step_size=2000,
+    # step_size=2000,
     correction="fdr",
     fdr_method="negcorr",  # Benjamini-Yekutieli
 )
