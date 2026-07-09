@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.7](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.6...v1.1.7) (2026-07-09)
+
+
+### Bug Fixes
+
+* add Dunnett correction method for multiple comparisons ([6ee770c](https://github.com/sdaza/experiment-utils-pd/commit/6ee770cfb726ffffdc31ec6d1e68881fb177cc4b))
+* enhance multiple comparison correction options and update documentation ([0b44672](https://github.com/sdaza/experiment-utils-pd/commit/0b4467262154636c322085b1a7247c11719dde9f))
+* remove unnecessary whitespace and comments in multiple-variants-testing.py ([db6c25b](https://github.com/sdaza/experiment-utils-pd/commit/db6c25b27f81e61a57a7a6c387b02e1feb0807df))
+* update simulation parameters and add additional sample size calculations ([080f15c](https://github.com/sdaza/experiment-utils-pd/commit/080f15c60a3ea6c0dd0b9cac2f56c1853df3139e))
+
 ## [1.1.6](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.5...v1.1.6) (2026-07-08)
 
 
