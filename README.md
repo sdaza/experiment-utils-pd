@@ -23,7 +23,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Overlap Weighting & Trimming**: Overlap weights (ATO) and propensity score trimming for robust handling of limited common support
 - **Meta-Analysis**: Fixed-effects (IVW) and random-effects (Paule-Mandel + HKSJ) pooling across experiments, with heterogeneity diagnostics (τ², I², Cochran's Q)
 - **Bootstrap Inference**: Robust confidence intervals and p-values via bootstrap resampling
-- **Multiple Comparison Correction**: Family-wise error rate control (Bonferroni, Holm, Sidak, FDR)
+- **Multiple Comparison Correction**: FWER control (Bonferroni, Holm, Hochberg, Sidak, Dunnett, Tukey HSD) and FDR control (Benjamini-Hochberg, Benjamini-Yekutieli)
 - **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with auto-scaled percentage-point annotations, combined absolute/relative labels, fixed or random-effects pooling, magnitude sorting, and grouping by any experiment column
 - **Overlap Diagnostics**: Mirror density plots of propensity score distributions (`plot_overlap`) with overlap coefficient annotation and group-by splitting
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, and non-superiority following Lakens (2017), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
@@ -1648,6 +1648,59 @@ print(power_result[["comparison", "power"]])
 > which results are reported. If you will only test control vs each variant, declare it
 > at init (`PowerSim(..., comparisons=[(0, 1), (0, 2)])`): a smaller family means a less
 > strict correction and higher power at the same sample size.
+
+### Choosing a Multiple-Comparison Correction
+
+`PowerSim` applies no correction by default (`correction=None`). With multiple variants,
+pick the correction that matches the **decision** the test feeds — not the other way
+around:
+
+| `correction=` | Controls | Use when |
+|---|---|---|
+| `None` (default) | nothing | single comparison, or corrections handled elsewhere |
+| `"dunnett"` | FWER over control-vs-variant comparisons | **ship every variant that beats control** — the standard choice for a shared-control design; more powerful than bonferroni/sidak because it models the correlation induced by the shared control |
+| `"tukey"` | FWER over all pairwise comparisons | conclusions involve **variant-vs-variant claims** ("B is better than C"), e.g. picking the best variant |
+| `"fdr"` | false discovery rate (≤ α of discoveries are false, on average) | **screening/discovery** — winners get a confirmation run or gradual rollout; costs almost no power but does not bound P(any false positive) |
+| `"sidak"`, `"bonferroni"`, `"holm"`, `"hochberg"` | FWER, generic | any family shape; slightly conservative for shared-control designs (use dunnett/tukey instead when they apply) |
+
+`fdr_method="negcorr"` switches FDR from Benjamini-Hochberg to Benjamini-Yekutieli
+(valid under arbitrary dependence, notably more conservative). `correction`, `alpha`,
+`alternative`, and `fdr_method` can all be overridden per call.
+
+**Example — comparing corrections for 3 variants vs a shared control**
+(see `examples/multiple-variants-testing.py` for the runnable version):
+
+```python
+from experiment_utils import PowerSim
+
+ps = PowerSim(
+    metric="proportion",
+    relative_effect=True,                    # effect is a relative lift (5% of 0.10 -> 0.105)
+    variants=3,
+    comparisons=[(0, 1), (0, 2), (0, 3)],    # control-vs-variant family (required for dunnett)
+    nsim=5000,
+    alpha=0.05,
+    correction="dunnett",
+    early_stopping=False,
+)
+
+# power at a given design
+ps.get_power(baseline=0.10, effect=0.05, sample_size=75000)
+
+# required sample size under each correction (same instance, per-call override)
+for corr in ["none", "fdr", "dunnett", "sidak", "bonferroni"]:
+    result = ps.find_sample_size(
+        baseline=0.10, effect=0.05, power=0.8,
+        min_sample_size=10000, max_sample_size=500000, step_size=2000,
+        correction=corr,
+    )
+    print(corr, result.iloc[0]["total_sample_size"])
+```
+
+Required sample size increases with the strength of the guarantee:
+`none < fdr < dunnett < sidak <= bonferroni` (and `tukey` sits above `dunnett`
+because it protects the larger all-pairwise family). The sidak/bonferroni gap
+is under 1% and can swap order within simulation noise.
 
 ### Power from Real Data
 

@@ -61,9 +61,11 @@ class PowerSim:
             One minus statistical confidence
         correction : str
             Type of multiple-comparison correction: 'bonferroni', 'holm', 'hochberg',
-            'sidak', 'fdr', 'dunnett' or None (default: None, no correction).
+            'sidak', 'fdr', 'dunnett', 'tukey' or None (default: None, no correction).
             'dunnett' controls the FWER for control-vs-variant comparisons sharing
             the same control group and is more powerful than bonferroni/sidak there.
+            'tukey' (HSD) controls the FWER across all pairwise comparisons — use it
+            when conclusions involve variant-vs-variant claims.
         fdr_method : 'indep' | 'negcorr'
             If 'indep' it implements Benjamini/Hochberg for independent or if
             'negcorr' it corresponds to Benjamini/Yekutieli.
@@ -103,7 +105,7 @@ class PowerSim:
         self.alpha = alpha
         self.correction = correction
         self.fdr_method = fdr_method
-        self._dunnett_cache = {}
+        self._correction_threshold_cache = {}
 
     def __run_experiment(
         self,
@@ -349,9 +351,9 @@ class PowerSim:
             "fdr": self.lsu,
         }
 
-        if self.correction == "dunnett":
-            # single-step threshold from the family structure; valid for subsets too
-            threshold = self.dunnett_alpha(sample_size)
+        if self.correction in ("dunnett", "tukey"):
+            # single-step thresholds from the family structure; valid for subsets too
+            threshold = self.dunnett_alpha(sample_size) if self.correction == "dunnett" else self.tukey_alpha()
             significant = [p < threshold for p in l_pvalues]
         elif self.correction in correction_methods:
             if len(self.comparisons) == 1:
@@ -542,9 +544,9 @@ class PowerSim:
             "fdr": self.lsu,
         }
 
-        if self.correction == "dunnett":
-            # single-step threshold from the family structure; valid for subsets too
-            threshold = self.dunnett_alpha(sample_size)
+        if self.correction in ("dunnett", "tukey"):
+            # single-step thresholds from the family structure; valid for subsets too
+            threshold = self.dunnett_alpha(sample_size) if self.correction == "dunnett" else self.tukey_alpha()
             significant = [p < threshold for p in l_pvalues]
         elif self.correction in correction_methods:
             # apply correction using the full family size, even when computing a subset
@@ -730,6 +732,7 @@ class PowerSim:
         alpha: float = None,
         alternative: str = None,
         correction: str = None,
+        fdr_method: str = None,
     ) -> pd.DataFrame:  # noqa: E501
         """
         Estimate power using simulation.
@@ -764,7 +767,11 @@ class PowerSim:
             ('two-tailed', 'greater', or 'smaller').
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none' (or None).
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'tukey', 'none' (or None).
+        fdr_method : str, optional
+            Override the instance FDR variant for this call only ('indep' for
+            Benjamini-Hochberg, 'negcorr' for Benjamini-Yekutieli). Only used when
+            the effective correction is 'fdr'.
 
         Returns
         -------
@@ -781,6 +788,9 @@ class PowerSim:
         if correction is not None:
             _saved["correction"] = self.correction
             self.correction = correction
+        if fdr_method is not None:
+            _saved["fdr_method"] = self.fdr_method
+            self.fdr_method = fdr_method
 
         try:
             return self._get_power_impl(
@@ -1148,6 +1158,8 @@ class PowerSim:
             }
             if self.correction == "dunnett":
                 significances = np.array(np.array(iter_pvals) < self.dunnett_alpha(sample_size))
+            elif self.correction == "tukey":
+                significances = np.array(np.array(iter_pvals) < self.tukey_alpha())
             elif self.correction in correction_methods:
                 significances = correction_methods[self.correction](
                     np.array(iter_pvals), self.alpha / pvalue_adjustment[self.alternative]
@@ -1233,7 +1245,7 @@ class PowerSim:
             Whether to plot the results after the grid is computed.
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none'
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'tukey', 'none'
             (or None to use the instance default).
         alpha : float, optional
             Override the instance significance level for this call only.
@@ -1552,9 +1564,18 @@ class PowerSim:
         --------
         significant: array, bool
             True if a hypothesis is rejected, False if not.
+
+        Notes
+        -----
+        With fdr_method='negcorr' on the instance, the Benjamini-Yekutieli
+        variant is applied: the FDR level is divided by the harmonic sum
+        c(m) = sum_{i=1..m} 1/i, valid under arbitrary dependence between
+        tests but notably more conservative.
         """
 
         m, pvals = len(pvals), np.asarray(pvals)
+        if self.fdr_method == "negcorr" and m > 1:
+            q = q / np.sum(1.0 / np.arange(1, m + 1))
         sort_ind = np.argsort(pvals)
         k = [i for i, p in enumerate(pvals[sort_ind]) if p < (i + 1.0) * q / m]
         significant = np.zeros(m, dtype="bool")
@@ -1589,8 +1610,8 @@ class PowerSim:
             threshold is expressed on the two-sided p-value scale, consistent
             with the other correction methods in this class.
         """
-        cache_key = (tuple(sample_size), self.alpha, self.alternative, tuple(self.comparisons))
-        cached = self._dunnett_cache.get(cache_key)
+        cache_key = ("dunnett", tuple(sample_size), self.alpha, self.alternative, tuple(self.comparisons))
+        cached = self._correction_threshold_cache.get(cache_key)
         if cached is not None:
             return cached
 
@@ -1645,7 +1666,47 @@ class PowerSim:
 
         # express as a threshold on two-sided p-values (one-sided uses the p/2 convention)
         threshold = 2 * (1 - norm.cdf(critical))
-        self._dunnett_cache[cache_key] = threshold
+        self._correction_threshold_cache[cache_key] = threshold
+        return threshold
+
+    def tukey_alpha(self) -> float:
+        """Per-comparison p-value threshold for Tukey's HSD procedure.
+
+        Tukey's honest significant difference controls the FWER across ALL
+        pairwise comparisons between groups, using the studentized range
+        distribution. Use it when conclusions involve variant-vs-variant claims
+        (e.g. "B is better than C"), not only variant-vs-control; for a
+        control-vs-variants family, Dunnett is less conservative.
+
+        With unequal group sizes this is the Tukey-Kramer criterion: each pair's
+        own standard error is already used by the underlying test, so comparing
+        two-sided p-values against this threshold is exact for equal sizes and
+        slightly conservative otherwise. The threshold is two-sided by
+        construction (it bounds the range of group means); with one-sided
+        alternatives it is applied as-is, which is conservative.
+
+        Returns
+        -------
+        float
+            Threshold to compare two-sided test p-values against: a p-value is
+            significant when p < threshold.
+        """
+        groups = {g for comp in self.comparisons for g in comp}
+        k = len(groups)
+        cache_key = ("tukey", self.alpha, k)
+        cached = self._correction_threshold_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        from scipy.stats import norm, studentized_range
+
+        if k < 2:
+            threshold = self.alpha
+        else:
+            q = studentized_range.ppf(1 - self.alpha, k, np.inf)
+            # |z_ij| > q / sqrt(2) is the HSD criterion on pairwise z-statistics
+            threshold = 2 * (1 - norm.cdf(q / np.sqrt(2)))
+        self._correction_threshold_cache[cache_key] = threshold
         return threshold
 
     def _optimize_allocation(
@@ -1873,6 +1934,7 @@ class PowerSim:
         correction: str = None,
         alpha: float = None,
         alternative: str = None,
+        fdr_method: str = None,
     ) -> pd.DataFrame:
         """
         Find the minimum total sample size needed to achieve target power level(s).
@@ -1934,12 +1996,16 @@ class PowerSim:
             Step size for initial coarse search (default: 100).
         correction : str, optional
             Override the instance multiple comparison correction for this call only.
-            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'none' (or None).
+            Options: 'bonferroni', 'holm', 'hochberg', 'sidak', 'fdr', 'dunnett', 'tukey', 'none' (or None).
         alpha : float, optional
             Override the instance significance level for this call only.
         alternative : str, optional
             Override the instance alternative hypothesis for this call only
             ('two-tailed', 'greater', or 'smaller').
+        fdr_method : str, optional
+            Override the instance FDR variant for this call only ('indep' for
+            Benjamini-Hochberg, 'negcorr' for Benjamini-Yekutieli). Only used when
+            the effective correction is 'fdr'.
 
         Returns
         -------
@@ -1997,6 +2063,9 @@ class PowerSim:
         if alternative is not None:
             _saved["alternative"] = self.alternative
             self.alternative = alternative
+        if fdr_method is not None:
+            _saved["fdr_method"] = self.fdr_method
+            self.fdr_method = fdr_method
 
         try:
             return self._find_sample_size_impl(
