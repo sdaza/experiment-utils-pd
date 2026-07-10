@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.8](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.7...v1.1.8) (2026-07-09)
+
+
+### Bug Fixes
+
+* increase simulation runs and adjust sample size parameters for accuracy ([f71dfdc](https://github.com/sdaza/experiment-utils-pd/commit/f71dfdc8d08c4841e15a10c655cf04fd23437d4b))
+
 ## [1.1.7](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.6...v1.1.7) (2026-07-09)
 
 
