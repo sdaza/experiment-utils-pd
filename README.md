@@ -26,7 +26,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Multiple Comparison Correction**: FWER control (Bonferroni, Holm, Hochberg, Sidak, Dunnett, Tukey HSD) and FDR control (Benjamini-Hochberg, Benjamini-Yekutieli)
 - **Effect Visualization**: Cleveland dot plots of treatment effects across experiments, with auto-scaled percentage-point annotations, combined absolute/relative labels, fixed or random-effects pooling, magnitude sorting, and grouping by any experiment column
 - **Overlap Diagnostics**: Mirror density plots of propensity score distributions (`plot_overlap`) with overlap coefficient annotation and group-by splitting
-- **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, and non-superiority following Lakens (2017), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
+- **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, non-superiority, and minimum-effect (superiority by margin) following Lakens (2017, 2018), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
 - **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI, plus empirical-Bayes shrinkage across a family of estimates (`winners_curse_estimate`, `empirical_bayes_shrinkage`, `ExperimentAnalyzer.winners_curse_summary`)
@@ -1072,6 +1072,24 @@ analyzer.test_equivalence(
 )
 ```
 
+**Minimum-effect test (superiority by margin)** flips the question: instead of
+rejecting an effect of exactly zero, it rejects *all effects too small to matter*
+(the smallest effect size of interest, SESOI). This is the recommended answer to
+"the null is never exactly true" (Lakens et al. 2018, 2026) — a significant result
+here means the effect is not just nonzero but *meaningful*:
+
+```python
+# Reject H0: effect <= 0.5 — show the lift exceeds the SESOI of 0.5 units
+analyzer.test_equivalence(
+    test_type="minimum_effect",
+    absolute_bound=0.5,
+    direction="higher_is_better",
+)
+print(analyzer.results[["outcome", "absolute_effect", "eq_pvalue", "eq_conclusion"]])
+# eq_conclusion: "meaningful" (margin rejected), "significant_below_margin"
+# (nonzero but not shown to exceed the SESOI), or "inconclusive"
+```
+
 **Conclusion logic** (Lakens' four-cell matrix) combines NHST and TOST results:
 
 | NHST significant | TOST significant | Conclusion |
@@ -1082,10 +1100,11 @@ analyzer.test_equivalence(
 | Yes | No | `not_equivalent` — significant effect outside equivalence bounds |
 
 Added columns (all prefixed with `eq_`):
-- `eq_test_type` — "equivalence", "non_inferiority", or "non_superiority"
+- `eq_test_type` — "equivalence", "non_inferiority", "non_superiority", or "minimum_effect"
 - `eq_bound_lower`, `eq_bound_upper` — equivalence bounds in raw units
 - `eq_pvalue_lower`, `eq_pvalue_upper` — p-values for lower and upper one-sided tests
-- `eq_pvalue` — TOST: max of both p-values; NI/NS: the relevant one-sided p-value
+- `eq_pvalue` — TOST: max of both p-values; NI/NS: the relevant one-sided p-value;
+  minimum_effect: p-value of the one-sided test against the margin
 - `eq_ci_lower`, `eq_ci_upper` — 90% confidence interval (1 − 2α)
 - `eq_cohens_d` — observed effect in Cohen's d units
 - `eq_conclusion` — interpretive label from the four-cell matrix
@@ -1541,7 +1560,8 @@ print(f"Overlap coefficient: {coef:.3f}")
 
 ### Retrodesign Analysis
 
-Assess reliability of significant results (post-hoc power analysis):
+Diagnose how much a *design* distorts the significant results it produces
+(post-hoc design analysis, Gelman & Carlin 2014):
 
 ```python
 from experiment_utils import ExperimentAnalyzer
@@ -1557,20 +1577,41 @@ analyzer.get_effects()
 # Calculate Type S and Type M errors assuming true effect is 0.02
 retro = analyzer.calculate_retrodesign(true_effect=0.02)
 
+# Or omit true_effect: the winner's-curse-corrected observed effect is used
+# (the raw observed effect is inflated by selection and would overstate power)
+retro = analyzer.calculate_retrodesign()
+
 print(retro[["outcome", "power", "type_s_error", "type_m_error",
-             "relative_bias"]])
+             "relative_bias", "retrodesign_alpha"]])
 ```
 
 **Metrics explained:**
 - `power`: Probability of detecting the assumed true effect
-- `type_s_error`: Probability of wrong sign when significant (if underpowered)
-- `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|)
+- `type_s_error`: Probability of wrong sign when significant. This is a red flag
+  only at extremely low power — at 33% power it is already ~0.1% (Lakens et al. 2026) —
+  so treat small values as uninformative rather than reassuring
+- `type_m_error`: Expected exaggeration ratio (mean |observed|/|true|). A property
+  of the design, averaged over significant results — **not** a correction factor:
+  do not divide an individual estimate by it (use the winner's-curse correction below)
 - `relative_bias`: Expected bias ratio preserving signs (mean observed/true); typically lower than `type_m_error` because wrong-sign estimates partially cancel overestimates
+- `retrodesign_alpha`: The alpha the simulation used — the row's actual selection
+  threshold (the MCP-adjusted `alpha_mcp` when results were filtered with
+  MCP-adjusted significance). A stricter threshold truncates more, so simulating
+  MCP-selected rows at the nominal alpha would understate the exaggeration
+
+For the actionable numbers, pair this with the `critical_effect` column from
+`get_effects()` (smallest effect that could have reached significance —
+`critical_effect_mcp` after corrections) and a minimum-effect test against your
+SESOI (see [Equivalence Testing](#equivalence-testing-tost)). See
+[`examples/minimum_effect_and_critical_effect.py`](examples/minimum_effect_and_critical_effect.py)
+for a runnable walkthrough of all three.
 
 ### Winner's-Curse Correction
 
 Retrodesign *quantifies* the winner's curse (Type S/M). To get a **de-biased
-estimate** inferred from the data itself:
+estimate** inferred from the data itself (this is also what
+`calculate_retrodesign()` uses as the assumed true effect when you don't
+provide one):
 
 ```python
 from experiment_utils import winners_curse_estimate, empirical_bayes_shrinkage
@@ -1593,7 +1634,15 @@ ea.winners_curse_summary(method="empirical_bayes")  # shrink within (outcome x e
 The correction runs on the estimation scale (`absolute_effect`); for logistic /
 count / Cox models that is the log scale, and relative columns are
 `exp(corrected) - 1` (exact). For additive metrics the relative effect is
-`corrected / control_value` (denominator treated as fixed).
+`corrected / control_value` (denominator treated as fixed). When results were
+filtered with MCP-adjusted significance, the conditional correction uses each
+row's per-comparison `alpha_mcp` as the selection threshold — winners that
+survived a stricter cut need a stronger correction.
+
+For program-level analysis — estimating the distribution of *true* effects
+across a portfolio of experiments, contextualizing your win rate, and computing
+the expected value of experimentation — see
+[`examples/effect_distribution_portfolio.py`](examples/effect_distribution_portfolio.py).
 
 ## Power Analysis
 

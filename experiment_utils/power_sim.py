@@ -2504,6 +2504,12 @@ class PowerSim:
         This is the simulation-based version of Gelman & Carlin's retrodesign analysis,
         useful for planning studies and understanding risks of underpowered experiments.
 
+        .. warning::
+            The exaggeration ratio describes the *average* over significant results
+            for the design — it is not a correction factor. Do not divide an
+            individual observed effect by it (Lakens et al. 2026); for a de-biased
+            single estimate use ``winners_curse_estimate`` instead.
+
         Parameters
         ----------
         true_effect : float or list

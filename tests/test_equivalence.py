@@ -623,3 +623,79 @@ class TestPowerTOST:
         assert "power" in result.columns
         assert "se" in result.columns
         assert "nsim" in result.columns
+
+
+class TestMinimumEffect:
+    """Tests for test_equivalence() with test_type='minimum_effect'."""
+
+    @staticmethod
+    def _make_analyzer(effect_mean: float):
+        rng = np.random.default_rng(7)
+        n = 400
+        data = pd.DataFrame(
+            {
+                "treatment": [0] * n + [1] * n,
+                "outcome": np.concatenate([rng.normal(10, 2, n), rng.normal(10 + effect_mean, 2, n)]),
+                "experiment": "exp1",
+            }
+        )
+        analyzer = ExperimentAnalyzer(
+            data=data,
+            outcomes=["outcome"],
+            treatment_col="treatment",
+            experiment_identifier=["experiment"],
+        )
+        analyzer.get_effects()
+        return analyzer
+
+    def test_meaningful_when_effect_exceeds_margin(self):
+        """Effect of ~5 vs margin of 1 should reject the margin."""
+        analyzer = self._make_analyzer(effect_mean=5.0)
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=1.0, direction="higher_is_better")
+        result = analyzer.results.iloc[0]
+        assert result["eq_test_type"] == "minimum_effect"
+        assert result["eq_pvalue"] < 0.05
+        assert result["eq_conclusion"] == "meaningful"
+
+    def test_significant_below_margin(self):
+        """Effect of ~1 vs margin of 5: significant vs zero, but not meaningful."""
+        analyzer = self._make_analyzer(effect_mean=1.0)
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=5.0, direction="higher_is_better")
+        result = analyzer.results.iloc[0]
+        assert result["stat_significance"] == 1
+        assert result["eq_pvalue"] > 0.05
+        assert result["eq_conclusion"] == "significant_below_margin"
+
+    def test_inconclusive_when_no_effect(self):
+        """Near-zero effect should be inconclusive."""
+        analyzer = self._make_analyzer(effect_mean=0.0)
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=1.0, direction="higher_is_better")
+        result = analyzer.results.iloc[0]
+        assert result["eq_pvalue"] > 0.05
+        assert result["eq_conclusion"] == "inconclusive"
+
+    def test_lower_is_better_direction(self):
+        """Negative effect of ~-5 vs margin of 1 with lower_is_better is meaningful."""
+        analyzer = self._make_analyzer(effect_mean=-5.0)
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=1.0, direction="lower_is_better")
+        result = analyzer.results.iloc[0]
+        assert result["eq_pvalue"] < 0.05
+        assert result["eq_conclusion"] == "meaningful"
+
+    def test_pvalue_matches_closed_form(self):
+        """eq_pvalue must equal the one-sided z test against +delta."""
+        from scipy import stats as sps
+
+        analyzer = self._make_analyzer(effect_mean=2.0)
+        delta = 1.0
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=delta, direction="higher_is_better")
+        result = analyzer.results.iloc[0]
+        expected = sps.norm.sf((result["absolute_effect"] - delta) / result["standard_error"])
+        assert result["eq_pvalue"] == pytest.approx(expected, rel=1e-9)
+
+    def test_minimum_effect_harder_than_nhst(self):
+        """Rejecting the margin is strictly harder than rejecting zero."""
+        analyzer = self._make_analyzer(effect_mean=2.0)
+        analyzer.test_equivalence(test_type="minimum_effect", absolute_bound=1.0, direction="higher_is_better")
+        result = analyzer.results.iloc[0]
+        assert result["eq_pvalue"] > result["pvalue"]

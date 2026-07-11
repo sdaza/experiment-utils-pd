@@ -287,3 +287,32 @@ def test_top_level_exports():
 
     assert hasattr(eu, "winners_curse_estimate")
     assert hasattr(eu, "empirical_bayes_shrinkage")
+
+
+def test_conditional_uses_mcp_selection_alpha():
+    """MCP-selected rows must be de-biased at their per-comparison alpha_mcp."""
+    df = _results_frame()
+    df["pvalue_mcp"] = [0.001, 0.5, 0.002]
+    df["stat_significance_mcp"] = [1, 0, 1]
+    df["alpha_mcp"] = 0.05 / 3
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="conditional")
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    expected = winners_curse_estimate(5.0, 2.0, alpha=0.05 / 3, ci=0.95)["corrected"]
+    assert rev["corrected_effect"] == pytest.approx(expected, rel=1e-9)
+    # stricter selection threshold -> stronger correction than at nominal alpha
+    nominal = winners_curse_estimate(5.0, 2.0, alpha=0.05, ci=0.95)["corrected"]
+    assert abs(rev["corrected_effect"]) < abs(nominal)
+
+
+def test_conditional_explicit_alpha_overrides_alpha_mcp():
+    """A user-supplied alpha wins over the stored alpha_mcp."""
+    df = _results_frame()
+    df["pvalue_mcp"] = [0.001, 0.5, 0.002]
+    df["stat_significance_mcp"] = [1, 0, 1]
+    df["alpha_mcp"] = 0.05 / 3
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="conditional", alpha=0.05)
+    rev = out[out["outcome"] == "rev"].iloc[0]
+    expected = winners_curse_estimate(5.0, 2.0, alpha=0.05, ci=1 - 0.05)["corrected"]
+    assert rev["corrected_effect"] == pytest.approx(expected, rel=1e-9)

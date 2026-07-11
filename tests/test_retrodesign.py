@@ -358,3 +358,77 @@ def test_no_trimmed_abs_effect_column():
     retro = ea.calculate_retrodesign(nsim=500, seed=1)
     assert "trimmed_abs_effect" not in retro.columns
     assert {"power", "type_s_error", "type_m_error", "relative_bias"} <= set(retro.columns)
+
+
+# ---------------------------------------------------------------------------
+# Winner's-curse default true effect and selection-alpha consistency
+# ---------------------------------------------------------------------------
+
+
+def _injected_analyzer(mcp: bool = False) -> ExperimentAnalyzer:
+    """Analyzer with a synthetic results frame (bypasses get_effects)."""
+    ea = ExperimentAnalyzer(
+        data=pd.DataFrame({"treatment": [0, 1], "y": [0.0, 1.0]}),
+        outcomes=["y"],
+        treatment_col="treatment",
+    )
+    results = pd.DataFrame(
+        {
+            "outcome": ["a", "b"],
+            "treatment_group": [1, 1],
+            "control_group": [0, 0],
+            "absolute_effect": [0.25, 0.30],
+            "standard_error": [0.10, 0.10],
+            "treatment_units": [800, 800],
+            "control_units": [800, 800],
+            "pvalue": [0.012, 0.003],
+            "stat_significance": [1, 1],
+        }
+    )
+    if mcp:
+        results["pvalue_mcp"] = results["pvalue"] * 2
+        results["stat_significance_mcp"] = 1
+        results["alpha_mcp"] = 0.025
+        results["mcp_method"] = "bonferroni"
+    ea._results = results
+    return ea
+
+
+def test_default_true_effect_is_winners_curse_corrected():
+    """With true_effect=None the assumed truth is the de-biased observed effect."""
+    from experiment_utils.utils import winners_curse_estimate
+
+    ea = _injected_analyzer()
+    retro = ea.calculate_retrodesign(nsim=300, seed=1)
+
+    for _, row in retro.iterrows():
+        expected = winners_curse_estimate(row["absolute_effect"], row["standard_error"], alpha=0.05)["corrected"]
+        assert row["true_effect"] == pytest.approx(expected, rel=1e-6)
+        # corrected truth must be smaller in magnitude than the observed winner
+        assert abs(row["true_effect"]) < abs(row["absolute_effect"])
+    assert (retro["retrodesign_alpha"] == 0.05).all()
+
+
+def test_retrodesign_alpha_uses_mcp_selection_threshold():
+    """Rows selected via MCP-adjusted significance simulate at alpha_mcp."""
+    ea = _injected_analyzer(mcp=True)
+    retro = ea.calculate_retrodesign(true_effect=0.2, nsim=300, seed=1)
+    assert (retro["retrodesign_alpha"] == 0.025).all()
+
+
+def test_retrodesign_alpha_explicit_override_wins():
+    """An explicit alpha overrides the per-row MCP threshold."""
+    ea = _injected_analyzer(mcp=True)
+    retro = ea.calculate_retrodesign(true_effect=0.2, alpha=0.01, nsim=300, seed=1)
+    assert (retro["retrodesign_alpha"] == 0.01).all()
+
+
+def test_default_true_effect_uses_mcp_alpha_for_correction():
+    """The winner's-curse default must de-bias at the MCP selection threshold."""
+    from experiment_utils.utils import winners_curse_estimate
+
+    ea = _injected_analyzer(mcp=True)
+    retro = ea.calculate_retrodesign(nsim=300, seed=1)
+    row = retro.iloc[0]
+    expected = winners_curse_estimate(row["absolute_effect"], row["standard_error"], alpha=0.025)["corrected"]
+    assert row["true_effect"] == pytest.approx(expected, rel=1e-6)

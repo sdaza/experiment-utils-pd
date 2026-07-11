@@ -132,9 +132,16 @@ class RetrodesignMixin:
               {'revenue': 5.0, 'clicked': 0.05, 'time_to_churn': -0.223}
             - A dict mapping (treatment_group, control_group) tuples to true effects
             - A dict mapping (outcome, treatment_group, control_group) tuples
-            - None to use the observed effect as the assumed true effect (conservative)
+            - None to use the winner's-curse-corrected observed effect as the
+              assumed true effect (truncated-normal median-unbiased estimate).
+              The raw observed effect is inflated by significance selection, so
+              using it directly would overstate power and understate the
+              exaggeration ratio (Gelman & Carlin 2014; Lakens et al. 2026).
         alpha : float, optional
-            Significance level. If None, uses self._alpha
+            Significance level for the simulated test. If None, uses the
+            per-row selection threshold: the MCP-adjusted per-comparison alpha
+            (``alpha_mcp``) when rows were selected with MCP-adjusted
+            significance, else self._alpha. Pass a value to override.
         outcomes : list of str, optional
             Filter to specific outcomes. If None, uses all outcomes
         experiments : list, optional
@@ -154,7 +161,16 @@ class RetrodesignMixin:
             - type_s_error: Probability of wrong sign when significant
             - type_m_error: Expected exaggeration ratio (absolute values)
             - relative_bias: Expected bias ratio preserving signs
+            - retrodesign_alpha: Significance level used for the simulated test
+              (the row's selection threshold)
             - retrodesign_method: Always "powersim"
+
+        Notes
+        -----
+        The exaggeration ratio (type_m_error) is a property of the design — an
+        average over significant results — not a correction factor: do not divide
+        an individual observed effect by it (Lakens et al. 2026). For a de-biased
+        single estimate use ``winners_curse_summary()`` / ``winners_curse_estimate``.
 
         Examples
         --------
@@ -179,8 +195,9 @@ class RetrodesignMixin:
         df_filtered = df[mask].copy()
 
         # filter to only statistically significant effects
-        if "pvalue_mcp" in df_filtered.columns and "stat_significance_mcp" in df_filtered.columns:
-            self._logger.info("Using MPC-adjusted significance for retrodesign filtering")
+        used_mcp = "pvalue_mcp" in df_filtered.columns and "stat_significance_mcp" in df_filtered.columns
+        if used_mcp:
+            self._logger.info("Using MCP-adjusted significance for retrodesign filtering")
             sig_mask = df_filtered["stat_significance_mcp"] == 1
         else:
             sig_mask = df_filtered["stat_significance"] == 1
@@ -205,17 +222,35 @@ class RetrodesignMixin:
             return pd.DataFrame()
 
         # drop existing retrodesign columns if they exist (from previous calls)
-        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias"]
+        retro_cols = ["true_effect", "power", "type_s_error", "type_m_error", "relative_bias", "retrodesign_alpha"]
         existing_retro_cols = [col for col in retro_cols if col in df_filtered.columns]
         if existing_retro_cols:
             df_filtered = df_filtered.drop(columns=existing_retro_cols)
 
+        # per-row alpha: the threshold that actually selected the row. Simulating a
+        # row selected at a stricter MCP threshold with the nominal alpha would
+        # understate the exaggeration ratio (stricter truncation -> more inflation).
+        if alpha is not None:
+            df_filtered["_selection_alpha"] = float(alpha)
+        elif used_mcp and "alpha_mcp" in df_filtered.columns:
+            df_filtered["_selection_alpha"] = df_filtered["alpha_mcp"].fillna(alpha_val)
+        else:
+            if used_mcp:
+                self._logger.warning(
+                    "Rows were selected with MCP-adjusted significance but no 'alpha_mcp' column is "
+                    "available; simulating at the nominal alpha will understate the exaggeration ratio. "
+                    "Re-run adjust_multiple_comparisons() to add it."
+                )
+            df_filtered["_selection_alpha"] = alpha_val
+
         # determine true effect for each row
         if true_effect is None:
             self._logger.info(
-                "No true_effect specified. Using observed effects as assumed true effects (conservative approach)."
+                "No true_effect specified. Using winner's-curse-corrected observed effects as assumed "
+                "true effects (raw observed effects are inflated by selection and would overstate "
+                "power / understate exaggeration)."
             )
-            df_filtered["true_effect"] = df_filtered["absolute_effect"]
+            df_filtered["true_effect"] = self._winners_curse_true_effects(df_filtered)
         elif isinstance(true_effect, dict):
             sample_key = next(iter(true_effect.keys()))
 
@@ -272,6 +307,7 @@ class RetrodesignMixin:
         results = []
         for _idx, row in tqdm(df_filtered.iterrows(), total=len(df_filtered), desc="Retrodesign", unit="outcome"):
             te = row["true_effect"]
+            row_alpha = float(row["_selection_alpha"])
 
             if pd.isna(te):
                 results.append(
@@ -280,6 +316,7 @@ class RetrodesignMixin:
                         "type_s_error": np.nan,
                         "type_m_error": np.nan,
                         "relative_bias": np.nan,
+                        "retrodesign_alpha": row_alpha,
                         "retrodesign_method": np.nan,
                     }
                 )
@@ -289,7 +326,7 @@ class RetrodesignMixin:
                 row=row,
                 true_effect=te,
                 nsim=nsim,
-                alpha=alpha_val,
+                alpha=row_alpha,
                 seed=seed,
             )
             if retro_result is None:
@@ -299,11 +336,13 @@ class RetrodesignMixin:
                         "type_s_error": np.nan,
                         "type_m_error": np.nan,
                         "relative_bias": np.nan,
+                        "retrodesign_alpha": row_alpha,
                         "retrodesign_method": np.nan,
                     }
                 )
                 continue
 
+            retro_result["retrodesign_alpha"] = row_alpha
             results.append(retro_result)
 
         elapsed_time = time.time() - start_time
@@ -315,7 +354,41 @@ class RetrodesignMixin:
         df_filtered = pd.concat([df_filtered, retro_df], axis=1)
 
         # Drop internal columns not meant for display
-        internal_cols = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param"]
+        internal_cols = ["se_intercept", "cov_coef_intercept", "control_std", "alpha_param", "_selection_alpha"]
         df_filtered = df_filtered.drop(columns=[c for c in internal_cols if c in df_filtered.columns])
 
         return df_filtered
+
+    def _winners_curse_true_effects(self, df_filtered: pd.DataFrame) -> list[float]:
+        """
+        Winner's-curse-corrected observed effects to use as assumed true effects.
+
+        Applies the truncated-normal median-unbiased correction row by row, with the
+        selection threshold set to each row's ``_selection_alpha``. Rows with a
+        degenerate SE or failed correction get NaN (and are skipped downstream).
+        """
+        import warnings
+
+        from .utils import winners_curse_estimate
+
+        corrected: list[float] = []
+        n_warned = 0
+        for _, r in df_filtered.iterrows():
+            se = r.get("standard_error")
+            b = r.get("absolute_effect")
+            if pd.isna(se) or se is None or se <= 0 or pd.isna(b):
+                corrected.append(np.nan)
+                continue
+            # Rows selected by sequential MCP methods (e.g. Holm) can sit slightly below
+            # the Bonferroni-approximated threshold; the correction still applies.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", RuntimeWarning)
+                est = winners_curse_estimate(float(b), float(se), alpha=float(r["_selection_alpha"]))
+                n_warned += sum(1 for w in caught if issubclass(w.category, RuntimeWarning))
+            corrected.append(est["corrected"])
+        if n_warned:
+            self._logger.info(
+                f"Winner's-curse correction: {n_warned} row(s) slightly below the approximated "
+                "selection threshold (expected with sequential MCP methods)."
+            )
+        return corrected

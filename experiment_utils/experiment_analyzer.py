@@ -1482,6 +1482,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         - stat_significance: The statistical significance of the effect.
         - abs_effect_lower: Lower bound of absolute effect CI.
         - abs_effect_upper: Upper bound of absolute effect CI.
+        - critical_effect: Smallest absolute effect that would reach significance
+          at alpha given the standard error (Perugini et al. 2025). Effects below
+          it cannot be significant, so selecting on significance censors them.
         - relative_effect: The relative effect of the treatment.
         - rel_effect_lower: Lower bound of relative effect CI (if available).
         - rel_effect_upper: Upper bound of relative effect CI (if available).
@@ -2547,6 +2550,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                             + z_critical * results_df.loc[no_df, "standard_error"]
                         )
 
+            # critical effect size: smallest absolute effect that would reach
+            # significance at alpha given the SE (Perugini et al. 2025) — everything
+            # below it is invisible when selecting on significance
+            crit = pd.Series(stats.norm.ppf(1 - alpha / 2), index=results_df.index, dtype=float)
+            if "df_resid" in results_df.columns:
+                has_df_resid = results_df["df_resid"].notna()
+                if has_df_resid.any():
+                    crit[has_df_resid] = results_df.loc[has_df_resid, "df_resid"].apply(
+                        lambda d: stats.t.ppf(1 - alpha / 2, d)
+                    )
+            results_df["critical_effect"] = crit * results_df["standard_error"]
+
         if compare_precision:
             results_df = self.__add_precision_impact_columns(results_df)
             self._precision_summary = self.__build_precision_summary(results_df)
@@ -2584,19 +2599,24 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         direction: str = "higher_is_better",
     ) -> None:
         """
-        Unified equivalence, non-inferiority, and non-superiority testing.
+        Unified equivalence, non-inferiority, non-superiority, and minimum-effect testing.
 
         Implements the Two One-Sided Tests (TOST) procedure following Lakens (2017).
         Non-inferiority and non-superiority are one-sided special cases of the same
-        framework.
+        framework; the minimum-effect test is the one-sided test against a
+        non-nil null (Lakens et al. 2018, 2026).
 
         Parameters
         ----------
-        test_type : {"equivalence", "non_inferiority", "non_superiority"}
+        test_type : {"equivalence", "non_inferiority", "non_superiority", "minimum_effect"}
             ``"equivalence"``: TOST — tests both bounds, concludes equivalence
             when effect falls within [-delta, +delta].
             ``"non_inferiority"``: one-sided test against the lower (or upper) bound.
             ``"non_superiority"``: one-sided test against the opposite bound.
+            ``"minimum_effect"``: one-sided superiority-by-margin test — rejects
+            all effects <= +delta (higher_is_better) or >= -delta
+            (lower_is_better), i.e. shows the effect exceeds the smallest
+            effect size of interest rather than merely differing from zero.
         absolute_bound : float, optional
             Equivalence bound in raw outcome units (must be > 0).
         relative_bound : float, optional
@@ -2609,7 +2629,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             Significance level (default 0.05). For TOST the confidence interval
             is (1 - 2*alpha), i.e. 90% by default.
         direction : {"higher_is_better", "lower_is_better"}
-            Only used for non_inferiority and non_superiority test types.
+            Only used for non_inferiority, non_superiority, and minimum_effect
+            test types.
 
         Updates
         -------
@@ -2619,7 +2640,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if self._results is None:
             log_and_raise_error(self._logger, "Must run get_effects() before test_equivalence().")
 
-        valid_test_types = {"equivalence", "non_inferiority", "non_superiority"}
+        valid_test_types = {"equivalence", "non_inferiority", "non_superiority", "minimum_effect"}
         if test_type not in valid_test_types:
             log_and_raise_error(self._logger, f"test_type must be one of {valid_test_types}.")
 
@@ -2710,11 +2731,18 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 results_df["eq_pvalue"] = results_df["eq_pvalue_lower"]
             else:
                 results_df["eq_pvalue"] = results_df["eq_pvalue_upper"]
-        else:  # non_superiority
+        elif test_type == "non_superiority":
             if direction == "higher_is_better":
                 results_df["eq_pvalue"] = results_df["eq_pvalue_upper"]
             else:
                 results_df["eq_pvalue"] = results_df["eq_pvalue_lower"]
+        else:  # minimum_effect: null includes the margin, alternative lies beyond it
+            if direction == "higher_is_better":
+                # H0: effect <= +delta vs H1: effect > +delta
+                results_df["eq_pvalue"] = 1 - stats.norm.cdf((effect - delta) / se)
+            else:
+                # H0: effect >= -delta vs H1: effect < -delta
+                results_df["eq_pvalue"] = stats.norm.cdf((effect + delta) / se)
 
         # Conclusion logic (Lakens' four-cell matrix)
         tost_sig = results_df["eq_pvalue"] < alpha
@@ -2736,12 +2764,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 (True, True): "non_inferior_with_difference",
                 (True, False): "not_non_inferior",
             }
-        else:  # non_superiority
+        elif test_type == "non_superiority":
             labels = {
                 (False, True): "non_superior",
                 (False, False): "inconclusive",
                 (True, True): "non_superior_with_difference",
                 (True, False): "not_non_superior",
+            }
+        else:  # minimum_effect
+            # rejecting H0: effect <= delta implies the plain NHST rejection, so the
+            # informative cells are whether the margin test itself succeeded
+            labels = {
+                (False, True): "meaningful",
+                (False, False): "inconclusive",
+                (True, True): "meaningful",
+                (True, False): "significant_below_margin",
             }
 
         results_df["eq_conclusion"] = [
@@ -3329,7 +3366,9 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             ``"conditional"`` or ``"empirical_bayes"``. By default ``"conditional"``.
         alpha : float, optional
             Two-sided significance level that defined selection. Defaults to the
-            analyzer's ``alpha``.
+            per-row selection threshold: the MCP-adjusted per-comparison alpha
+            (``alpha_mcp``) when rows were selected with MCP-adjusted
+            significance, else the analyzer's ``alpha``.
         ci : float, optional
             Confidence level for the corrected intervals. Defaults to ``1 - alpha``
             so the corrected CIs match the coverage of the analyzer's results.
@@ -3352,6 +3391,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             raise ValueError("Call get_effects() before winners_curse_summary().")
         if method not in {"conditional", "empirical_bayes"}:
             raise ValueError("method must be 'conditional' or 'empirical_bayes'")
+        user_alpha = alpha
         alpha = self._alpha if alpha is None else alpha
         if not 0 < alpha < 1:
             raise ValueError("alpha must be strictly between 0 and 1")
@@ -3404,7 +3444,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         rows = []
 
         if method == "conditional":
-            if "pvalue_mcp" in df.columns and "stat_significance_mcp" in df.columns:
+            use_mcp = "pvalue_mcp" in df.columns and "stat_significance_mcp" in df.columns
+            if use_mcp:
                 sig = df["stat_significance_mcp"] == 1
             else:
                 sig = df["stat_significance"] == 1
@@ -3422,7 +3463,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     )
                     rows.append(_nan_row(r))
                     continue
-                est = winners_curse_estimate(float(b), float(se), alpha=alpha, ci=ci)
+                # rows selected at a stricter MCP threshold are truncated at that
+                # threshold, so the correction must use it too
+                row_alpha = alpha
+                if user_alpha is None and use_mcp and pd.notna(r.get("alpha_mcp", np.nan)):
+                    row_alpha = float(r["alpha_mcp"])
+                est = winners_curse_estimate(float(b), float(se), alpha=row_alpha, ci=ci)
                 rel, rlo, rhi = _relativize(
                     r.get("effect_type"),
                     r.get("control_value", np.nan),
@@ -4190,8 +4236,12 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         - pvalue_mcp: Adjusted p-values
         - stat_significance_mcp: Significance indicator using adjusted p-values
         - mcp_method: Method used for adjustment
+        - alpha_mcp: Per-comparison alpha implied by the correction (used for
+          adjusted CIs, critical effects, and downstream selection-aware tools)
         - abs_effect_lower_mcp: Adjusted lower bound for absolute effect
         - abs_effect_upper_mcp: Adjusted upper bound for absolute effect
+        - critical_effect_mcp: Smallest absolute effect that would be significant
+          at the adjusted alpha given the standard error
         - rel_effect_lower_mcp: Adjusted lower bound for relative effect (Fieller method)
         - rel_effect_upper_mcp: Adjusted upper bound for relative effect (Fieller method)
 
@@ -4277,12 +4327,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 "pvalue_mcp": pvals_adj,
                 "stat_significance_mcp": (pvals_adj < thres).astype(int),
                 "mcp_method": method,
+                "alpha_mcp": alpha_ci,
             }
 
             abs_effect = group["absolute_effect"].values
             se = group["standard_error"].values
             result_dict["abs_effect_lower_mcp"] = abs_effect - crit_adj * se
             result_dict["abs_effect_upper_mcp"] = abs_effect + crit_adj * se
+            result_dict["critical_effect_mcp"] = crit_adj * se
 
             if "se_intercept" in group.columns and "cov_coef_intercept" in group.columns:
                 rel_lower_adj = []
@@ -4376,8 +4428,10 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             "pvalue_mcp",
             "stat_significance_mcp",
             "mcp_method",
+            "alpha_mcp",
             "abs_effect_lower_mcp",
             "abs_effect_upper_mcp",
+            "critical_effect_mcp",
             "rel_effect_lower_mcp",
             "rel_effect_upper_mcp",
         ]
