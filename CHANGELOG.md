@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.9](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.8...v1.1.9) (2026-07-11)
+
+
+### Bug Fixes
+
+* add critical effect size and minimum-effect testing ([b21e1b6](https://github.com/sdaza/experiment-utils-pd/commit/b21e1b63dbb410dfa2b85671bb5a45d528b9adc9))
+
 ## [1.1.8](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.7...v1.1.8) (2026-07-09)
 
 
