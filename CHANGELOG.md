@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.10](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.9...v1.1.10) (2026-07-12)
+
+
+### Bug Fixes
+
+* add support for external priors in winners curse correction and implement t-prior shrinkage ([a063ea6](https://github.com/sdaza/experiment-utils-pd/commit/a063ea659fc5468158f2b523fc92878c8483c66a))
+
 ## [1.1.9](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.8...v1.1.9) (2026-07-11)
 
 
