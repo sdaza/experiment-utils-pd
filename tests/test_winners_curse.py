@@ -4,7 +4,7 @@ import pytest
 from scipy.stats import norm
 
 from experiment_utils import ExperimentAnalyzer
-from experiment_utils.utils import empirical_bayes_shrinkage, winners_curse_estimate
+from experiment_utils.utils import empirical_bayes_shrinkage, fit_t_prior, t_prior_shrinkage, winners_curse_estimate
 
 
 def _fitted_analyzer(results: pd.DataFrame) -> ExperimentAnalyzer:
@@ -127,6 +127,68 @@ def test_empirical_bayes_too_few_is_nan():
     out = ea.winners_curse_summary(method="empirical_bayes")
     conv = out[out["outcome"] == "conv"].iloc[0]
     assert pd.isna(conv["corrected_effect"])
+
+
+def test_empirical_bayes_fixed_tau2_single_experiment():
+    # a single-row group is shrunk when an external prior variance is supplied
+    df = _results_frame()  # conv group has only 1 log_odds row
+    ea = _fitted_analyzer(df)
+    tau2 = 0.04
+    out = ea.winners_curse_summary(method="empirical_bayes", tau2=tau2)
+    conv = out[out["outcome"] == "conv"].iloc[0]
+    f = tau2 / (tau2 + 0.18**2)
+    assert conv["tau2"] == tau2
+    assert conv["corrected_effect"] == pytest.approx(f * 0.4)
+    # relative effect for log_odds derives from exp(corrected)
+    assert conv["corrected_relative_effect"] == pytest.approx(np.exp(f * 0.4) - 1)
+
+
+def test_prior_dict_tau2_equals_tau2_param():
+    ea = _fitted_analyzer(_results_frame())
+    out_a = ea.winners_curse_summary(method="empirical_bayes", tau2=0.04)
+    out_b = ea.winners_curse_summary(method="empirical_bayes", prior={"tau2": 0.04})
+    assert np.allclose(out_a["corrected_effect"], out_b["corrected_effect"], equal_nan=True)
+
+
+def test_prior_dict_t_single_experiment():
+    # single-row group shrunk with an external t prior; relative effect derived
+    df = _results_frame()  # conv group has only 1 log_odds row
+    ea = _fitted_analyzer(df)
+    out = ea.winners_curse_summary(method="empirical_bayes", prior={"scale": 0.15, "df": 4.0})
+    conv = out[out["outcome"] == "conv"].iloc[0]
+    expected = t_prior_shrinkage([0.4], [0.18], scale=0.15, df=4.0, ci=0.95)
+    assert conv["corrected_effect"] == pytest.approx(expected["shrunk"][0])
+    assert 0 < conv["corrected_effect"] < 0.4  # shrunk toward 0
+    assert conv["corrected_relative_effect"] == pytest.approx(np.exp(conv["corrected_effect"]) - 1)
+    # fit_t_prior's dict (with extra keys) is accepted directly
+    out2 = ea.winners_curse_summary(
+        method="empirical_bayes", prior={"scale": 0.15, "df": 4.0, "tau2": 9.9, "loglik": -1.0, "n": 50}
+    )
+    assert np.allclose(out2["corrected_effect"], out["corrected_effect"], equal_nan=True)
+
+
+def test_prior_dict_validation():
+    ea = _fitted_analyzer(_results_frame())
+    with pytest.raises(ValueError, match="not both"):
+        ea.winners_curse_summary(method="empirical_bayes", tau2=0.1, prior={"tau2": 0.1})
+    with pytest.raises(ValueError, match="empirical_bayes"):
+        ea.winners_curse_summary(method="conditional", prior={"tau2": 0.1})
+    with pytest.raises(ValueError, match="prior"):
+        ea.winners_curse_summary(method="empirical_bayes", prior={"sigma": 0.1})
+    with pytest.raises(ValueError, match="scale"):
+        ea.winners_curse_summary(method="empirical_bayes", prior={"scale": -1.0, "df": 4.0})
+
+
+def test_fixed_tau2_requires_empirical_bayes():
+    ea = _fitted_analyzer(_results_frame())
+    with pytest.raises(ValueError, match="empirical_bayes"):
+        ea.winners_curse_summary(method="conditional", tau2=0.1)
+
+
+def test_fixed_tau2_validated_by_analyzer():
+    ea = _fitted_analyzer(_results_frame())
+    with pytest.raises(ValueError, match="tau2"):
+        ea.winners_curse_summary(method="empirical_bayes", tau2=-1.0)
 
 
 def test_returns_documented_keys():
@@ -264,6 +326,38 @@ def test_eb_requires_three():
         empirical_bayes_shrinkage([1.0, 2.0], [0.5, 0.5])
 
 
+def test_eb_fixed_tau2_single_estimate():
+    # posterior mean = tau2/(tau2+se^2) * y, posterior var = tau2*se^2/(tau2+se^2)
+    tau2, y, se = 0.5, 1.0, 0.5
+    out = empirical_bayes_shrinkage([y], [se], tau2=tau2)
+    f = tau2 / (tau2 + se**2)
+    assert out["tau2"] == tau2
+    assert np.isclose(out["shrunk"][0], f * y)
+    assert np.isclose(out["posterior_sd"][0], np.sqrt(tau2 * se**2 / (tau2 + se**2)))
+
+
+def test_eb_fixed_tau2_skips_estimation():
+    # identical inputs, wildly different fixed tau2 -> tau2 is used as-is
+    out = empirical_bayes_shrinkage([1.0, -0.5, 0.8], [0.4, 0.4, 0.4], tau2=9.0)
+    assert out["tau2"] == 9.0
+    assert np.all(out["shrinkage_factor"] > 0.9)
+
+
+def test_eb_fixed_tau2_zero_shrinks_to_prior_mean():
+    out = empirical_bayes_shrinkage([1.0], [0.5], prior_mean=0.2, tau2=0.0)
+    assert np.isclose(out["shrunk"][0], 0.2)
+    assert np.isclose(out["shrinkage_factor"][0], 0.0)
+
+
+def test_eb_fixed_tau2_validation():
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([1.0], [0.5], tau2=-0.1)
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([1.0], [0.5], tau2=np.nan)
+    with pytest.raises(ValueError):
+        empirical_bayes_shrinkage([], [], tau2=0.5)
+
+
 def test_eb_raises_on_bad_se():
     with pytest.raises(ValueError):
         empirical_bayes_shrinkage([1.0, 2.0, 3.0], [0.5, -0.5, 0.5])
@@ -282,11 +376,102 @@ def test_eb_sim_mse_reduction():
     assert abs(out["tau2"] - tau2_true) < 0.2
 
 
+def test_t_prior_large_df_matches_normal():
+    # as df -> inf the t prior tends to N(0, scale^2): posterior means converge
+    scale, df = 0.5, 500.0
+    y, se = [1.0, -0.4, 2.5], [0.6, 0.6, 0.6]
+    out_t = t_prior_shrinkage(y, se, scale=scale, df=df)
+    tau2 = scale**2 * df / (df - 2)
+    out_n = empirical_bayes_shrinkage(y, se, tau2=tau2)
+    assert np.allclose(out_t["shrunk"], out_n["shrunk"], atol=0.01)
+    assert np.allclose(out_t["posterior_sd"], out_n["posterior_sd"], atol=0.01)
+
+
+def test_t_prior_fat_tails_release_big_winners():
+    # same prior variance: t(df=3) shrinks a big estimate LESS than the normal,
+    # and its shrinkage is nonlinear (big z keeps a larger fraction than small z)
+    df = 3.0
+    tau2 = 0.25
+    scale = np.sqrt(tau2 * (df - 2) / df)
+    se = 0.5
+    out_t = t_prior_shrinkage([0.8, 4.0], [se, se], scale=scale, df=df)
+    out_n = empirical_bayes_shrinkage([0.8, 4.0], [se, se], tau2=tau2)
+    assert out_t["shrunk"][1] > out_n["shrunk"][1]  # big winner passes through more
+    assert out_t["shrinkage_factor"][1] > out_t["shrinkage_factor"][0]  # nonlinear
+
+
+def test_t_prior_shrinks_toward_prior_mean():
+    out = t_prior_shrinkage([1.0], [0.5], scale=0.3, df=4.0, prior_mean=0.2)
+    assert 0.2 < out["shrunk"][0] < 1.0
+    assert out["ci_lower"][0] < out["shrunk"][0] < out["ci_upper"][0]
+
+
+def test_t_prior_single_estimate_and_keys():
+    out = t_prior_shrinkage([1.0], [0.5], scale=0.3, df=4.0)
+    assert set(out) == {
+        "shrunk",
+        "shrinkage_factor",
+        "posterior_sd",
+        "ci_lower",
+        "ci_upper",
+        "scale",
+        "df",
+        "tau2",
+        "prior_mean",
+    }
+    assert out["shrunk"].shape == (1,)
+    assert np.isclose(out["tau2"], 0.3**2 * 4.0 / 2.0)
+
+
+def test_t_prior_validation():
+    with pytest.raises(ValueError):
+        t_prior_shrinkage([1.0], [0.5], scale=0.0, df=4.0)
+    with pytest.raises(ValueError):
+        t_prior_shrinkage([1.0], [0.5], scale=0.3, df=0.0)
+    with pytest.raises(ValueError):
+        t_prior_shrinkage([], [], scale=0.3, df=4.0)
+    with pytest.raises(ValueError):
+        t_prior_shrinkage([1.0], [-0.5], scale=0.3, df=4.0)
+
+
+def test_fit_t_prior_recovers_scale():
+    rng = np.random.default_rng(3)
+    k, df_true, scale_true = 400, 4.0, 0.5
+    beta = scale_true * rng.standard_t(df_true, size=k)
+    se = np.full(k, 0.3)
+    y = rng.normal(beta, se)
+    fit = fit_t_prior(y, se, df=df_true)  # fix df, learn scale
+    assert abs(fit["scale"] - scale_true) < 0.1
+    assert fit["df"] == df_true
+    assert fit["n"] == k
+    assert np.isfinite(fit["loglik"])
+
+
+def test_fit_t_prior_fits_df_above_two():
+    rng = np.random.default_rng(4)
+    beta = 0.5 * rng.standard_t(4.0, size=300)
+    se = np.full(300, 0.3)
+    y = rng.normal(beta, se)
+    fit = fit_t_prior(y, se)
+    assert fit["df"] > 2.0
+    assert fit["scale"] > 0.0
+    assert np.isfinite(fit["tau2"])
+
+
+def test_fit_t_prior_validation():
+    with pytest.raises(ValueError):
+        fit_t_prior([1.0, 2.0], [0.5, 0.5])  # <3 estimates
+    with pytest.raises(ValueError):
+        fit_t_prior([1.0, 2.0, 3.0], [0.5, 0.5, 0.5], df=-1.0)
+
+
 def test_top_level_exports():
     import experiment_utils as eu
 
     assert hasattr(eu, "winners_curse_estimate")
     assert hasattr(eu, "empirical_bayes_shrinkage")
+    assert hasattr(eu, "fit_t_prior")
+    assert hasattr(eu, "t_prior_shrinkage")
 
 
 def test_conditional_uses_mcp_selection_alpha():

@@ -3342,6 +3342,8 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         alpha: float | None = None,
         ci: float | None = None,
         group_by: str = "outcome",
+        tau2: float | None = None,
+        prior: dict | None = None,
     ) -> pd.DataFrame:
         """
         Data-driven winner's-curse correction for the effects in get_effects().
@@ -3374,6 +3376,21 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             so the corrected CIs match the coverage of the analyzer's results.
         group_by : str
             Grouping column for empirical Bayes shrinkage. By default ``"outcome"``.
+        tau2 : float, optional
+            Fixed prior variance for ``method="empirical_bayes"``, typically
+            learned once from historical experiments (e.g.
+            ``empirical_bayes_shrinkage(past_effects, past_ses)["tau2"]``).
+            When given, groups are shrunk with this external prior instead of
+            re-learning it, so a single estimate per group is enough — the
+            recommended mode when analyzing one experiment at a time.
+        prior : dict, optional
+            External prior for ``method="empirical_bayes"``, as an alternative
+            to ``tau2``. Either ``{"tau2": <float>}`` for a normal prior, or
+            ``{"scale": <float>, "df": <float>}`` for a fat-tailed Student-t
+            prior (extra keys are ignored, so the dict returned by
+            :func:`fit_t_prior` can be passed directly). Like ``tau2``, an
+            external prior makes a single estimate per group sufficient. The
+            prior is centered at 0.
 
         Returns
         -------
@@ -3385,7 +3402,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             ``corrected_rel_ci_upper``, ``shrinkage`` (and ``tau2`` for
             empirical Bayes).
         """
-        from .utils import empirical_bayes_shrinkage, winners_curse_estimate
+        from .utils import empirical_bayes_shrinkage, t_prior_shrinkage, winners_curse_estimate
 
         if self._results is None:
             raise ValueError("Call get_effects() before winners_curse_summary().")
@@ -3398,6 +3415,27 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         ci = 1 - alpha if ci is None else ci
         if not 0 < ci < 1:
             raise ValueError("ci must be strictly between 0 and 1")
+        if tau2 is not None and prior is not None:
+            raise ValueError("pass either tau2 or prior, not both")
+        t_prior = None
+        if prior is not None:
+            if method != "empirical_bayes":
+                raise ValueError("prior is only used with method='empirical_bayes'")
+            if "scale" in prior and "df" in prior:
+                t_prior = {"scale": float(prior["scale"]), "df": float(prior["df"])}
+                if not (np.isfinite(t_prior["scale"]) and t_prior["scale"] > 0):
+                    raise ValueError("prior['scale'] must be positive and finite")
+                if not (np.isfinite(t_prior["df"]) and t_prior["df"] > 0):
+                    raise ValueError("prior['df'] must be positive and finite")
+            elif "tau2" in prior:
+                tau2 = float(prior["tau2"])
+            else:
+                raise ValueError("prior must contain either 'tau2' (normal) or 'scale' and 'df' (Student-t)")
+        if tau2 is not None:
+            if method != "empirical_bayes":
+                raise ValueError("tau2 is only used with method='empirical_bayes'")
+            if not (np.isfinite(tau2) and tau2 >= 0):
+                raise ValueError("tau2 must be finite and >= 0")
 
         df = self._results
         id_cols = [c for c in ["outcome", "experiment_id", "treatment_group", "control_group"] if c in df.columns]
@@ -3494,19 +3532,37 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         # empirical_bayes
         if group_by not in df.columns:
             raise ValueError(f"group_by column '{group_by}' not found in results")
+        has_external_prior = tau2 is not None or t_prior is not None
+        min_estimates = 1 if has_external_prior else 3
         for _, grp in df.groupby([group_by, "effect_type"], dropna=False):
             valid = grp["standard_error"].notna() & (grp["standard_error"] > 0) & grp["absolute_effect"].notna()
             gv = grp[valid]
-            if len(gv) < 3:
+            if len(gv) < min_estimates:
                 self._logger.warning(
-                    f"winners_curse_summary: group has {len(gv)} usable estimate(s) (<3); EB skipped, NaN returned."
+                    f"winners_curse_summary: group has {len(gv)} usable estimate(s) (<{min_estimates}); "
+                    "EB skipped, NaN returned."
+                    + ("" if has_external_prior else " Pass a fixed tau2/prior to shrink groups with <3 estimates.")
                 )
                 for _, r in grp.iterrows():
                     rows.append(_nan_row(r, extra={"tau2": np.nan}))
                 continue
-            eb = empirical_bayes_shrinkage(
-                gv["absolute_effect"].to_numpy(float), gv["standard_error"].to_numpy(float), prior_mean=0.0, ci=ci
-            )
+            if t_prior is not None:
+                eb = t_prior_shrinkage(
+                    gv["absolute_effect"].to_numpy(float),
+                    gv["standard_error"].to_numpy(float),
+                    scale=t_prior["scale"],
+                    df=t_prior["df"],
+                    prior_mean=0.0,
+                    ci=ci,
+                )
+            else:
+                eb = empirical_bayes_shrinkage(
+                    gv["absolute_effect"].to_numpy(float),
+                    gv["standard_error"].to_numpy(float),
+                    prior_mean=0.0,
+                    ci=ci,
+                    tau2=tau2,
+                )
             for i, (_, r) in enumerate(gv.iterrows()):
                 rel, rlo, rhi = _relativize(
                     r.get("effect_type"),

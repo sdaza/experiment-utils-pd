@@ -9,8 +9,10 @@ from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
+from scipy.integrate import cumulative_trapezoid
+from scipy.optimize import brentq, minimize
 from scipy.stats import norm
+from scipy.stats import t as t_dist
 
 
 @contextmanager
@@ -1210,6 +1212,7 @@ def empirical_bayes_shrinkage(
     standard_errors,
     prior_mean: float = 0.0,
     ci: float = 0.95,
+    tau2: float | None = None,
 ) -> dict:
     """
     Empirical-Bayes (normal-prior) shrinkage of a family of estimates.
@@ -1219,6 +1222,25 @@ def empirical_bayes_shrinkage(
     (:func:`_paule_mandel_tau2`), and returns posterior means and credible
     intervals. High-variance "winners" shrink most. All inputs must be on the
     same scale (e.g. all log-odds, or all mean differences).
+
+    Alternatively, pass a fixed ``tau2`` learned from historical experiments
+    (e.g. ``empirical_bayes_shrinkage(past_effects, past_ses)["tau2"]``) to
+    shrink any number of new estimates — including a single one — with that
+    external prior instead of re-learning it (van Zwet, Schwab & Senn 2021;
+    Azevedo et al. 2020).
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Estimates and their standard errors, on a common scale.
+    prior_mean : float
+        Mean of the normal prior (default 0.0).
+    ci : float
+        Credible-interval level (default 0.95).
+    tau2 : float, optional
+        Fixed prior variance. When given, it is used as-is (no estimation)
+        and a single estimate is allowed; when None (default), ``tau2`` is
+        learned from the supplied estimates, which requires at least 3.
 
     Returns
     -------
@@ -1231,15 +1253,25 @@ def empirical_bayes_shrinkage(
     s = np.asarray(standard_errors, dtype=float)
     if y.ndim != 1 or y.shape != s.shape:
         raise ValueError("effects and standard_errors must be 1-D arrays of equal length")
-    if y.size < 3:
-        raise ValueError("empirical Bayes requires at least 3 estimates to learn a prior")
+    if tau2 is None:
+        if y.size < 3:
+            raise ValueError(
+                "empirical Bayes requires at least 3 estimates to learn a prior; "
+                "pass a fixed tau2 (e.g. learned from historical experiments) to shrink fewer"
+            )
+    else:
+        if not (np.isfinite(tau2) and tau2 >= 0):
+            raise ValueError("tau2 must be finite and >= 0")
+        if y.size < 1:
+            raise ValueError("effects must contain at least one estimate")
     if not (np.all(np.isfinite(y)) and np.all(np.isfinite(s))) or np.any(s <= 0):
         raise ValueError("all standard_errors must be positive and finite, and effects finite")
     if not 0 < ci < 1:
         raise ValueError("ci must be strictly between 0 and 1")
 
     v = s**2
-    tau2 = _paule_mandel_tau2(y, v, prior_mean=prior_mean)
+    if tau2 is None:
+        tau2 = _paule_mandel_tau2(y, v, prior_mean=prior_mean)
     shrinkage_factor = tau2 / (tau2 + v)
     shrunk = prior_mean + shrinkage_factor * (y - prior_mean)
     posterior_sd = np.sqrt(tau2 * v / (tau2 + v))
@@ -1252,4 +1284,178 @@ def empirical_bayes_shrinkage(
         "ci_upper": shrunk + z * posterior_sd,
         "tau2": float(tau2),
         "prior_mean": float(prior_mean),
+    }
+
+
+def _validate_effects_ses(effects, standard_errors) -> tuple[np.ndarray, np.ndarray]:
+    y = np.asarray(effects, dtype=float)
+    s = np.asarray(standard_errors, dtype=float)
+    if y.ndim != 1 or y.shape != s.shape:
+        raise ValueError("effects and standard_errors must be 1-D arrays of equal length")
+    if not (np.all(np.isfinite(y)) and np.all(np.isfinite(s))) or np.any(s <= 0):
+        raise ValueError("all standard_errors must be positive and finite, and effects finite")
+    return y, s
+
+
+def t_prior_shrinkage(
+    effects,
+    standard_errors,
+    scale: float,
+    df: float,
+    prior_mean: float = 0.0,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Bayesian shrinkage under a fat-tailed Student-t prior.
+
+    Assumes ``beta_i ~ t_df(prior_mean, scale)`` with ``effect_i | beta_i ~
+    N(beta_i, se_i**2)`` and returns the posterior mean, sd, and equal-tailed
+    credible interval per estimate (computed by numerical integration; the
+    t-prior posterior has no closed form). Unlike normal-prior shrinkage the
+    posterior mean is nonlinear in the estimate: moderate effects shrink
+    hard while very large ones pass through mostly untouched, which suits
+    experiment archives with occasional genuine big winners (Azevedo et al.
+    2020, "A/B Testing with Fat Tails").
+
+    Prior parameters are external by design — learn them once from historical
+    experiments with :func:`fit_t_prior` — so a single new estimate is enough.
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Estimates and their standard errors, on a common scale.
+    scale : float
+        Scale of the t prior; must be > 0.
+    df : float
+        Degrees of freedom of the t prior; must be > 0 (typically 3-10; the
+        prior variance is only finite for df > 2).
+    prior_mean : float
+        Location of the prior (default 0.0).
+    ci : float
+        Credible-interval level (default 0.95).
+
+    Returns
+    -------
+    dict
+        ``shrunk`` (posterior means), ``shrinkage_factor``
+        (= (shrunk - prior_mean)/(effect - prior_mean), NaN at the prior mean),
+        ``posterior_sd``, ``ci_lower``, ``ci_upper`` (np.ndarray aligned with
+        inputs), plus scalars ``scale``, ``df``, ``prior_mean`` and ``tau2``
+        (implied prior variance, ``inf`` when df <= 2).
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+    if not (np.isfinite(scale) and scale > 0):
+        raise ValueError("scale must be positive and finite")
+    if not (np.isfinite(df) and df > 0):
+        raise ValueError("df must be positive and finite")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    gamma = 1.0 - ci
+    shrunk = np.empty_like(y)
+    posterior_sd = np.empty_like(y)
+    ci_lower = np.empty_like(y)
+    ci_upper = np.empty_like(y)
+    for i, (b, se) in enumerate(zip(y, s, strict=True)):
+        lo = min(b - 8.0 * se, prior_mean - 8.0 * scale)
+        hi = max(b + 8.0 * se, prior_mean + 8.0 * scale)
+        grid = np.linspace(lo, hi, 4001)
+        log_post = norm.logpdf(b, loc=grid, scale=se) + t_dist.logpdf(grid, df, loc=prior_mean, scale=scale)
+        dens = np.exp(log_post - log_post.max())
+        dens /= np.trapz(dens, grid)
+        mean = np.trapz(grid * dens, grid)
+        var = np.trapz((grid - mean) ** 2 * dens, grid)
+        cdf = cumulative_trapezoid(dens, grid, initial=0.0)
+        cdf /= cdf[-1]
+        shrunk[i] = mean
+        posterior_sd[i] = np.sqrt(max(var, 0.0))
+        ci_lower[i] = np.interp(gamma / 2.0, cdf, grid)
+        ci_upper[i] = np.interp(1.0 - gamma / 2.0, cdf, grid)
+
+    centered = y - prior_mean
+    with np.errstate(divide="ignore", invalid="ignore"):
+        shrinkage_factor = np.where(centered != 0, (shrunk - prior_mean) / centered, np.nan)
+    tau2 = scale**2 * df / (df - 2.0) if df > 2 else float("inf")
+    return {
+        "shrunk": shrunk,
+        "shrinkage_factor": shrinkage_factor,
+        "posterior_sd": posterior_sd,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "scale": float(scale),
+        "df": float(df),
+        "tau2": float(tau2),
+        "prior_mean": float(prior_mean),
+    }
+
+
+def fit_t_prior(
+    effects,
+    standard_errors,
+    prior_mean: float = 0.0,
+    df: float | None = None,
+) -> dict:
+    """
+    Fit a Student-t prior to a historical archive of experiment estimates.
+
+    Maximizes the marginal likelihood of ``effect_i ~ N(beta_i, se_i**2)``
+    with ``beta_i ~ t_df(prior_mean, scale)`` (integrated via Gauss-Hermite
+    quadrature). Learn the prior once from past experiments, then shrink each
+    new result with :func:`t_prior_shrinkage` (or pass the returned dict as
+    ``prior=`` to ``ExperimentAnalyzer.winners_curse_summary``).
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Historical estimates and their standard errors, on a common scale.
+        At least 3 are required; reliably estimating ``df`` needs a large
+        archive (dozens of experiments) — with a small one, fix ``df``
+        (e.g. ``df=4``) so only the scale is learned.
+    prior_mean : float
+        Location of the prior (default 0.0).
+    df : float, optional
+        Fix the degrees of freedom and fit only the scale. When None
+        (default) both are fitted, with ``df`` constrained to > 2 so the
+        prior variance is finite.
+
+    Returns
+    -------
+    dict
+        ``scale``, ``df``, ``tau2`` (implied prior variance), ``prior_mean``,
+        ``loglik``, ``n``.
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 3:
+        raise ValueError("fit_t_prior requires at least 3 estimates")
+    if df is not None and not (np.isfinite(df) and df > 0):
+        raise ValueError("df must be positive and finite")
+
+    gh_x, gh_w = np.polynomial.hermite.hermgauss(64)
+    nodes = y[:, None] + np.sqrt(2.0) * s[:, None] * gh_x[None, :]
+    inv_sqrt_pi = 1.0 / np.sqrt(np.pi)
+
+    def nll(log_scale: float, dfv: float) -> float:
+        marginal = inv_sqrt_pi * (t_dist.pdf(nodes, dfv, loc=prior_mean, scale=np.exp(log_scale)) * gh_w).sum(axis=1)
+        return float(-np.sum(np.log(np.maximum(marginal, 1e-300))))
+
+    tau2_0 = _paule_mandel_tau2(y, s**2, prior_mean=prior_mean)
+    scale0 = np.sqrt(tau2_0) if tau2_0 > 0 else 0.5 * float(np.median(s))
+    if df is not None:
+        res = minimize(lambda u: nll(u[0], df), x0=[np.log(scale0)], method="Nelder-Mead")
+        scale_hat, df_hat = float(np.exp(res.x[0])), float(df)
+    else:
+        # df = 2 + exp(u) keeps the fitted prior variance finite
+        res = minimize(lambda u: nll(u[0], 2.0 + np.exp(u[1])), x0=[np.log(scale0), np.log(3.0)], method="Nelder-Mead")
+        scale_hat, df_hat = float(np.exp(res.x[0])), float(2.0 + np.exp(res.x[1]))
+
+    tau2 = scale_hat**2 * df_hat / (df_hat - 2.0) if df_hat > 2 else float("inf")
+    return {
+        "scale": scale_hat,
+        "df": df_hat,
+        "tau2": float(tau2),
+        "prior_mean": float(prior_mean),
+        "loglik": float(-res.fun),
+        "n": int(y.size),
     }

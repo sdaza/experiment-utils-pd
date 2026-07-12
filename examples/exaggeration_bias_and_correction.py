@@ -22,6 +22,8 @@ from experiment_utils import (
     ExperimentAnalyzer,
     PowerSim,
     empirical_bayes_shrinkage,
+    fit_t_prior,
+    t_prior_shrinkage,
     winners_curse_estimate,
 )
 
@@ -132,9 +134,9 @@ for obs, se, sh, sf, lo, hi in zip(
 # will overstate that +2pp.
 
 # %%
-TRUE_LIFT = 0.02
+TRUE_LIFT = 0.01
 BASELINE = 0.10
-N_PER_ARM = 3000
+N_PER_ARM = 6000
 rng_exp = np.random.default_rng(2024)
 
 frames = []
@@ -200,4 +202,81 @@ else:
 wc_eb = ea.winners_curse_summary(method="empirical_bayes", group_by="outcome")
 print(wc_eb[["experiment_id", "absolute_effect", "corrected_effect", "shrinkage", "tau2"]].round(4))
 
+# %% [markdown]
+# ## 6. One experiment at a time: shrinkage with a historical prior
+#
+# Empirical Bayes normally needs >=3 estimates analyzed together to learn the
+# prior variance. In practice you often analyze a single experiment — so learn
+# `tau2` ONCE from your historical experiment archive (effects + SEs on a
+# common scale), then pass it as a fixed prior to shrink each new result
+# (van Zwet, Schwab & Senn 2021; Azevedo et al. 2020). This is the reliable
+# point estimate for a single winner: the conditional correction (5b) is
+# median-unbiased but very noisy near the significance boundary, while
+# fixed-prior shrinkage has much lower per-experiment error.
+
 # %%
+# Step 1 (once per quarter, say): learn the prior from past experiments.
+historical = ea.results  # stand-in for your archive of past estimates
+prior = empirical_bayes_shrinkage(
+    historical["absolute_effect"].to_numpy(float),
+    historical["standard_error"].to_numpy(float),
+)
+TAU2 = prior["tau2"]
+print(f"  historical prior variance tau^2 = {TAU2:.6f}  (sd = {TAU2**0.5:.4f})")
+
+# %%
+# Step 2: analyze a NEW single experiment and shrink it with the fixed prior.
+rng_new = np.random.default_rng(7)
+n = 2 * N_PER_ARM
+treatment = rng_new.binomial(1, 0.5, n)
+outcome = rng_new.binomial(1, BASELINE + TRUE_LIFT * treatment, n)
+ea_single = ExperimentAnalyzer(
+    data=pd.DataFrame({"experiment_id": 99, "treatment": treatment, "converted": outcome}),
+    outcomes=["converted"],
+    treatment_col="treatment",
+    experiment_identifier=["experiment_id"],
+    alpha=ALPHA,
+)
+ea_single.get_effects()
+
+single_eb = ea_single.winners_curse_summary(method="empirical_bayes", tau2=TAU2)
+cols = ["experiment_id", "absolute_effect", "corrected_effect", "corrected_ci_lower", "corrected_ci_upper", "shrinkage"]
+print(single_eb[cols].round(4))
+print(f"  (true lift = {TRUE_LIFT}; the shrunk estimate is the number to report)")
+
+# %% [markdown]
+# ### 6a. Fat-tailed prior with `fit_t_prior()` + `prior=`
+#
+# If your experiment archive has occasional genuine big winners, a normal prior
+# over-shrinks them. Fit a Student-t prior instead (Azevedo et al. 2020): it
+# shrinks moderate effects hard but lets clearly-large ones pass through. Learn
+# the prior once from history (fix `df` for small archives), then pass the
+# fitted dict straight to `winners_curse_summary(prior=...)`. Relative columns
+# (`corrected_relative_effect`) are derived from the shrunk absolute effect the
+# same way as in 5b/5c, so both scales stay consistent.
+
+# %%
+t_prior = fit_t_prior(
+    historical["absolute_effect"].to_numpy(float),
+    historical["standard_error"].to_numpy(float),
+    df=4.0,  # small archive: fix df, learn only the scale
+)
+print(f"  fitted t prior: scale = {t_prior['scale']:.4f}, df = {t_prior['df']:.0f}, tau^2 = {t_prior['tau2']:.6f}")
+
+single_t = ea_single.winners_curse_summary(method="empirical_bayes", prior=t_prior)
+cols_rel = cols + ["corrected_relative_effect"]
+print(single_t[cols_rel].round(4))
+
+# %%
+# The t prior's nonlinearity: same prior variance, but a clearly-big winner is
+# shrunk far less than under the normal prior, while a moderate one shrinks more.
+comparison = pd.DataFrame({"observed": [0.010, 0.020, 0.040]})
+se_demo = 0.0055
+comparison["normal_shrunk"] = empirical_bayes_shrinkage(comparison["observed"], [se_demo] * 3, tau2=t_prior["tau2"])[
+    "shrunk"
+]
+comparison["t_shrunk"] = t_prior_shrinkage(
+    comparison["observed"], [se_demo] * 3, scale=t_prior["scale"], df=t_prior["df"]
+)["shrunk"]
+print(comparison.round(4))
+

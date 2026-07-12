@@ -8,7 +8,9 @@ from .utils import (
     empirical_bayes_shrinkage,
     estimate_true_success_rate,
     false_positive_risk,
+    fit_t_prior,
     generate_comparison_pairs,
+    t_prior_shrinkage,
     winners_curse_estimate,
 )
 
@@ -26,5 +28,7 @@ __all__ = [
     "false_positive_risk",
     "estimate_true_success_rate",
     "empirical_bayes_shrinkage",
+    "fit_t_prior",
+    "t_prior_shrinkage",
     "winners_curse_estimate",
 ]
