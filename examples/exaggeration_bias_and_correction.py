@@ -23,6 +23,7 @@ from experiment_utils import (
     PowerSim,
     empirical_bayes_shrinkage,
     fit_t_prior,
+    fit_t_prior_with_estimated_mean,
     t_prior_shrinkage,
     winners_curse_estimate,
 )
@@ -268,6 +269,27 @@ cols_rel = cols + ["corrected_relative_effect"]
 print(single_t[cols_rel].round(4))
 
 # %%
+# ### 6b. Estimated prior mean (profile likelihood)
+#
+# When the question is the archive's average underlying effect — not shrinkage
+# toward a scientific null of zero — profile over the location and get an LR CI.
+# Pass the fit dict to winners_curse_summary; prior_mean is honored.
+
+# %%
+t_prior_mu = fit_t_prior_with_estimated_mean(
+    historical["absolute_effect"].to_numpy(float),
+    historical["standard_error"].to_numpy(float),
+    df=4.0,
+)
+print(
+    f"  estimated prior mean = {t_prior_mu['prior_mean']:.4f} "
+    f"[{t_prior_mu['prior_mean_ci_lower']:.4f}, {t_prior_mu['prior_mean_ci_upper']:.4f}] "
+    f"(level={t_prior_mu['prior_mean_ci_level']:.0%})"
+)
+single_t_mu = ea_single.winners_curse_summary(method="empirical_bayes", prior=t_prior_mu)
+print(single_t_mu[cols_rel].round(4))
+
+# %%
 # The t prior's nonlinearity: same prior variance, but a clearly-big winner is
 # shrunk far less than under the normal prior, while a moderate one shrinks more.
 comparison = pd.DataFrame({"observed": [0.010, 0.020, 0.040]})
@@ -279,4 +301,3 @@ comparison["t_shrunk"] = t_prior_shrinkage(
     comparison["observed"], [se_demo] * 3, scale=t_prior["scale"], df=t_prior["df"]
 )["shrunk"]
 print(comparison.round(4))
-

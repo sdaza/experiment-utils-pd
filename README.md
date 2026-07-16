@@ -1614,7 +1614,12 @@ estimate** inferred from the data itself (this is also what
 provide one):
 
 ```python
-from experiment_utils import winners_curse_estimate, empirical_bayes_shrinkage
+from experiment_utils import (
+    winners_curse_estimate,
+    empirical_bayes_shrinkage,
+    fit_t_prior,
+    fit_t_prior_with_estimated_mean,
+)
 
 # Single significant test: observed +5.0, SE 2.0
 winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05)
@@ -1629,7 +1634,19 @@ empirical_bayes_shrinkage(effects=[5.0, 1.2, 8.1, 0.3], standard_errors=[2.0, 1.
 ea.get_effects()
 ea.winners_curse_summary(method="conditional")      # de-bias each significant winner
 ea.winners_curse_summary(method="empirical_bayes")  # shrink within (outcome x effect_type)
+
+# Fat-tailed archive prior (Azevedo et al.): fix location at 0 (usual A/B null) …
+t_prior = fit_t_prior(past_effects, past_ses, df=4.0)
+# … or profile the archive mean + LR CI when the portfolio question is the
+# typical historical lift (shrink toward that mean, not toward 0)
+t_prior_mu = fit_t_prior_with_estimated_mean(past_effects, past_ses, df=4.0)
+ea.winners_curse_summary(method="empirical_bayes", prior=t_prior_mu)  # honors prior_mean
 ```
+
+**Misuse risk:** shrink toward 0 when the scientific null is “no effect.” Use
+`fit_t_prior_with_estimated_mean` only when you intentionally want the
+shrinkage location to be the archive’s average underlying effect; the LR CI
+is for that mean, not for any single experiment.
 
 The correction runs on the estimation scale (`absolute_effect`); for logistic /
 count / Cox models that is the log scale, and relative columns are

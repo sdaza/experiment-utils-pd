@@ -6,12 +6,14 @@ assumptions about the format of input data.
 import logging
 import warnings
 from contextlib import contextmanager
+from functools import cache
+from math import sqrt
 
 import numpy as np
 import pandas as pd
 from scipy.integrate import cumulative_trapezoid
-from scipy.optimize import brentq, minimize
-from scipy.stats import norm
+from scipy.optimize import brentq, minimize, minimize_scalar
+from scipy.stats import chi2, norm
 from scipy.stats import t as t_dist
 
 
@@ -1459,3 +1461,119 @@ def fit_t_prior(
         "loglik": float(-res.fun),
         "n": int(y.size),
     }
+
+
+def fit_t_prior_with_estimated_mean(
+    effects,
+    standard_errors,
+    *,
+    df: float = 4.0,
+    mean_ci: float = 0.95,
+) -> dict:
+    """
+    Fit a Student-t prior's location and scale by profile likelihood.
+
+    :func:`fit_t_prior` treats ``prior_mean`` as fixed. This helper profiles
+    over that argument, then obtains a likelihood-ratio interval for the
+    fitted location. With ``df > 1`` the Student-t location is also its mean,
+    so the interval answers whether the archive's average underlying effect
+    is distinguishable from zero.
+
+    Learn the prior once from historical experiments, then shrink new results
+    with :func:`t_prior_shrinkage` (pass ``prior_mean=fit["prior_mean"]``) or
+    pass the returned dict as ``prior=`` to
+    ``ExperimentAnalyzer.winners_curse_summary``.
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Historical estimates and their standard errors, on a common scale.
+        At least 3 are required.
+    df : float
+        Fixed degrees of freedom of the t prior; must be > 1 so the prior
+        mean exists (default 4.0).
+    mean_ci : float
+        Nominal level of the profile likelihood-ratio interval for the prior
+        mean (default 0.95).
+
+    Returns
+    -------
+    dict
+        Everything returned by :func:`fit_t_prior` at the fitted mean, plus
+        ``prior_mean_ci_lower``, ``prior_mean_ci_upper``,
+        ``prior_mean_ci_level``, and ``prior_mean_method``
+        (``"profile_likelihood"``).
+    """
+    y, se = _validate_effects_ses(effects, standard_errors)
+    if y.size < 3:
+        raise ValueError("at least 3 estimates are required")
+    if not 0 < mean_ci < 1:
+        raise ValueError("mean_ci must be strictly between 0 and 1")
+    if not np.isfinite(df) or df <= 1:
+        raise ValueError("df must be finite and greater than 1 so the prior mean exists")
+
+    @cache
+    def conditional_fit(prior_mean: float) -> dict:
+        return fit_t_prior(y, se, prior_mean=float(prior_mean), df=df)
+
+    def objective(prior_mean: float) -> float:
+        return -conditional_fit(float(prior_mean))["loglik"]
+
+    # Robust bounds: min/max effects are unstable when the archive has
+    # enormous ratios from near-zero baselines.
+    center = float(np.median(y))
+    q05, q95 = np.quantile(y, [0.05, 0.95])
+    span = max(float(q95 - q05), 10.0 * float(np.median(se)), 0.01)
+    for _ in range(4):
+        lower, upper = center - span, center + span
+        result = minimize_scalar(
+            objective,
+            bounds=(lower, upper),
+            method="bounded",
+            options={"xatol": 1e-8},
+        )
+        if not result.success:
+            raise RuntimeError(f"prior-mean fit failed: {result.message}")
+        edge_tolerance = max(span * 1e-3, 1e-8)
+        if lower + edge_tolerance < result.x < upper - edge_tolerance:
+            break
+        span *= 4.0
+    else:
+        raise RuntimeError("prior-mean fit remained on the search boundary")
+
+    prior_mean = float(result.x)
+    prior = conditional_fit(prior_mean).copy()
+    max_loglik = float(prior["loglik"])
+    target_loglik = max_loglik - 0.5 * float(chi2.ppf(mean_ci, df=1))
+
+    def profile_distance(candidate: float) -> float:
+        return float(conditional_fit(float(candidate))["loglik"] - target_loglik)
+
+    initial_step = max(
+        float(prior["scale"]) / sqrt(y.size),
+        float(np.median(se)) / sqrt(y.size),
+        1e-6,
+    )
+
+    def find_endpoint(direction: float) -> float:
+        inner = prior_mean
+        step = initial_step
+        for _ in range(60):
+            outer = prior_mean + direction * step
+            if profile_distance(outer) <= 0:
+                lo, hi = sorted((inner, outer))
+                return float(brentq(profile_distance, lo, hi, xtol=1e-8))
+            inner = outer
+            step *= 1.8
+        raise RuntimeError("could not bracket the prior-mean likelihood interval")
+
+    prior.update(
+        {
+            "prior_mean": prior_mean,
+            "prior_mean_ci_lower": find_endpoint(-1.0),
+            "prior_mean_ci_upper": find_endpoint(1.0),
+            "prior_mean_ci_level": float(mean_ci),
+            "prior_mean_method": "profile_likelihood",
+        }
+    )
+    return prior

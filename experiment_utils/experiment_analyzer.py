@@ -3387,10 +3387,11 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             External prior for ``method="empirical_bayes"``, as an alternative
             to ``tau2``. Either ``{"tau2": <float>}`` for a normal prior, or
             ``{"scale": <float>, "df": <float>}`` for a fat-tailed Student-t
-            prior (extra keys are ignored, so the dict returned by
-            :func:`fit_t_prior` can be passed directly). Like ``tau2``, an
-            external prior makes a single estimate per group sufficient. The
-            prior is centered at 0.
+            prior (extra keys are ignored, so dicts from :func:`fit_t_prior`
+            or :func:`fit_t_prior_with_estimated_mean` can be passed
+            directly). Optional ``prior_mean`` sets the shrinkage location
+            (default 0). Like ``tau2``, an external prior makes a single
+            estimate per group sufficient.
 
         Returns
         -------
@@ -3418,11 +3419,20 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         if tau2 is not None and prior is not None:
             raise ValueError("pass either tau2 or prior, not both")
         t_prior = None
+        prior_mean = 0.0
         if prior is not None:
             if method != "empirical_bayes":
                 raise ValueError("prior is only used with method='empirical_bayes'")
+            if "prior_mean" in prior:
+                prior_mean = float(prior["prior_mean"])
+                if not np.isfinite(prior_mean):
+                    raise ValueError("prior['prior_mean'] must be finite")
             if "scale" in prior and "df" in prior:
-                t_prior = {"scale": float(prior["scale"]), "df": float(prior["df"])}
+                t_prior = {
+                    "scale": float(prior["scale"]),
+                    "df": float(prior["df"]),
+                    "prior_mean": prior_mean,
+                }
                 if not (np.isfinite(t_prior["scale"]) and t_prior["scale"] > 0):
                     raise ValueError("prior['scale'] must be positive and finite")
                 if not (np.isfinite(t_prior["df"]) and t_prior["df"] > 0):
@@ -3552,14 +3562,14 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                     gv["standard_error"].to_numpy(float),
                     scale=t_prior["scale"],
                     df=t_prior["df"],
-                    prior_mean=0.0,
+                    prior_mean=t_prior["prior_mean"],
                     ci=ci,
                 )
             else:
                 eb = empirical_bayes_shrinkage(
                     gv["absolute_effect"].to_numpy(float),
                     gv["standard_error"].to_numpy(float),
-                    prior_mean=0.0,
+                    prior_mean=prior_mean,
                     ci=ci,
                     tau2=tau2,
                 )

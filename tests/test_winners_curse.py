@@ -4,7 +4,13 @@ import pytest
 from scipy.stats import norm
 
 from experiment_utils import ExperimentAnalyzer
-from experiment_utils.utils import empirical_bayes_shrinkage, fit_t_prior, t_prior_shrinkage, winners_curse_estimate
+from experiment_utils.utils import (
+    empirical_bayes_shrinkage,
+    fit_t_prior,
+    fit_t_prior_with_estimated_mean,
+    t_prior_shrinkage,
+    winners_curse_estimate,
+)
 
 
 def _fitted_analyzer(results: pd.DataFrame) -> ExperimentAnalyzer:
@@ -471,7 +477,98 @@ def test_top_level_exports():
     assert hasattr(eu, "winners_curse_estimate")
     assert hasattr(eu, "empirical_bayes_shrinkage")
     assert hasattr(eu, "fit_t_prior")
+    assert hasattr(eu, "fit_t_prior_with_estimated_mean")
     assert hasattr(eu, "t_prior_shrinkage")
+
+
+def test_fit_t_prior_with_estimated_mean_validation():
+    with pytest.raises(ValueError, match="at least 3"):
+        fit_t_prior_with_estimated_mean([1.0, 2.0], [0.5, 0.5])
+    with pytest.raises(ValueError, match="df"):
+        fit_t_prior_with_estimated_mean([1.0, 2.0, 3.0], [0.5, 0.5, 0.5], df=1.0)
+    with pytest.raises(ValueError, match="mean_ci"):
+        fit_t_prior_with_estimated_mean([1.0, 2.0, 3.0], [0.5, 0.5, 0.5], mean_ci=1.0)
+    with pytest.raises(ValueError, match="standard_errors"):
+        fit_t_prior_with_estimated_mean([1.0, 2.0, 3.0], [0.5, 0.5, -0.1])
+
+
+def test_fit_t_prior_with_estimated_mean_matches_conditional_fit():
+    rng = np.random.default_rng(11)
+    k, df, scale_true, mu_true = 120, 4.0, 0.4, 0.2
+    beta = mu_true + scale_true * rng.standard_t(df, size=k)
+    se = np.full(k, 0.2)
+    y = rng.normal(beta, se)
+    fit = fit_t_prior_with_estimated_mean(y, se, df=df)
+    conditional = fit_t_prior(y, se, prior_mean=fit["prior_mean"], df=df)
+    assert fit["scale"] == pytest.approx(conditional["scale"], rel=1e-6)
+    assert fit["loglik"] == pytest.approx(conditional["loglik"], rel=1e-6)
+    assert fit["prior_mean_method"] == "profile_likelihood"
+    assert fit["prior_mean_ci_level"] == 0.95
+    assert fit["prior_mean_ci_lower"] < fit["prior_mean"] < fit["prior_mean_ci_upper"]
+
+
+def test_fit_t_prior_with_estimated_mean_recovers_mean_and_scale():
+    """Seeded recovery: profile MLE recovers known prior mean and scale (tol absorbs MC noise).
+
+    Tolerance 0.08 at k=400 is ~3× the Monte Carlo MAE (~0.025) under this DGP;
+    the estimator is approximately unbiased (mean error ≈ 0 across seeds).
+    """
+    rng = np.random.default_rng(7)
+    k, df, scale_true, mu_true = 400, 4.0, 0.5, 0.3
+    beta = mu_true + scale_true * rng.standard_t(df, size=k)
+    se = np.full(k, 0.25)
+    y = rng.normal(beta, se)
+    fit = fit_t_prior_with_estimated_mean(y, se, df=df)
+    assert abs(fit["prior_mean"] - mu_true) < 0.08
+    assert abs(fit["scale"] - scale_true) < 0.12
+
+
+def test_fit_t_prior_with_estimated_mean_ci_excludes_zero_when_mean_large():
+    rng = np.random.default_rng(8)
+    k, df, scale_true, mu_true = 250, 4.0, 0.3, 0.4
+    beta = mu_true + scale_true * rng.standard_t(df, size=k)
+    se = np.full(k, 0.15)
+    y = rng.normal(beta, se)
+    fit = fit_t_prior_with_estimated_mean(y, se, df=df)
+    assert fit["prior_mean_ci_lower"] > 0.0
+
+
+def test_fit_t_prior_with_estimated_mean_lr_ci_coverage():
+    """Empirical coverage of the profile LR interval ≈ nominal 0.95 (loose band for nsim)."""
+    rng = np.random.default_rng(9)
+    nsim, k, df, scale_true, se_val = 40, 80, 4.0, 0.45, 0.22
+    covers = []
+    for mu_true in (0.0, 0.25):
+        for _ in range(nsim):
+            beta = mu_true + scale_true * rng.standard_t(df, size=k)
+            se = np.full(k, se_val)
+            y = rng.normal(beta, se)
+            fit = fit_t_prior_with_estimated_mean(y, se, df=df, mean_ci=0.95)
+            covers.append(fit["prior_mean_ci_lower"] <= mu_true <= fit["prior_mean_ci_upper"])
+    coverage = float(np.mean(covers))
+    assert 0.80 <= coverage <= 1.0, f"coverage={coverage}"
+
+
+def test_prior_dict_honors_t_prior_mean():
+    ea = _fitted_analyzer(_results_frame())
+    prior = {"scale": 0.15, "df": 4.0, "prior_mean": 0.2}
+    out = ea.winners_curse_summary(method="empirical_bayes", prior=prior)
+    conv = out[out["outcome"] == "conv"].iloc[0]
+    expected = t_prior_shrinkage([0.4], [0.18], scale=0.15, df=4.0, prior_mean=0.2, ci=0.95)
+    assert conv["corrected_effect"] == pytest.approx(expected["shrunk"][0])
+    # default remains shrink-toward-zero when prior_mean omitted
+    out0 = ea.winners_curse_summary(method="empirical_bayes", prior={"scale": 0.15, "df": 4.0})
+    expected0 = t_prior_shrinkage([0.4], [0.18], scale=0.15, df=4.0, prior_mean=0.0, ci=0.95)
+    assert out0[out0["outcome"] == "conv"].iloc[0]["corrected_effect"] == pytest.approx(expected0["shrunk"][0])
+
+
+def test_prior_dict_honors_normal_prior_mean():
+    ea = _fitted_analyzer(_results_frame())
+    prior = {"tau2": 0.04, "prior_mean": 0.5}
+    out = ea.winners_curse_summary(method="empirical_bayes", prior=prior)
+    rev = out[(out["outcome"] == "rev") & (out["absolute_effect"] == 5.0)].iloc[0]
+    expected = empirical_bayes_shrinkage([5.0], [2.0], prior_mean=0.5, tau2=0.04, ci=0.95)
+    assert rev["corrected_effect"] == pytest.approx(expected["shrunk"][0])
 
 
 def test_conditional_uses_mcp_selection_alpha():
