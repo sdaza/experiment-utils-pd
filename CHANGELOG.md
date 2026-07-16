@@ -6,6 +6,13 @@
 
 * add `fit_t_prior_with_estimated_mean` (profile MLE + likelihood-ratio CI for the Student-t prior location) and honor optional `prior_mean` in `winners_curse_summary(prior=...)` (default remains 0)
 
+## [1.1.11](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.10...v1.1.11) (2026-07-16)
+
+
+### Bug Fixes
+
+* add `fit_t_prior_with_estimated_mean` for profile MLE and likelihood-ratio CI, and update `winners_curse_summary` to honor optional `prior_mean` ([b324b0a](https://github.com/sdaza/experiment-utils-pd/commit/b324b0a0d571809f8aa3da095ffd86395afb4ae9))
+
 ## [1.1.10](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.9...v1.1.10) (2026-07-12)
 
 
