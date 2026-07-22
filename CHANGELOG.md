@@ -11,6 +11,13 @@
 
 * NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
 
+## [1.2.1](https://github.com/sdaza/experiment-utils-pd/compare/v1.2.0...v1.2.1) (2026-07-22)
+
+
+### Documentation
+
+* unify example format and add SCALED method assessment ([0b7e34b](https://github.com/sdaza/experiment-utils-pd/commit/0b7e34b9350b0c24680f2fdc3e57fb30e362db0d))
+
 ## [1.2.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.11...v1.2.0) (2026-07-22)
 
 
