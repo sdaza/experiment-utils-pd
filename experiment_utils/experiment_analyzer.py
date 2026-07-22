@@ -3599,6 +3599,106 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
                 rows.append(_nan_row(r, extra={"tau2": eb["tau2"]}))
         return pd.DataFrame(rows)
 
+    def cumulative_impact_summary(
+        self,
+        shipped: str | np.ndarray | pd.Series | None = None,
+        *,
+        prior: dict | str | None = None,
+        tau2: float | None = None,
+        prior_mean: float = 0.0,
+        aggregation: str = "sum",
+        coverage: str | np.ndarray | pd.Series | None = None,
+        ci: float | None = None,
+        min_shipped: int = 1,
+        group_by: str | None = None,
+    ) -> dict:
+        """
+        Program-level cumulative impact from ``get_effects()`` results.
+
+        Wraps :func:`cumulative_impact`: shrinks every row, then aggregates only
+        the shipped subset. ``shipped`` may be a boolean column name in
+        ``results``, a boolean array aligned with ``results``, or ``None``
+        (treat all rows as shipped). Optional ``group_by`` runs the aggregator
+        separately within each group (e.g. ``"outcome"``) and returns a list of
+        per-group dicts under ``groups`` plus a pooled row when groups share a
+        scale — by default (``group_by=None``) all rows are pooled.
+
+        See :func:`cumulative_impact` for prior / aggregation semantics
+        (including ``prior="map"`` for Half-Cauchy MAP).
+        """
+        from .utils import cumulative_impact
+
+        if self._results is None:
+            raise ValueError("Call get_effects() before cumulative_impact_summary().")
+        df = self._results
+        ci = (1.0 - self._alpha) if ci is None else ci
+
+        def _as_array(value, name: str):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                if value not in df.columns:
+                    raise ValueError(f"{name} column '{value}' not in results")
+                return df[value].to_numpy()
+            arr = np.asarray(value)
+            if arr.shape[0] != len(df):
+                raise ValueError(f"{name} must be aligned with results ({len(df)} rows)")
+            return arr
+
+        shipped_arr = _as_array(shipped, "shipped")
+        coverage_arr = _as_array(coverage, "coverage")
+        if group_by is None:
+            out = cumulative_impact(
+                df["absolute_effect"].to_numpy(dtype=float),
+                df["standard_error"].to_numpy(dtype=float),
+                shipped=shipped_arr,
+                prior=prior,
+                tau2=tau2,
+                prior_mean=prior_mean,
+                aggregation=aggregation,
+                coverage=coverage_arr,
+                ci=ci,
+                min_shipped=min_shipped,
+            )
+            details = df.copy()
+            details["shrunk"] = out["shrunk"]
+            details["posterior_sd"] = out["posterior_sd"]
+            details["shipped"] = out["shipped_mask"]
+            out["details"] = details
+            return out
+
+        if group_by not in df.columns:
+            raise ValueError(f"group_by column '{group_by}' not in results")
+        groups = []
+        for key, grp in df.groupby(group_by, sort=False):
+            pos = df.index.get_indexer(grp.index)
+            ship_g = None if shipped_arr is None else np.asarray(shipped_arr)[pos]
+            cov_g = None if coverage_arr is None else np.asarray(coverage_arr)[pos]
+            try:
+                g_out = cumulative_impact(
+                    grp["absolute_effect"].to_numpy(dtype=float),
+                    grp["standard_error"].to_numpy(dtype=float),
+                    shipped=ship_g,
+                    prior=prior,
+                    tau2=tau2,
+                    prior_mean=prior_mean,
+                    aggregation=aggregation,
+                    coverage=cov_g,
+                    ci=ci,
+                    min_shipped=min_shipped,
+                )
+            except ValueError as exc:
+                groups.append({"group": key, "error": str(exc)})
+                continue
+            details = grp.copy()
+            details["shrunk"] = g_out["shrunk"]
+            details["posterior_sd"] = g_out["posterior_sd"]
+            details["shipped"] = g_out["shipped_mask"]
+            g_out["details"] = details
+            g_out["group"] = key
+            groups.append(g_out)
+        return {"group_by": group_by, "groups": groups}
+
     @property
     def precision_summary(self) -> pd.DataFrame | None:
         """
