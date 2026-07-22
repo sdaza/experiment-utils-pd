@@ -1,13 +1,24 @@
-# %% Imports
+# %% [markdown]
+# # `plot_effects` gallery
+#
+# Synthetic multi-experiment data (country × type) to exercise absolute /
+# relative annotations, grouping, meta-analysis rows, and single-experiment
+# layouts.
+#
+# Run:
+#
+#     uv run python examples/plot_effects_example.py
+
+# %%
 import numpy as np
 import pandas as pd
 
 from experiment_utils import ExperimentAnalyzer
 
+# %% [markdown]
+# ## Simulate A/B experiments across country × type
+
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Simulate A/B experiments across country × type combinations
-# ─────────────────────────────────────────────────────────────────────────────
 np.random.seed(42)
 
 LIFTS = {
@@ -42,10 +53,10 @@ df = pd.concat(
     ignore_index=True,
 )
 
+# %% [markdown]
+# ## Run analysis
+
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Run analysis
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer = ExperimentAnalyzer(
     data=df,
     treatment_col="treatment",
@@ -70,30 +81,26 @@ print(
     ].to_string(index=False)
 )
 
-# %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 1 — absolute effects, sorted by magnitude (defaults)
-#           show_values=True and sort_by_magnitude=True are on by default
-# ─────────────────────────────────────────────────────────────────────────────
-analyzer.plot_effects(title="Treatment Effects — Revenue & Conversion")
+# %% [markdown]
+# ## Case 1 — absolute effects, sorted by magnitude (defaults)
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 2 — conversion rate as percentage points
-#           "+3.0pp" instead of "+0.03"
-# ─────────────────────────────────────────────────────────────────────────────
+analyzer.plot_effects(title="Treatment Effects — Revenue & Conversion")
+
+# %% [markdown]
+# ## Case 2 — conversion as percentage points
+
+# %%
 analyzer.plot_effects(
     outcomes="converted",
     title="Conversion Rate — Percentage Points",
     pct_points=True,
 )
 
+# %% [markdown]
+# ## Case 3 — combine absolute (pp) + relative %
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 3 — combine_values=True: absolute (pp) + relative % in one annotation
-#           "+3.0pp (+15.4%)" — x-axis: "Absolute (Relative) Effect"
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="converted",
     title="Conversion Rate — Absolute (Relative) Effect",
@@ -102,12 +109,10 @@ analyzer.plot_effects(
     combine_values=True,
 )
 
+# %% [markdown]
+# ## Case 4 — combine starting from relative
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 4 — combine_values=True starting from relative
-#           "+15.4% (+3.0pp)" — x-axis: "Relative (Absolute) Effect"
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="converted",
     title="Conversion Rate — Relative (Absolute) Effect",
@@ -116,23 +121,20 @@ analyzer.plot_effects(
     combine_values=True,
 )
 
+# %% [markdown]
+# ## Case 5 — side-by-side absolute and relative panels
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 5 — side-by-side absolute (pp) and relative panels
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     title="Effects — Absolute & Relative Side-by-Side",
     effect=["absolute", "relative"],
     pct_points=True,
 )
 
+# %% [markdown]
+# ## Case 6 — group by country + meta-analysis row
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 6 — group by country, pooled meta-analysis row
-#           one figure per country; rows = experiment type
-# ─────────────────────────────────────────────────────────────────────────────
 figs_by_country = analyzer.plot_effects(
     group_by="country",
     pct_points=True,
@@ -142,11 +144,10 @@ figs_by_country = analyzer.plot_effects(
 
 figs_by_country["EU"]
 
+# %% [markdown]
+# ## Case 7 — group by experiment type
+
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 7 — group by experiment type
-#           one figure per type; rows = country
-# ─────────────────────────────────────────────────────────────────────────────
 figs_by_type = analyzer.plot_effects(
     group_by="type",
     pct_points=True,
@@ -154,11 +155,10 @@ figs_by_type = analyzer.plot_effects(
 
 figs_by_type["email"]
 
+# %% [markdown]
+# ## Case 8 — single outcome with pooled meta-analysis row
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 8 — single outcome with pooled meta-analysis row + combine_values
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     outcomes="revenue",
     meta_analysis=True,
@@ -166,23 +166,19 @@ analyzer.plot_effects(
     title="Revenue Effect — with Pooled Estimate",
 )
 
+# %% [markdown]
+# ## Case 9 — outcomes on the y-axis (`y="outcome"`)
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 9 — y="outcome": outcomes on the y-axis, experiments as panels
-#           useful when there are many outcomes and few experiments
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer.plot_effects(
     y="outcome",
     title="Effects by Experiment",
 )
 
+# %% [markdown]
+# ## Case 10 — single experiment, multiple outcomes
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 10 — single experiment with multiple outcomes
-#            show_panel_titles=False hides the redundant single experiment panel
-# ─────────────────────────────────────────────────────────────────────────────
 np.random.seed(99)
 n_single = 1200
 t_single = np.random.binomial(1, 0.5, n_single)
@@ -212,11 +208,10 @@ analyzer_single.plot_effects(
     show_panel_titles=False,
 )
 
+# %% [markdown]
+# ## Case 11 — single experiment, conversion pp + combine_values
 
 # %%
-# ─────────────────────────────────────────────────────────────────────────────
-# Case 11 — single experiment, conversion in pp + combine_values
-# ─────────────────────────────────────────────────────────────────────────────
 analyzer_single.plot_effects(
     outcomes="converted",
     y="outcome",

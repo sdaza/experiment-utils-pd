@@ -1,12 +1,27 @@
-# %% Imports
+# %% [markdown]
+# # Unit fixed effects
+#
+# Within-unit panel: treatment switches inside units. Shows
+# `ExperimentAnalyzer` with `fixed_effects=` and clustered SEs recovering a
+# known treatment effect.
+#
+# Run:
+#
+#     uv run python examples/fixed_effects_example.py
+
+# %%
 import numpy as np
 import pandas as pd
 from numpy.random import default_rng
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
-# %% Simulate a within-unit panel dataset
-# 80 units x 6 periods; treatment switches within unit so units are "switchers"
+# %% [markdown]
+# ## Simulate a within-unit panel
+#
+# 80 units × 6 periods; treatment switches within unit so units are "switchers".
+
+# %%
 rng = default_rng(42)
 
 n_units = 80
@@ -42,7 +57,10 @@ df = pd.DataFrame(
 print(f"Dataset: {df.shape[0]} rows, {n_units} units, {n_periods} periods")
 print(f"True treatment effect: {true_effect}")
 
-# %% Run ExperimentAnalyzer with unit fixed effects
+# %% [markdown]
+# ## Estimate with unit fixed effects
+
+# %%
 analyzer = ExperimentAnalyzer(
     data=df,
     outcomes=["revenue"],
@@ -56,7 +74,6 @@ analyzer = ExperimentAnalyzer(
 analyzer.get_effects()
 res = analyzer.results
 
-# %% Print key diagnostics
 diag_cols = [c for c in ["fe_absorbed", "n_units", "n_switchers", "pct_switchers"] if c in res.columns]
 effect_cols = ["outcome", "model_type", "absolute_effect", "pvalue", "stat_significance"] + diag_cols
 

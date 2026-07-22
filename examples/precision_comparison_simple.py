@@ -1,10 +1,14 @@
-"""Minimal example for automatic precision comparison.
+# %% [markdown]
+# # Precision comparison (minimal)
+#
+# Shortest example of automatic precision comparison after regression adjustment.
+# Outcome depends strongly on `pre_spend`, so adjustment should reduce SE.
+#
+# Run:
+#
+#     uv run python examples/precision_comparison_simple.py
 
-Run with:
-
-    python examples/precision_comparison_simple.py
-"""
-
+# %%
 import os
 import tempfile
 
@@ -13,6 +17,7 @@ import pandas as pd
 
 os.environ.setdefault("MPLCONFIGDIR", tempfile.gettempdir())
 os.environ["XDG_CACHE_HOME"] = tempfile.gettempdir()
+
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
 rng = np.random.default_rng(42)
@@ -27,9 +32,12 @@ df = pd.DataFrame(
     }
 )
 
-# Outcome depends strongly on pre_spend, so regression adjustment should reduce SE.
 df["revenue"] = 20 + 3.0 * df["treatment"] + 0.2 * df["age"] + 0.8 * df["pre_spend"] + rng.normal(0, 20, n)
 
+# %% [markdown]
+# ## Estimate effects and print precision summary
+
+# %%
 analyzer = ExperimentAnalyzer(
     data=df,
     outcomes=["revenue"],

@@ -14,6 +14,10 @@
 #
 # This script uses the package APIs:
 # `cumulative_impact`, `joint_metric_shrinkage`, `estimate_guardrail_rho`.
+#
+# Run:
+#
+#     uv run python examples/guardrail_correlation_prior.py
 
 # %%
 import numpy as np

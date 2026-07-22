@@ -9,8 +9,12 @@
 #   * pick the best variant (B vs C claims)  -> tukey   (FWER over all pairs)
 #   * screening, winners confirmed later     -> fdr     (BH; cheapest, weaker guarantee)
 #   * generic / conservative                 -> sidak, bonferroni, holm, hochberg
+#
+# Run:
+#
+#     uv run python examples/multiple-variants-testing.py
 
-# %% setup
+# %%
 from experiment_utils import PowerSim
 
 ps = PowerSim(
@@ -25,7 +29,10 @@ ps = PowerSim(
     comparisons=[(0, 1), (0, 2), (0, 3)],  # the family corrections are applied across
 )
 
-# %% power at a given design
+# %% [markdown]
+# ## Power at a given design
+
+# %%
 power_df = ps.get_power(
     baseline=0.10,
     effect=0.05,
@@ -53,7 +60,7 @@ for corr in ["none", "fdr", "dunnett", "sidak", "bonferroni"]:
         min_sample_size=10000,
         max_sample_size=500000,
         step_size=2000,
-        tolerance=0.001,        
+        tolerance=0.001,
         correction=corr,
     )
     results[corr] = res.iloc[0]["total_sample_size"]

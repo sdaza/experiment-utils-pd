@@ -15,6 +15,10 @@
 #    family as Hedges 1984 / Taylor & Muller 1996 / BUCSS):
 #    `winners_curse_summary()`, which `calculate_retrodesign()` now also uses
 #    as its default assumed true effect.
+#
+# Run:
+#
+#     uv run python examples/minimum_effect_and_critical_effect.py
 
 # %%
 import numpy as np

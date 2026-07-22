@@ -5,6 +5,10 @@
 # Kessler (2024) / Datadog: shrink every experiment with an archive prior, then
 # aggregate **only the shipped set**. This script compares naive vs EB vs
 # Student-t cumulative impact, and shows how guardrails change the ship set.
+#
+# Run:
+#
+#     uv run python examples/cumulative_impact.py
 
 # %%
 import numpy as np

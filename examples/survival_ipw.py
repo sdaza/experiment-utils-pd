@@ -8,15 +8,21 @@
 # - Treatment assignment depends on age, income (confounded)
 # - Survival depends on treatment + age + income + prior_clicks
 # - True treatment effect: HR = exp(-0.3) ≈ 0.74 (treatment reduces hazard)
+#
+# Run:
+#
+#     uv run python examples/survival_ipw.py
 
-# %% Imports
+# %%
 import numpy as np
 import pandas as pd
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
-# %% Generate survival data with confounding
+# %% [markdown]
+# ## Generate survival data with confounding
 
+# %%
 np.random.seed(42)
 n = 5000
 
@@ -38,10 +44,13 @@ print(f"Treatment rate: {data['treatment'].mean():.2%}")
 print(f"Mean age (treated): {data.loc[data['treatment'] == 1, 'age'].mean():.1f}")
 print(f"Mean age (control): {data.loc[data['treatment'] == 0, 'age'].mean():.1f}")
 
-# %% Simulate time-to-churn
-# TRUE causal effect: treatment REDUCES hazard (protective)
-# log(HR) = -0.3, so HR = exp(-0.3) ≈ 0.74
+# %% [markdown]
+# ## Simulate time-to-churn
+#
+# True causal effect: treatment reduces hazard (protective).
+# \(\log(\mathrm{HR}) = -0.3\), so \(\mathrm{HR} = \exp(-0.3) \approx 0.74\).
 
+# %%
 baseline_hazard = 0.01
 true_log_hr = -0.3  # treatment is protective
 
@@ -63,7 +72,10 @@ print(f"\nTrue log(HR): {true_log_hr}")
 print(f"True HR: {np.exp(true_log_hr):.3f}")
 print(f"Churn rate: {data['churned'].mean():.2%}")
 
-# %% 1. Unadjusted (confounded)
+# %% [markdown]
+# ## 1. Unadjusted (confounded)
+
+# %%
 print("\n" + "=" * 70)
 print("1. UNADJUSTED (no covariate adjustment)")
 print("   Expected: biased estimate due to confounding")
@@ -85,7 +97,10 @@ print(f"  Estimated HR:      {np.exp(r['absolute_effect'].iloc[0]):.4f}  (true: 
 print(f"  p-value:           {r['pvalue'].iloc[0]:.4f}")
 print(f"  Bias:              {r['absolute_effect'].iloc[0] - true_log_hr:+.4f}")
 
-# %% 2. Regression adjustment only
+# %% [markdown]
+# ## 2. Regression adjustment only
+
+# %%
 print("\n" + "=" * 70)
 print("2. REGRESSION ADJUSTMENT (covariates in Cox model)")
 print("   Expected: less biased, covariates absorb confounding")
@@ -110,7 +125,10 @@ print(f"  p-value:           {r['pvalue'].iloc[0]:.4f}")
 print(f"  Bias:              {r['absolute_effect'].iloc[0] - true_log_hr:+.4f}")
 print(f"  Balance:           {r['balance'].iloc[0]:.0%}")
 
-# %% 3. IPW only (ps-logistic)
+# %% [markdown]
+# ## 3. IPW only (ps-logistic)
+
+# %%
 print("\n" + "=" * 70)
 print("3. IPW ONLY (propensity score weighting, ps-logistic)")
 print("   Expected: unbiased if PS model is correct")
@@ -137,7 +155,10 @@ print(f"  p-value:           {r['pvalue'].iloc[0]:.4f}")
 print(f"  Bias:              {r['absolute_effect'].iloc[0] - true_log_hr:+.4f}")
 print(f"  Adjusted balance:  {r['balance'].iloc[0]:.0%}")
 
-# %% 4. IPW with entropy balancing
+# %% [markdown]
+# ## 4. IPW with entropy balancing
+
+# %%
 print("\n" + "=" * 70)
 print("4. IPW ONLY (entropy balancing)")
 print("   Expected: often better balance than logistic PS")
@@ -164,7 +185,10 @@ print(f"  p-value:           {r['pvalue'].iloc[0]:.4f}")
 print(f"  Bias:              {r['absolute_effect'].iloc[0] - true_log_hr:+.4f}")
 print(f"  Adjusted balance:  {r['balance'].iloc[0]:.0%}")
 
-# %% 5. IPW + Regression (both)
+# %% [markdown]
+# ## 5. IPW + Regression (both)
+
+# %%
 print("\n" + "=" * 70)
 print("5. IPW + REGRESSION (ps-logistic + covariates in Cox model)")
 print("   Expected: combines both adjustments")
@@ -192,7 +216,10 @@ print(f"  p-value:           {r['pvalue'].iloc[0]:.4f}")
 print(f"  Bias:              {r['absolute_effect'].iloc[0] - true_log_hr:+.4f}")
 print(f"  Adjusted balance:  {r['balance'].iloc[0]:.0%}")
 
-# %% Summary table
+# %% [markdown]
+# ## Summary table
+
+# %%
 print("\n" + "=" * 70)
 print("SUMMARY")
 print(f"True log(HR) = {true_log_hr}, True HR = {np.exp(true_log_hr):.3f}")

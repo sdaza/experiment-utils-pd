@@ -1716,6 +1716,7 @@ primary-only EB (sampling noise).
 Runnable examples:
 
 - [`examples/shrinkage_methods_tour.py`](examples/shrinkage_methods_tour.py) — short seeded tour of each method
+- [`examples/scaled_ship_method_assessment.py`](examples/scaled_ship_method_assessment.py) — MC: which shrinker wins under SCALED ship (sig + guardrail ≥ 0)
 - [`examples/cumulative_impact.py`](examples/cumulative_impact.py) — shrink-then-sum vs naive winners
 - [`examples/cumulative_impact_extensions.py`](examples/cumulative_impact_extensions.py) — Airbnb / MAP / joint
 - [`examples/guardrail_correlation_prior.py`](examples/guardrail_correlation_prior.py) — when joint beats primary-only

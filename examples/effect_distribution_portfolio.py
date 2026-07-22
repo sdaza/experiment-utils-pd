@@ -20,6 +20,10 @@
 #    effect, given the observed significance rate (`estimate_true_success_rate`).
 # 4. **The value of experimentation (EVSI)**: expected shipped uplift under
 #    "ship if significant" vs "ship everything" vs perfect information.
+#
+# Run:
+#
+#     uv run python examples/effect_distribution_portfolio.py
 
 # %%
 import numpy as np

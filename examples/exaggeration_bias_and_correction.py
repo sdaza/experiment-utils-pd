@@ -13,6 +13,10 @@
 #    measures the exaggeration empirically.
 # 3. Corrects each winner with `winners_curse_estimate()` (single-estimate,
 #    median-unbiased) and the whole family with `empirical_bayes_shrinkage()`.
+#
+# Run:
+#
+#     uv run python examples/exaggeration_bias_and_correction.py
 
 # %%
 import numpy as np

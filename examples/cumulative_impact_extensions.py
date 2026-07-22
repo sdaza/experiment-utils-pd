@@ -9,6 +9,10 @@
 #    MoM or Half-Cauchy **MAP** (`fit_normal_prior_map` / `prior="map"`).
 # 4. **Joint + estimated ρ** — ship with a guardrail rule; shrink primary using
 #    `estimate_guardrail_rho` + `joint_metric_shrinkage`.
+#
+# Run:
+#
+#     uv run python examples/cumulative_impact_extensions.py
 
 # %%
 import numpy as np

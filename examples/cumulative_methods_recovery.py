@@ -12,6 +12,10 @@
 # 5. `estimate_guardrail_rho` recovers true ρ
 # 6. `joint_metric_shrinkage` (true / estimated ρ) beats primary-only MSE
 # 7. One-sided `winners_curse_estimate` is median-unbiased among winners
+#
+# Run:
+#
+#     uv run python examples/cumulative_methods_recovery.py
 
 # %%
 import numpy as np
