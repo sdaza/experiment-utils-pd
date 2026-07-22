@@ -18,6 +18,14 @@
 * Pass the real launch rule in `shipped` (including guardrails); do not equate primary significance with shipping
 * `estimate_guardrail_rho` is MoM and attenuated by noise only through τ̂; wrong ρ still usually second-order vs winner's curse
 
+## [1.2.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.11...v1.2.0) (2026-07-22)
+
+
+### Features
+
+* add cumulative impact, joint guardrail shrinkage, and Airbnb process-level total ([598a2f9](https://github.com/sdaza/experiment-utils-pd/commit/598a2f9c15326f9f2b6a78a03e805532adadcfba))
+* cumulative impact, joint guardrail shrinkage, and Airbnb process-level total ([b802811](https://github.com/sdaza/experiment-utils-pd/commit/b802811a708b6cce9c6a560ead1fe3caea770770))
+
 ## [1.1.11](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.10...v1.1.11) (2026-07-16)
 
 
