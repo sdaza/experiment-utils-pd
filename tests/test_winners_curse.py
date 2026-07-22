@@ -199,7 +199,67 @@ def test_fixed_tau2_validated_by_analyzer():
 
 def test_returns_documented_keys():
     out = winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05)
-    assert set(out) == {"corrected", "ci_lower", "ci_upper", "observed_z", "shrinkage"}
+    assert set(out) == {
+        "corrected",
+        "ci_lower",
+        "ci_upper",
+        "observed_z",
+        "shrinkage",
+        "alternative",
+    }
+    assert out["alternative"] == "two-sided"
+
+
+def test_one_sided_greater_corrects_below_observed():
+    # Comfortably above the one-sided threshold (not the pathological boundary).
+    out = winners_curse_estimate(effect=3.0, standard_error=1.0, alpha=0.05, alternative="greater")
+    assert out["alternative"] == "greater"
+    assert out["corrected"] < 3.0
+    assert np.isfinite(out["corrected"])
+    assert out["ci_lower"] < out["corrected"] < out["ci_upper"]
+
+
+def test_one_sided_near_threshold_goes_far_negative():
+    # Barely selected one-sided: median-unbiased beta is large and negative
+    # (noise that barely cleared the bar is more consistent with β ≪ 0).
+    s = 1.0
+    b = norm.ppf(0.95) * s + 1e-3
+    out = winners_curse_estimate(effect=b, standard_error=s, alpha=0.05, alternative="greater")
+    assert out["corrected"] < -10.0 * s
+
+
+def test_one_sided_less_is_sign_flip_of_greater():
+    pos = winners_curse_estimate(effect=3.0, standard_error=1.0, alpha=0.05, alternative="greater")
+    neg = winners_curse_estimate(effect=-3.0, standard_error=1.0, alpha=0.05, alternative="less")
+    assert neg["corrected"] == pytest.approx(-pos["corrected"], abs=1e-6)
+    assert neg["ci_lower"] == pytest.approx(-pos["ci_upper"], abs=1e-6)
+
+
+def test_one_sided_bad_alternative():
+    with pytest.raises(ValueError, match="alternative"):
+        winners_curse_estimate(effect=3.0, standard_error=1.0, alternative="both")
+
+
+def test_one_sided_warns_outside_region():
+    with pytest.warns(RuntimeWarning):
+        winners_curse_estimate(effect=0.5, standard_error=1.0, alpha=0.05, alternative="greater")
+
+
+def test_one_sided_median_unbiased_recovery():
+    """Median-unbiased: median of one-sided corrected winners tracks the true effect."""
+    rng = np.random.default_rng(7)
+    true = 0.50
+    se = 0.25
+    alpha = 0.05
+    z = norm.ppf(1.0 - alpha)
+    y = rng.normal(true, se, 50_000)
+    winners = y[y >= z * se]
+    corrected = np.array(
+        [winners_curse_estimate(float(w), se, alpha=alpha, alternative="greater")["corrected"] for w in winners[::10]]
+    )
+    assert np.all(np.isfinite(corrected))
+    assert abs(float(np.median(corrected)) - true) < 0.08
+    assert abs(float(np.mean(winners)) - true) > 0.10  # raw mean still cursed
 
 
 def test_no_shrink_far_above_threshold():
@@ -479,6 +539,11 @@ def test_top_level_exports():
     assert hasattr(eu, "fit_t_prior")
     assert hasattr(eu, "fit_t_prior_with_estimated_mean")
     assert hasattr(eu, "t_prior_shrinkage")
+    assert hasattr(eu, "cumulative_impact")
+    assert hasattr(eu, "joint_metric_shrinkage")
+    assert hasattr(eu, "process_level_total_effect")
+    assert hasattr(eu, "estimate_guardrail_rho")
+    assert hasattr(eu, "fit_normal_prior_map")
 
 
 def test_fit_t_prior_with_estimated_mean_validation():

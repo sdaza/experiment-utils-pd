@@ -1078,23 +1078,31 @@ def winners_curse_estimate(
     standard_error: float,
     alpha: float = 0.05,
     ci: float = 0.95,
+    alternative: str = "two-sided",
 ) -> dict:
     """
     Winner's-curse correction for a single estimate selected by significance.
 
-    Models ``effect ~ N(beta, standard_error**2)`` truncated to the two-sided
-    significance region ``|effect| >= z* * standard_error``, where
-    ``z* = Phi^{-1}(1 - alpha/2)``. Returns the median-unbiased estimate of
-    ``beta`` (the value whose conditional CDF at ``effect`` equals 0.5) and a
-    selection-adjusted equal-tailed confidence interval. Operates on whatever
-    scale ``effect``/``standard_error`` are supplied on (for GLMs that is the
+    Models ``effect ~ N(beta, standard_error**2)`` truncated to the selection
+    region implied by ``alternative``:
+
+    - ``"two-sided"`` (default): ``|effect| >= z* * SE`` with
+      ``z* = Phi^{-1}(1 - alpha/2)``.
+    - ``"greater"``: ``effect >= z* * SE`` with ``z* = Phi^{-1}(1 - alpha)``
+      (one-sided launch / positive win; Kessler-style).
+    - ``"less"``: ``effect <= -z* * SE`` with the same one-sided ``z*``.
+
+    Returns the median-unbiased estimate of ``beta`` (the value whose
+    conditional CDF at ``effect`` equals 0.5) and a selection-adjusted
+    equal-tailed confidence interval. Operates on whatever scale
+    ``effect``/``standard_error`` are supplied on (for GLMs that is the
     log/coefficient scale).
 
-    The function assumes ``|effect| >= z* * standard_error`` (i.e. the effect
-    was selected by significance). If this precondition is violated a
-    ``RuntimeWarning`` is emitted and the computation proceeds; it does not
-    raise so downstream pipelines that pass already-screened rows are not
-    disrupted when the screening threshold differs slightly from ``alpha``.
+    The function assumes the effect lies in the selection region. If this
+    precondition is violated a ``RuntimeWarning`` is emitted and the
+    computation proceeds; it does not raise so downstream pipelines that pass
+    already-screened rows are not disrupted when the screening threshold
+    differs slightly from ``alpha``.
 
     Parameters
     ----------
@@ -1103,16 +1111,19 @@ def winners_curse_estimate(
     standard_error : float
         Its standard error; must be > 0.
     alpha : float
-        Two-sided significance level that defined selection (default 0.05).
+        Significance level that defined selection (default 0.05). Interpreted
+        as two-sided for ``alternative="two-sided"`` and one-sided otherwise.
     ci : float
         Confidence level for the adjusted interval (default 0.95).
+    alternative : {"two-sided", "greater", "less"}
+        Selection region (default ``"two-sided"``).
 
     Returns
     -------
     dict
         ``corrected`` (median-unbiased estimate), ``ci_lower``, ``ci_upper``
         (selection-adjusted interval), ``observed_z`` (= effect/standard_error),
-        ``shrinkage`` (= corrected/effect).
+        ``shrinkage`` (= corrected/effect), ``alternative``.
     """
     if not np.isfinite(effect):
         raise ValueError("effect must be finite")
@@ -1122,14 +1133,21 @@ def winners_curse_estimate(
         raise ValueError("alpha must be strictly between 0 and 1")
     if not 0 < ci < 1:
         raise ValueError("ci must be strictly between 0 and 1")
+    if alternative not in {"two-sided", "greater", "less"}:
+        raise ValueError("alternative must be 'two-sided', 'greater', or 'less'")
 
     s = float(standard_error)
     b = float(effect)
-    c = norm.ppf(1.0 - alpha / 2.0) * s  # selection threshold on the effect scale
+    if alternative == "two-sided":
+        c = norm.ppf(1.0 - alpha / 2.0) * s
+        selected = abs(b) >= c
+    else:
+        c = norm.ppf(1.0 - alpha) * s
+        selected = b >= c if alternative == "greater" else b <= -c
 
-    if abs(b) < c:
+    if not selected:
         warnings.warn(
-            "winners_curse_estimate: |effect| is below the significance threshold; "
+            "winners_curse_estimate: effect is outside the selection region; "
             "the correction assumes the estimate was selected by significance.",
             RuntimeWarning,
             stacklevel=2,
@@ -1138,27 +1156,49 @@ def winners_curse_estimate(
     observed_z = b / s
 
     def cond_cdf(beta: float) -> float:
-        # P(X in S | beta) for S = (-inf, -c] U [c, inf); always >= alpha, so stable.
-        p_sel = norm.cdf((-c - beta) / s) + norm.sf((c - beta) / s)
-        if b >= c:
-            num = norm.cdf((-c - beta) / s) + norm.cdf((b - beta) / s) - norm.cdf((c - beta) / s)
-        elif b <= -c:
-            num = norm.cdf((b - beta) / s)
-        else:  # excluded gap (-c, c): only the lower selected tail (-inf, -c] is <= b
-            num = norm.cdf((-c - beta) / s)
-        return num / p_sel
+        if alternative == "two-sided":
+            # S = (-inf, -c] U [c, inf)
+            p_sel = norm.cdf((-c - beta) / s) + norm.sf((c - beta) / s)
+            if b >= c:
+                num = norm.cdf((-c - beta) / s) + norm.cdf((b - beta) / s) - norm.cdf((c - beta) / s)
+            elif b <= -c:
+                num = norm.cdf((b - beta) / s)
+            else:  # excluded gap (-c, c): only the lower selected tail (-inf, -c] is <= b
+                num = norm.cdf((-c - beta) / s)
+            return num / p_sel
+        if alternative == "greater":
+            # S = [c, inf). Use survival ratio to avoid 0/0 when beta << c.
+            if b < c:
+                return 0.0
+            z_c = (c - beta) / s
+            z_b = (b - beta) / s
+            den = norm.sf(z_c)
+            if den == 0.0:
+                return 1.0
+            return float(1.0 - np.clip(norm.sf(z_b) / den, 0.0, 1.0))
+        # alternative == "less": S = (-inf, -c]. Use CDF ratio for stability.
+        if b > -c:
+            return 1.0
+        z_uc = (-c - beta) / s  # upper endpoint of selection region
+        z_b = (b - beta) / s
+        den = norm.cdf(z_uc)
+        if den == 0.0:
+            return 0.0
+        return float(np.clip(norm.cdf(z_b) / den, 0.0, 1.0))
 
     def invert(target: float) -> float:
         # cond_cdf is monotone DECREASING in beta (1 at -inf, 0 at +inf).
         f = lambda beta: cond_cdf(beta) - target  # noqa: E731
+        # One-sided near-threshold observations need a wide left bracket:
+        # the median-unbiased beta can be many SEs below the truncation point.
         lo, hi = b - 2.0 * s, b + 2.0 * s
         steps = 0
-        while f(lo) < 0 and steps < 80:
-            lo -= 2.0 * s
+        while f(lo) < 0 and steps < 200:
+            lo -= 4.0 * s
             steps += 1
         steps = 0
-        while f(hi) > 0 and steps < 80:
-            hi += 2.0 * s
+        while f(hi) > 0 and steps < 200:
+            hi += 4.0 * s
             steps += 1
         try:
             return float(brentq(f, lo, hi, xtol=1e-8, rtol=1e-12, maxiter=200))
@@ -1182,6 +1222,7 @@ def winners_curse_estimate(
         "ci_upper": ci_upper,
         "observed_z": observed_z,
         "shrinkage": shrinkage,
+        "alternative": alternative,
     }
 
 
@@ -1577,3 +1618,511 @@ def fit_t_prior_with_estimated_mean(
         }
     )
     return prior
+
+
+def joint_metric_shrinkage(
+    primary_effects,
+    primary_ses,
+    guardrail_effects,
+    guardrail_ses,
+    *,
+    rho: float,
+    prior_sd_primary: float,
+    prior_sd_guard: float | None = None,
+    prior_mean_primary: float = 0.0,
+    prior_mean_guard: float = 0.0,
+    ci: float = 0.95,
+) -> dict:
+    """
+    Bivariate normal–normal shrinkage of primary and guardrail effects.
+
+    Models true effects ``(delta, gamma)`` as jointly normal with correlation
+    ``rho`` and known prior SDs, observed with independent sampling errors.
+    Returns posterior means and equal-tailed CIs. ``rho`` is caller-supplied
+    (not estimated). When ``rho=0`` the primary posterior matches univariate
+    normal EB with the same prior SD.
+
+    Parameters
+    ----------
+    primary_effects, primary_ses, guardrail_effects, guardrail_ses : array-like
+        Aligned 1-D arrays of equal length.
+    rho : float
+        Corr(true primary, true guardrail); must be in (-1, 1).
+    prior_sd_primary : float
+        Prior SD of the primary true effect; must be > 0.
+    prior_sd_guard : float, optional
+        Prior SD of the guardrail; defaults to ``prior_sd_primary``.
+    prior_mean_primary, prior_mean_guard : float
+        Prior means (default 0).
+    ci : float
+        Credible-interval level (default 0.95).
+
+    Returns
+    -------
+    dict
+        ``primary_shrunk``, ``guard_shrunk``, ``primary_posterior_sd``,
+        ``guard_posterior_sd``, ``primary_ci_lower``, ``primary_ci_upper``,
+        ``guard_ci_lower``, ``guard_ci_upper``, plus scalar prior params.
+    """
+    x, sx = _validate_effects_ses(primary_effects, primary_ses)
+    g, sg = _validate_effects_ses(guardrail_effects, guardrail_ses)
+    if x.shape != g.shape:
+        raise ValueError("primary and guardrail arrays must have the same length")
+    if x.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+    if not (np.isfinite(rho) and abs(rho) < 1.0):
+        raise ValueError("rho must be finite and strictly inside (-1, 1)")
+    if not (np.isfinite(prior_sd_primary) and prior_sd_primary > 0):
+        raise ValueError("prior_sd_primary must be positive and finite")
+    if prior_sd_guard is None:
+        prior_sd_guard = prior_sd_primary
+    if not (np.isfinite(prior_sd_guard) and prior_sd_guard > 0):
+        raise ValueError("prior_sd_guard must be positive and finite")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    tau_p2 = float(prior_sd_primary) ** 2
+    tau_g2 = float(prior_sd_guard) ** 2
+    cov = float(rho) * prior_sd_primary * prior_sd_guard
+    sigma = np.array([[tau_p2, cov], [cov, tau_g2]], dtype=float)
+    mu = np.array([prior_mean_primary, prior_mean_guard], dtype=float)
+    z = norm.ppf(1.0 - (1.0 - ci) / 2.0)
+
+    primary_shrunk = np.empty_like(x)
+    guard_shrunk = np.empty_like(x)
+    primary_sd = np.empty_like(x)
+    guard_sd = np.empty_like(x)
+    for i in range(x.size):
+        v = np.diag([sx[i] ** 2, sg[i] ** 2])
+        post_cov = np.linalg.inv(np.linalg.inv(sigma) + np.linalg.inv(v))
+        a = sigma @ np.linalg.inv(sigma + v)
+        post_mean = mu + a @ (np.array([x[i], g[i]]) - mu)
+        primary_shrunk[i] = post_mean[0]
+        guard_shrunk[i] = post_mean[1]
+        primary_sd[i] = np.sqrt(max(post_cov[0, 0], 0.0))
+        guard_sd[i] = np.sqrt(max(post_cov[1, 1], 0.0))
+
+    return {
+        "primary_shrunk": primary_shrunk,
+        "guard_shrunk": guard_shrunk,
+        "primary_posterior_sd": primary_sd,
+        "guard_posterior_sd": guard_sd,
+        "primary_ci_lower": primary_shrunk - z * primary_sd,
+        "primary_ci_upper": primary_shrunk + z * primary_sd,
+        "guard_ci_lower": guard_shrunk - z * guard_sd,
+        "guard_ci_upper": guard_shrunk + z * guard_sd,
+        "rho": float(rho),
+        "prior_sd_primary": float(prior_sd_primary),
+        "prior_sd_guard": float(prior_sd_guard),
+        "prior_mean_primary": float(prior_mean_primary),
+        "prior_mean_guard": float(prior_mean_guard),
+    }
+
+
+def cumulative_impact(
+    effects,
+    standard_errors,
+    *,
+    shipped=None,
+    prior=None,
+    tau2: float | None = None,
+    prior_mean: float = 0.0,
+    aggregation: str = "sum",
+    coverage=None,
+    ci: float = 0.95,
+    min_shipped: int = 1,
+) -> dict:
+    """
+    Noise-adjusted cumulative impact of shipped experiments (Kessler / Datadog).
+
+    Shrinks every estimate with a normal or Student-t archive prior, then
+    aggregates **only** the ``shipped`` subset. Pass the real launch rule in
+    ``shipped`` (including guardrails); do not confuse significance on the
+    primary with shipping.
+
+    Aggregation:
+
+    - ``"sum"``: ``sum(w_i * theta_hat_i)`` over shipped (absolute / additive).
+    - ``"product"``: ``prod(1 + w_i * theta_hat_i) - 1`` (relative lifts).
+
+    ``w_i`` is coverage (share of eligible users) when ``coverage`` is given,
+    else 1. The CI uses the plug-in sum of posterior variances (fixed-prior
+    Kessler formula); when the prior is learned from the same data the
+    interval is slightly anti-conservative.
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Experiment lifts and SEs on a common scale.
+    shipped : array-like of bool, optional
+        Launch mask; default ships all experiments.
+    prior : dict or ``"map"``, optional
+        External prior: ``{"tau2": ...}`` (normal), ``{"scale", "df"}``
+        (Student-t), or ``"map"`` to fit a Datadog-style Half-Cauchy MAP
+        normal prior via :func:`fit_normal_prior_map`. Optional ``prior_mean``
+        in dict priors.
+    tau2 : float, optional
+        Fixed normal prior variance when ``prior`` is omitted.
+    prior_mean : float
+        Shrinkage location when learning / fixing a normal prior (default 0).
+        Ignored when ``prior`` already supplies ``prior_mean``.
+    aggregation : {"sum", "product"}
+        How to combine shipped posterior means.
+    coverage : array-like, optional
+        Per-experiment exposure weights in ``[0, 1]`` for a global view.
+    ci : float
+        Interval level (default 0.95).
+    min_shipped : int
+        Require at least this many shipped experiments (default 1).
+
+    Returns
+    -------
+    dict
+        ``cumulative``, ``ci_lower``, ``ci_upper``, ``n_total``, ``n_shipped``,
+        ``shrunk``, ``posterior_sd``, ``shipped_mask``, ``aggregation``,
+        prior metadata (``prior_family``, ``tau2`` / ``scale`` / ``df``,
+        ``prior_mean``).
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+    if aggregation not in {"sum", "product"}:
+        raise ValueError("aggregation must be 'sum' or 'product'")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+    if not isinstance(min_shipped, int) or min_shipped < 1:
+        raise ValueError("min_shipped must be an integer >= 1")
+
+    if shipped is None:
+        shipped_mask = np.ones(y.size, dtype=bool)
+    else:
+        shipped_mask = np.asarray(shipped, dtype=bool)
+        if shipped_mask.shape != y.shape:
+            raise ValueError("shipped must be a 1-D boolean array aligned with effects")
+
+    n_shipped = int(shipped_mask.sum())
+    if n_shipped < min_shipped:
+        raise ValueError(f"need at least {min_shipped} shipped experiments; got {n_shipped}")
+
+    if coverage is None:
+        weights = np.ones(y.size, dtype=float)
+    else:
+        weights = np.asarray(coverage, dtype=float)
+        if weights.shape != y.shape:
+            raise ValueError("coverage must be a 1-D array aligned with effects")
+        if not np.all(np.isfinite(weights)) or np.any(weights < 0) or np.any(weights > 1):
+            raise ValueError("coverage values must be finite and in [0, 1]")
+
+    # Resolve prior / shrink all rows (fit on all; aggregate shipped only).
+    prior_meta: dict = {"prior_mean": float(prior_mean)}
+    if prior == "map":
+        prior = fit_normal_prior_map(y, s)
+    if prior is not None:
+        if not isinstance(prior, dict):
+            raise ValueError("prior must be a dict or the string 'map'")
+        loc = float(prior.get("prior_mean", prior_mean))
+        if "scale" in prior and "df" in prior:
+            eb = t_prior_shrinkage(y, s, scale=float(prior["scale"]), df=float(prior["df"]), prior_mean=loc, ci=ci)
+            prior_meta.update(
+                {
+                    "prior_family": "student_t",
+                    "scale": float(eb["scale"]),
+                    "df": float(eb["df"]),
+                    "tau2": float(eb["tau2"]),
+                    "prior_mean": loc,
+                }
+            )
+        elif "tau2" in prior:
+            eb = empirical_bayes_shrinkage(y, s, prior_mean=loc, ci=ci, tau2=float(prior["tau2"]))
+            prior_meta.update(
+                {
+                    "prior_family": "normal",
+                    "tau2": float(eb["tau2"]),
+                    "prior_mean": loc,
+                    "prior_fit": prior.get("method"),
+                }
+            )
+        else:
+            raise ValueError("prior must contain 'tau2' or both 'scale' and 'df'")
+    elif tau2 is not None:
+        eb = empirical_bayes_shrinkage(y, s, prior_mean=prior_mean, ci=ci, tau2=tau2)
+        prior_meta.update({"prior_family": "normal", "tau2": float(eb["tau2"])})
+    else:
+        eb = empirical_bayes_shrinkage(y, s, prior_mean=prior_mean, ci=ci)
+        prior_meta.update({"prior_family": "normal", "tau2": float(eb["tau2"])})
+
+    shrunk = np.asarray(eb["shrunk"], dtype=float)
+    post_sd = np.asarray(eb["posterior_sd"], dtype=float)
+    w_l = weights[shipped_mask]
+    theta_l = shrunk[shipped_mask]
+    sd_l = post_sd[shipped_mask]
+    contrib = w_l * theta_l
+
+    if aggregation == "sum":
+        cumulative = float(np.sum(contrib))
+        se_cum = float(np.sqrt(np.sum((w_l * sd_l) ** 2)))
+        z = norm.ppf(1.0 - (1.0 - ci) / 2.0)
+        ci_lower = cumulative - z * se_cum
+        ci_upper = cumulative + z * se_cum
+    else:
+        factors = 1.0 + contrib
+        if np.any(~np.isfinite(factors)) or np.any(factors <= 0):
+            raise ValueError("product aggregation requires 1 + coverage * shrunk > 0 for every shipped experiment")
+        cumulative = float(np.prod(factors) - 1.0)
+        # Delta method on log(1+Δ) = sum log(1 + w θ)
+        var_log = float(np.sum((w_l * sd_l / factors) ** 2))
+        se_log = np.sqrt(var_log)
+        z = norm.ppf(1.0 - (1.0 - ci) / 2.0)
+        log_point = float(np.sum(np.log(factors)))
+        ci_lower = float(np.exp(log_point - z * se_log) - 1.0)
+        ci_upper = float(np.exp(log_point + z * se_log) - 1.0)
+
+    return {
+        "cumulative": cumulative,
+        "ci_lower": float(ci_lower),
+        "ci_upper": float(ci_upper),
+        "n_total": int(y.size),
+        "n_shipped": n_shipped,
+        "shrunk": shrunk,
+        "posterior_sd": post_sd,
+        "shipped_mask": shipped_mask,
+        "aggregation": aggregation,
+        **prior_meta,
+    }
+
+
+def process_level_total_effect(
+    effects,
+    standard_errors,
+    *,
+    alpha: float = 0.05,
+    alternative: str = "greater",
+    n_bootstrap: int = 0,
+    ci: float = 0.95,
+    random_seed: int | None = None,
+) -> dict:
+    """
+    Lee & Shen (2018) process-level correction for the expected total of winners.
+
+    Estimand is ``E[T_A]`` where ``T_A = sum_{i in A} a_i`` and ``A`` is the
+    (random) set of experiments that pass a one-sided launch threshold. The
+    naive sum ``S_A`` is biased high; the plug-in debiased total subtracts a
+    bias contribution from **every** experiment (selected or not):
+
+    ``hat{T}_A = S_A - sum_i SE_i * phi((SE_i * b_i - X_i) / SE_i)``.
+
+    This differs from :func:`winners_curse_estimate` (conditional on selection)
+    and from :func:`cumulative_impact` (Bayesian shrink-then-sum). Prefer
+    Bayesian cumulative impact when a prior is available; use this when the
+    estimand is specifically the Airbnb process-level total.
+
+    Parameters
+    ----------
+    effects, standard_errors : array-like
+        Experiment lifts and SEs.
+    alpha : float
+        One-sided significance level for launch (default 0.05).
+    alternative : {"greater", "less"}
+        Launch direction (Airbnb uses ``"greater"``).
+    n_bootstrap : int
+        If > 0, parametric bootstrap percentile CI for ``hat{T}_A``.
+    ci : float
+        Bootstrap CI level (default 0.95).
+    random_seed : int, optional
+        Bootstrap RNG seed.
+
+    Returns
+    -------
+    dict
+        ``total`` (``hat{T}_A``), ``naive_total`` (``S_A``), ``conditional_total``
+        (Zhong–Prentice style sum of conditional debiasings), ``bias_estimate``,
+        ``n_selected``, ``selected_mask``, and optional ``ci_lower`` / ``ci_upper``.
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be strictly between 0 and 1")
+    if alternative not in {"greater", "less"}:
+        raise ValueError("alternative must be 'greater' or 'less' (Lee & Shen one-sided launch)")
+    if not isinstance(n_bootstrap, int) or n_bootstrap < 0:
+        raise ValueError("n_bootstrap must be an integer >= 0")
+    if n_bootstrap > 0 and not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    def _one_shot(x: np.ndarray) -> dict:
+        z = float(norm.ppf(1.0 - alpha))
+        b = z * s  # thresholds on the effect scale
+        if alternative == "greater":
+            selected = x > b
+            # bias_i = SE * phi((SE*b_z - X)/SE) = SE * phi(z - X/SE)
+            bias_terms = s * norm.pdf(z - x / s)
+            # conditional: for selected only, SE * phi(z - X/SE) / (1 - Phi(z - X/SE))
+            mills = norm.pdf(z - x / s) / np.maximum(norm.sf(z - x / s), 1e-300)
+            cond_debias = np.where(selected, x - s * mills, 0.0)
+        else:
+            selected = x < -b
+            bias_terms = s * norm.pdf(-z - x / s)
+            mills = norm.pdf(-z - x / s) / np.maximum(norm.cdf(-z - x / s), 1e-300)
+            cond_debias = np.where(selected, x + s * mills, 0.0)
+
+        naive = float(np.sum(x[selected])) if selected.any() else 0.0
+        bias_est = float(np.sum(bias_terms))
+        # For "less", the bias identity is E[I(X<-b)(X-a)] = -SE*phi(...);
+        # plug-in subtracts the signed bias so we add bias_terms when less.
+        if alternative == "greater":
+            total = naive - bias_est
+        else:
+            total = naive + bias_est
+        return {
+            "total": float(total),
+            "naive_total": naive,
+            "conditional_total": float(np.sum(cond_debias)),
+            "bias_estimate": bias_est if alternative == "greater" else -bias_est,
+            "n_selected": int(selected.sum()),
+            "selected_mask": selected,
+        }
+
+    out = _one_shot(y)
+    out["alternative"] = alternative
+    out["alpha"] = float(alpha)
+
+    if n_bootstrap > 0:
+        rng = np.random.default_rng(random_seed)
+        boots = np.empty(n_bootstrap)
+        for i in range(n_bootstrap):
+            x_b = rng.normal(y, s)
+            boots[i] = _one_shot(x_b)["total"]
+        gamma = 1.0 - ci
+        out["ci_lower"] = float(np.quantile(boots, gamma / 2.0))
+        out["ci_upper"] = float(np.quantile(boots, 1.0 - gamma / 2.0))
+        out["n_bootstrap"] = n_bootstrap
+    return out
+
+
+def estimate_guardrail_rho(
+    primary_effects,
+    primary_ses,
+    guardrail_effects,
+    guardrail_ses,
+    *,
+    prior_mean_primary: float = 0.0,
+    prior_mean_guard: float = 0.0,
+) -> dict:
+    """
+    Method-of-moments estimate of Corr(true primary, true guardrail).
+
+    Under independent sampling noise, ``Cov(X, G) = Cov(delta, gamma)``.
+    Prior SDs are Paule–Mandel ``tau`` estimates; ``rho`` is clipped to
+    ``(-0.999, 0.999)``. Requires at least 5 paired experiments.
+
+    Returns
+    -------
+    dict
+        ``rho``, ``tau_primary``, ``tau_guard``, ``cov``, ``n``.
+    """
+    x, sx = _validate_effects_ses(primary_effects, primary_ses)
+    g, sg = _validate_effects_ses(guardrail_effects, guardrail_ses)
+    if x.shape != g.shape:
+        raise ValueError("primary and guardrail arrays must have the same length")
+    if x.size < 5:
+        raise ValueError("estimate_guardrail_rho requires at least 5 paired experiments")
+
+    tau_p2 = _paule_mandel_tau2(x, sx**2, prior_mean=prior_mean_primary)
+    tau_g2 = _paule_mandel_tau2(g, sg**2, prior_mean=prior_mean_guard)
+    cov = float(np.mean((x - prior_mean_primary) * (g - prior_mean_guard)))
+    tau_p = float(np.sqrt(tau_p2))
+    tau_g = float(np.sqrt(tau_g2))
+    if tau_p == 0.0 or tau_g == 0.0:
+        warnings.warn(
+            "estimate_guardrail_rho: one prior SD is 0; returning rho=0.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        rho = 0.0
+    else:
+        rho = float(np.clip(cov / (tau_p * tau_g), -0.999, 0.999))
+    return {
+        "rho": rho,
+        "tau_primary": tau_p,
+        "tau_guard": tau_g,
+        "cov": cov,
+        "n": int(x.size),
+    }
+
+
+def fit_normal_prior_map(
+    effects,
+    standard_errors,
+    *,
+    mu_prior_sd: float = 1.0,
+    tau_prior_scale: float = 0.25,
+) -> dict:
+    """
+    Datadog-style MAP for a hierarchical normal prior ``N(mu, tau^2)``.
+
+    Rescales lifts to mean 0 / SD 1, places ``mu ~ N(0, mu_prior_sd^2)`` and
+    ``tau ~ HalfCauchy(0, tau_prior_scale)`` on the rescaled scale, maximizes
+    the marginal posterior (Nelder–Mead over ``(mu, log tau)``), then maps
+    ``(mu, tau)`` back to the original scale. Returns a dict usable as
+    ``prior=`` in :func:`cumulative_impact` / :func:`empirical_bayes_shrinkage`.
+
+    Requires at least 5 estimates (same practical floor as Datadog Cumulative Impact).
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 5:
+        raise ValueError("fit_normal_prior_map requires at least 5 estimates")
+    if not (np.isfinite(mu_prior_sd) and mu_prior_sd > 0):
+        raise ValueError("mu_prior_sd must be positive and finite")
+    if not (np.isfinite(tau_prior_scale) and tau_prior_scale > 0):
+        raise ValueError("tau_prior_scale must be positive and finite")
+
+    y_bar = float(np.mean(y))
+    s_y = float(np.std(y, ddof=1))
+    if s_y <= 0:
+        # All effects identical: no heterogeneity to learn
+        return {
+            "prior_mean": y_bar,
+            "tau2": 0.0,
+            "prior_family": "normal",
+            "method": "half_cauchy_map",
+            "n": int(y.size),
+        }
+
+    y_t = (y - y_bar) / s_y
+    s_t = s / s_y
+
+    def neg_log_post(u: np.ndarray) -> float:
+        mu, eta = float(u[0]), float(u[1])
+        tau = np.exp(eta)
+        marg_var = tau**2 + s_t**2
+        nll = 0.5 * float(np.sum(np.log(2.0 * np.pi * marg_var) + (y_t - mu) ** 2 / marg_var))
+        # mu ~ N(0, mu_prior_sd^2)
+        nll += 0.5 * (mu / mu_prior_sd) ** 2 + np.log(mu_prior_sd * np.sqrt(2.0 * np.pi))
+        # Half-Cauchy(0, scale): log dens = log(2/pi) - log(scale) - log(1+(tau/scale)^2)
+        nll -= np.log(2.0 / np.pi) - np.log(tau_prior_scale) - np.log(1.0 + (tau / tau_prior_scale) ** 2)
+        # Jacobian tau = exp(eta): subtract eta from nll <=> add eta to log posterior
+        nll -= eta
+        return float(nll)
+
+    tau2_mom = _paule_mandel_tau2(y_t, s_t**2, prior_mean=0.0)
+    eta0 = np.log(np.sqrt(tau2_mom)) if tau2_mom > 0 else np.log(0.1)
+    res = minimize(neg_log_post, x0=np.array([0.0, eta0]), method="Nelder-Mead")
+    if not res.success:
+        warnings.warn(
+            f"fit_normal_prior_map: optimizer reported failure ({res.message}); using last iterate.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    mu_t, eta = float(res.x[0]), float(res.x[1])
+    tau_t = float(np.exp(eta))
+    mu = mu_t * s_y + y_bar
+    tau = tau_t * s_y
+    return {
+        "prior_mean": float(mu),
+        "tau2": float(tau**2),
+        "prior_family": "normal",
+        "method": "half_cauchy_map",
+        "n": int(y.size),
+        "log_posterior": float(-res.fun),
+    }

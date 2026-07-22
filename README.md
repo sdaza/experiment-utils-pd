@@ -29,7 +29,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, non-superiority, and minimum-effect (superiority by margin) following Lakens (2017, 2018), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
-- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI, plus empirical-Bayes shrinkage across a family of estimates (`winners_curse_estimate`, `empirical_bayes_shrinkage`, `ExperimentAnalyzer.winners_curse_summary`)
+- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` and Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` with `estimate_guardrail_rho`, plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
 ## Table of Contents
@@ -1619,11 +1619,19 @@ from experiment_utils import (
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
+    cumulative_impact,
+    joint_metric_shrinkage,
+    estimate_guardrail_rho,
+    fit_normal_prior_map,
+    process_level_total_effect,
 )
 
 # Single significant test: observed +5.0, SE 2.0
 winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05)
-# -> {'corrected': ..., 'ci_lower': ..., 'ci_upper': ..., 'observed_z': 2.5, 'shrinkage': ...}
+# -> {'corrected': ..., 'ci_lower': ..., 'ci_upper': ..., 'observed_z': 2.5, 'shrinkage': ..., 'alternative': 'two-sided'}
+
+# One-sided launch rule (ship if estimate > threshold at one-sided alpha)
+winners_curse_estimate(effect=5.0, standard_error=2.0, alpha=0.05, alternative="greater")
 
 # A family of estimates -> empirical-Bayes shrinkage
 empirical_bayes_shrinkage(effects=[5.0, 1.2, 8.1, 0.3], standard_errors=[2.0, 1.1, 3.9, 0.9])
@@ -1641,12 +1649,47 @@ t_prior = fit_t_prior(past_effects, past_ses, df=4.0)
 # typical historical lift (shrink toward that mean, not toward 0)
 t_prior_mu = fit_t_prior_with_estimated_mean(past_effects, past_ses, df=4.0)
 ea.winners_curse_summary(method="empirical_bayes", prior=t_prior_mu)  # honors prior_mean
+
+# Program-level cumulative impact (Kessler / Datadog): shrink all, sum shipped only.
+# `shipped` must be the real launch rule (incl. guardrails), not just significance.
+cum = cumulative_impact(
+    effects, standard_errors,
+    shipped=shipped_mask,
+    prior={"tau2": t_prior["tau2"]},   # or omit to learn τ² from `effects`
+    aggregation="sum",                   # or "product" for relative lifts
+)
+# cum["cumulative"], cum["ci_lower"], cum["ci_upper"]
+
+# Optional: when primary and guardrail true effects are correlated with known rho
+joint = joint_metric_shrinkage(
+    primary_effects, primary_ses, guard_effects, guard_ses,
+    rho=0.3, prior_sd_primary=0.015,
+)
+
+# Or estimate rho + Half-Cauchy MAP prior from the archive
+rho_hat = estimate_guardrail_rho(primary_effects, primary_ses, guard_effects, guard_ses)
+cum_map = cumulative_impact(effects, standard_errors, shipped=shipped_mask, prior="map")
+airbnb = process_level_total_effect(effects, standard_errors, alternative="greater")
+
+# Via the analyzer
+ea.cumulative_impact_summary(shipped="shipped", prior="map")
 ```
 
 **Misuse risk:** shrink toward 0 when the scientific null is “no effect.” Use
 `fit_t_prior_with_estimated_mean` only when you intentionally want the
 shrinkage location to be the archive’s average underlying effect; the LR CI
 is for that mean, not for any single experiment.
+
+**Cumulative impact:** always put the real ship rule in `shipped` (guardrails
+included). Prefer a historical `prior=` / fixed `tau2` / `prior="map"`
+(Half-Cauchy MAP) when reporting intervals. One-sided
+`winners_curse_estimate(..., alternative="greater")` can pull far negative for
+barely significant launches — use EB / `cumulative_impact` for portfolio
+totals. For the Airbnb **process-level** estimand \(E[T_A]\) (different from
+shrink-then-sum), see `process_level_total_effect`. Estimate primary–guardrail
+correlation with `estimate_guardrail_rho` before `joint_metric_shrinkage`.
+See [`examples/cumulative_impact.py`](examples/cumulative_impact.py) and
+[`examples/cumulative_impact_extensions.py`](examples/cumulative_impact_extensions.py).
 
 The correction runs on the estimation scale (`absolute_effect`); for logistic /
 count / Cox models that is the log scale, and relative columns are
