@@ -18,9 +18,8 @@
 import numpy as np
 import pandas as pd
 
-from experiment_utils import (
-    ExperimentAnalyzer,
-    PowerSim,
+from experiment_utils import ExperimentAnalyzer, PowerSim
+from experiment_utils.shrinkage import (
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,

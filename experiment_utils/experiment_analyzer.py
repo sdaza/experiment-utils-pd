@@ -3403,7 +3403,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
             ``corrected_rel_ci_upper``, ``shrinkage`` (and ``tau2`` for
             empirical Bayes).
         """
-        from .utils import empirical_bayes_shrinkage, t_prior_shrinkage, winners_curse_estimate
+        from .shrinkage import empirical_bayes_shrinkage, t_prior_shrinkage, winners_curse_estimate
 
         if self._results is None:
             raise ValueError("Call get_effects() before winners_curse_summary().")
@@ -3626,7 +3626,7 @@ class ExperimentAnalyzer(BootstrapMixin, RetrodesignMixin, MetaAnalysisMixin):
         See :func:`cumulative_impact` for prior / aggregation semantics
         (including ``prior="map"`` for Half-Cauchy MAP).
         """
-        from .utils import cumulative_impact
+        from .shrinkage import cumulative_impact
 
         if self._results is None:
             raise ValueError("Call get_effects() before cumulative_impact_summary().")

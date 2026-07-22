@@ -4,19 +4,12 @@
 
 ### Features
 
-* add `process_level_total_effect` (Lee & Shen / Airbnb \(\hat T_A\)), `estimate_guardrail_rho`, `fit_normal_prior_map` (Datadog Half-Cauchy MAP), and `ExperimentAnalyzer.cumulative_impact_summary`
-* `cumulative_impact(..., prior="map")` fits the Half-Cauchy MAP prior automatically
-* add `cumulative_impact` (shrink-then-aggregate shipped lifts; sum or product, optional coverage weights) and `joint_metric_shrinkage` (bivariate primary+guardrail posterior means)
-* extend `winners_curse_estimate` with one-sided `alternative={"greater","less"}` for launch-style selection
-* add `fit_t_prior_with_estimated_mean` (profile MLE + likelihood-ratio CI for the Student-t prior location) and honor optional `prior_mean` in `winners_curse_summary(prior=...)` (default remains 0)
+* move portfolio shrinkage APIs into `experiment_utils.shrinkage` (winner's curse, EB / t-prior, cumulative impact, joint / NSS, Airbnb \(\hat T_A\), MAP); re-exported from the package top-level and from `experiment_utils.utils` for compatibility — prefer `from experiment_utils.shrinkage import ...`
+* add `aggregate_shrunk_cumulative` and `nss_adjusted_cumulative_impact` (joint primary|guardrail shrink, then Kessler aggregate on primary)
 
 ### Statistical notes
 
-* Airbnb \(\hat T_A\) targets process-level \(E[T_A]\) (bias from all experiments); Kessler EB / `cumulative_impact` targets posterior means of shipped lifts — different estimands
-* Cumulative impact CIs use the plug-in sum of posterior variances (Kessler); when the prior is learned from the same data the interval is slightly anti-conservative — prefer a historical `prior=` / fixed `tau2` / MAP from a larger archive for reporting
-* One-sided conditional correction near the significance threshold can pull far negative (median-unbiased under truncation); prefer EB / `cumulative_impact` for program totals
-* Pass the real launch rule in `shipped` (including guardrails); do not equate primary significance with shipping
-* `estimate_guardrail_rho` is MoM and attenuated by noise only through τ̂; wrong ρ still usually second-order vs winner's curse
+* NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
 
 ## [1.2.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.11...v1.2.0) (2026-07-22)
 

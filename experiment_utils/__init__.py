@@ -1,23 +1,27 @@
 from .experiment_analyzer import ExperimentAnalyzer
 from .plotting import plot_effects, plot_equivalence, plot_overlap, plot_power
 from .power_sim import PowerSim
-from .utils import (
-    balanced_random_assignment,
-    check_covariate_balance,
+from .shrinkage import (
+    aggregate_shrunk_cumulative,
     cumulative_impact,
-    detect_categorical_covariates,
     empirical_bayes_shrinkage,
     estimate_guardrail_rho,
-    estimate_true_success_rate,
-    false_positive_risk,
     fit_normal_prior_map,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
-    generate_comparison_pairs,
     joint_metric_shrinkage,
+    nss_adjusted_cumulative_impact,
     process_level_total_effect,
     t_prior_shrinkage,
     winners_curse_estimate,
+)
+from .utils import (
+    balanced_random_assignment,
+    check_covariate_balance,
+    detect_categorical_covariates,
+    estimate_true_success_rate,
+    false_positive_risk,
+    generate_comparison_pairs,
 )
 
 __all__ = [
@@ -40,7 +44,9 @@ __all__ = [
     "t_prior_shrinkage",
     "winners_curse_estimate",
     "cumulative_impact",
+    "aggregate_shrunk_cumulative",
     "joint_metric_shrinkage",
+    "nss_adjusted_cumulative_impact",
     "process_level_total_effect",
     "estimate_guardrail_rho",
 ]

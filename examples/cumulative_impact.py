@@ -10,7 +10,7 @@
 import numpy as np
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
     fit_t_prior,
     joint_metric_shrinkage,

@@ -25,7 +25,7 @@
 import numpy as np
 from scipy import stats
 
-from experiment_utils import empirical_bayes_shrinkage, winners_curse_estimate
+from experiment_utils.shrinkage import empirical_bayes_shrinkage, winners_curse_estimate
 from experiment_utils.utils import estimate_true_success_rate
 
 rng = np.random.default_rng(42)

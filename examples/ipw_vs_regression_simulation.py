@@ -14,15 +14,11 @@
 # 3. **Treatment effect heterogeneity**: none vs present
 
 # %% Imports
-import warnings
-
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
-
-warnings.filterwarnings("ignore")
 
 
 # %% DGP

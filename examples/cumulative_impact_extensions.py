@@ -14,7 +14,7 @@
 import numpy as np
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
     estimate_guardrail_rho,
     fit_normal_prior_map,
@@ -112,5 +112,3 @@ print(
     "(MoM or MAP). Use Airbnb T̂_A when the estimand is process-level E[T_A]. "
     "Estimate ρ when guardrails should inform the primary posterior."
 )
-
-# %%

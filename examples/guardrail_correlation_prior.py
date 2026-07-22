@@ -19,7 +19,7 @@
 import numpy as np
 import pandas as pd
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
     estimate_guardrail_rho,
     joint_metric_shrinkage,
@@ -245,3 +245,5 @@ print(
     "  • joint: joint_metric_shrinkage when |gap| is material (esp. tradeoffs).\n"
     "  • estimate_guardrail_rho → pass rho= into joint_metric_shrinkage.\n"
 )
+
+# %%
