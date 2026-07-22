@@ -13,14 +13,17 @@
 #    measures the exaggeration empirically.
 # 3. Corrects each winner with `winners_curse_estimate()` (single-estimate,
 #    median-unbiased) and the whole family with `empirical_bayes_shrinkage()`.
+#
+# Run:
+#
+#     uv run python examples/exaggeration_bias_and_correction.py
 
 # %%
 import numpy as np
 import pandas as pd
 
-from experiment_utils import (
-    ExperimentAnalyzer,
-    PowerSim,
+from experiment_utils import ExperimentAnalyzer, PowerSim
+from experiment_utils.shrinkage import (
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,

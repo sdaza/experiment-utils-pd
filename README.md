@@ -29,7 +29,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, non-superiority, and minimum-effect (superiority by margin) following Lakens (2017, 2018), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
-- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` and Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` with `estimate_guardrail_rho`, plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
+- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` / NSS-adjusted cumulative, Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` with `estimate_guardrail_rho` (all in `experiment_utils.shrinkage`), plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
 ## Table of Contents
@@ -59,6 +59,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
     - [Visualizing Effects](#visualizing-effects)
     - [Common Support / Propensity Score Overlap](#common-support--propensity-score-overlap)
     - [Retrodesign Analysis](#retrodesign-analysis)
+    - [Winner's-Curse Correction](#winners-curse-correction)
   - [Power Analysis](#power-analysis)
     - [Calculate Power](#calculate-power)
     - [Power from Real Data](#power-from-real-data)
@@ -101,6 +102,11 @@ All main classes and standalone functions are available directly from the packag
 from experiment_utils import ExperimentAnalyzer, PowerSim
 from experiment_utils import balanced_random_assignment, check_covariate_balance
 from experiment_utils import plot_effects, plot_equivalence, plot_overlap, plot_power
+from experiment_utils.shrinkage import (  # portfolio / winner's-curse helpers
+    winners_curse_estimate,
+    empirical_bayes_shrinkage,
+    cumulative_impact,
+)
 ```
 
 Here's a complete example analyzing an A/B test with covariate adjustment:
@@ -1611,16 +1617,22 @@ for a runnable walkthrough of all three.
 Retrodesign *quantifies* the winner's curse (Type S/M). To get a **de-biased
 estimate** inferred from the data itself (this is also what
 `calculate_retrodesign()` uses as the assumed true effect when you don't
-provide one):
+provide one).
+
+Portfolio shrinkage, priors, and cumulative-impact helpers live in
+[`experiment_utils.shrinkage`](experiment_utils/shrinkage.py) (also re-exported
+from the package top-level and, for compatibility, from `experiment_utils.utils`).
+Prefer the dedicated module:
 
 ```python
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     winners_curse_estimate,
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
     cumulative_impact,
     joint_metric_shrinkage,
+    nss_adjusted_cumulative_impact,
     estimate_guardrail_rho,
     fit_normal_prior_map,
     process_level_total_effect,
@@ -1671,6 +1683,15 @@ rho_hat = estimate_guardrail_rho(primary_effects, primary_ses, guard_effects, gu
 cum_map = cumulative_impact(effects, standard_errors, shipped=shipped_mask, prior="map")
 airbnb = process_level_total_effect(effects, standard_errors, alternative="greater")
 
+# Joint shrink on primary|guardrail, then Kessler aggregate on primary (NSS companion)
+nss = nss_adjusted_cumulative_impact(
+    primary_effects, primary_ses, guard_effects, guard_ses,
+    shipped=shipped_mask,
+    rho=rho_hat["rho"],
+    prior_sd_primary=rho_hat["tau_primary"],
+    prior_sd_guard=rho_hat["tau_guard"],
+)
+
 # Via the analyzer
 ea.cumulative_impact_summary(shipped="shipped", prior="map")
 ```
@@ -1687,9 +1708,21 @@ included). Prefer a historical `prior=` / fixed `tau2` / `prior="map"`
 barely significant launches — use EB / `cumulative_impact` for portfolio
 totals. For the Airbnb **process-level** estimand \(E[T_A]\) (different from
 shrink-then-sum), see `process_level_total_effect`. Estimate primary–guardrail
-correlation with `estimate_guardrail_rho` before `joint_metric_shrinkage`.
-See [`examples/cumulative_impact.py`](examples/cumulative_impact.py) and
-[`examples/cumulative_impact_extensions.py`](examples/cumulative_impact_extensions.py).
+correlation with `estimate_guardrail_rho` before `joint_metric_shrinkage` /
+`nss_adjusted_cumulative_impact`. NSS helps **on average** when |ρ| is high and
+the guardrail is precise; at moderate ρ a single portfolio can look worse than
+primary-only EB (sampling noise).
+
+Runnable examples:
+
+- [`examples/shrinkage_methods_tour.py`](examples/shrinkage_methods_tour.py) — short seeded tour of each method
+- [`examples/scaled_ship_method_assessment.py`](examples/scaled_ship_method_assessment.py) — MC: which shrinker wins under SCALED ship (sig + guardrail ≥ 0)
+- [`examples/cumulative_impact.py`](examples/cumulative_impact.py) — shrink-then-sum vs naive winners
+- [`examples/cumulative_impact_extensions.py`](examples/cumulative_impact_extensions.py) — Airbnb / MAP / joint
+- [`examples/guardrail_correlation_prior.py`](examples/guardrail_correlation_prior.py) — when joint beats primary-only
+- [`examples/cumulative_methods_recovery.py`](examples/cumulative_methods_recovery.py) — Monte Carlo recovery checks
+- [`examples/effect_distribution_portfolio.py`](examples/effect_distribution_portfolio.py) — program-level τ² / win rate / EVSI
+- [`examples/exaggeration_bias_and_correction.py`](examples/exaggeration_bias_and_correction.py) — Type M + analyzer wrappers
 
 The correction runs on the estimation scale (`absolute_effect`); for logistic /
 count / Cox models that is the log scale, and relative columns are

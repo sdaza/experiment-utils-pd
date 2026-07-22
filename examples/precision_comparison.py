@@ -1,15 +1,15 @@
-"""Simple precision comparison example.
+# %% [markdown]
+# # Precision comparison (regression adjustment)
+#
+# Shows how regression adjustment changes the standard error and precision of
+# the treatment effect estimate. With `bootstrap=True`, both the adjusted model
+# and the unadjusted reference are bootstrapped on the same resamples.
+#
+# Run:
+#
+#     uv run python examples/precision_comparison.py
 
-Run with:
-
-    python examples/precision_comparison.py
-
-This shows how regression adjustment changes the standard error and precision of
-the treatment effect estimate. With bootstrap=True, both the adjusted model and
-the unadjusted reference are bootstrapped on the same resamples.
-"""
-
-# %% setup
+# %%
 import os
 import tempfile
 
@@ -18,6 +18,7 @@ import pandas as pd
 
 os.environ.setdefault("MPLCONFIGDIR", tempfile.gettempdir())
 os.environ["XDG_CACHE_HOME"] = tempfile.gettempdir()
+
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
 
@@ -43,35 +44,36 @@ def make_data(n: int = 1200, seed: int = 42) -> pd.DataFrame:
     )
 
 
-if __name__ == "__main__":
-    df = make_data()
-
-    analyzer = ExperimentAnalyzer(
-        data=df,
-        outcomes=["revenue"],
-        treatment_col="treatment",
-        experiment_identifier=["experiment_id"],
-        regression_covariates=["age", "tenure", "pre_revenue"],
-        bootstrap=True,
-        bootstrap_iterations=200,
-        bootstrap_seed=123,
-    )
-
-    analyzer.get_effects()
-
-    columns = [
-        "outcome",
-        "adjustment",
-        "absolute_effect",
-        "unadjusted_absolute_effect",
-        "standard_error",
-        "unadjusted_standard_error",
-        "standard_error_reduction",
-        "precision_gain",
-        "ci_width_reduction",
-    ]
-
-    with pd.option_context("display.max_columns", None, "display.width", 140):
-        print(analyzer.precision_summary[columns].round(4))
+# %% [markdown]
+# ## Fit adjusted vs unadjusted and compare precision
 
 # %%
+df = make_data()
+
+analyzer = ExperimentAnalyzer(
+    data=df,
+    outcomes=["revenue"],
+    treatment_col="treatment",
+    experiment_identifier=["experiment_id"],
+    regression_covariates=["age", "tenure", "pre_revenue"],
+    bootstrap=True,
+    bootstrap_iterations=200,
+    bootstrap_seed=123,
+)
+
+analyzer.get_effects()
+
+columns = [
+    "outcome",
+    "adjustment",
+    "absolute_effect",
+    "unadjusted_absolute_effect",
+    "standard_error",
+    "unadjusted_standard_error",
+    "standard_error_reduction",
+    "precision_gain",
+    "ci_width_reduction",
+]
+
+with pd.option_context("display.max_columns", None, "display.width", 140):
+    print(analyzer.precision_summary[columns].round(4))

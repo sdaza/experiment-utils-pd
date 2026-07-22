@@ -7,15 +7,15 @@ do not loosen tolerances without understanding why.
 import numpy as np
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
+    empirical_bayes_shrinkage,
     estimate_guardrail_rho,
     fit_normal_prior_map,
     joint_metric_shrinkage,
     process_level_total_effect,
     winners_curse_estimate,
 )
-from experiment_utils.utils import empirical_bayes_shrinkage
 
 
 def test_recovery_cumulative_eb_and_map():

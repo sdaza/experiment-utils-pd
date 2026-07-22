@@ -1,15 +1,15 @@
-"""False Positive Risk and sequential testing — worked example.
+# %% [markdown]
+# # False Positive Risk and sequential testing
+#
+# Demonstrates the Kohavi & Chen (2024) False Positive Risk framework and the
+# always-valid sequential-testing utilities (mSPRT, Goldilocks alpha-spending).
+# The company in this example runs experiments at \(\alpha = 0.10\).
+#
+# Run:
+#
+#     uv run python examples/fpr_and_sequential_testing.py
 
-Demonstrates the Kohavi & Chen (2024) False Positive Risk framework and the
-always-valid sequential-testing utilities (mSPRT, Goldilocks alpha-spending).
-
-The company in this example runs experiments at alpha = 0.10.
-
-Run with:
-
-    python examples/fpr_and_sequential_testing.py
-"""
-
+# %%
 import os
 import tempfile
 
@@ -35,11 +35,13 @@ def section(title):
     print("=" * 78)
 
 
-# =============================================================================
-# 1. False Positive Risk: "is my significant result actually real?"
-# A p-value < alpha is NOT the probability the result is a fluke — that depends
-# on how often your ideas truly work (the base rate / prior success rate).
-# =============================================================================
+# %% [markdown]
+# ## 1. False Positive Risk vs prior success rate
+#
+# A \(p\)-value \(< \alpha\) is **not** the probability the result is a fluke —
+# that depends on how often your ideas truly work (base rate / prior success rate).
+
+# %%
 section("1. False Positive Risk vs. the prior success rate (alpha = 0.10, power = 0.80)")
 
 for prior in [0.05, 0.12, 0.30, 0.50]:
@@ -57,9 +59,10 @@ for win_rate in [0.08, 0.12, 0.20]:
     true_sr = estimate_true_success_rate(win_rate=win_rate, alpha=ALPHA, power=0.80)
     print(f"  observed win rate {win_rate:>4.0%}  ->  true success rate ~ {true_sr:5.1%}")
 
-# =============================================================================
-# 2. fpr_summary(): FPR for your own analyzer results
-# =============================================================================
+# %% [markdown]
+# ## 2. `fpr_summary()` on analyzer results
+
+# %%
 section("2. ExperimentAnalyzer.fpr_summary() — FPR on real results")
 
 rng = np.random.default_rng(42)
@@ -78,9 +81,10 @@ print(ea.results[["outcome", "absolute_effect", "standard_error", "pvalue", "sta
 print("\n  FPR summary (prior = historical 12% win rate):")
 print(ea.fpr_summary(prior_success_rate=0.12).to_string(index=False))
 
-# =============================================================================
-# 3. aggregate_effects(prior_success_rate=...): portfolio FPR column
-# =============================================================================
+# %% [markdown]
+# ## 3. Portfolio FPR via `aggregate_effects`
+
+# %%
 section("3. aggregate_effects() — portfolio FPR across experiments")
 
 frames = []
@@ -100,11 +104,13 @@ ea_multi = ExperimentAnalyzer(
 ea_multi.get_effects()
 print(ea_multi.aggregate_effects(prior_success_rate=0.12).to_string(index=False))
 
-# =============================================================================
-# 4. mSPRT: always-valid sequential testing — peek as often as you like
-# Stop when the log-likelihood ratio (LLR) exceeds the boundary log(1/alpha).
-# tau = prior SD on the effect ~ the magnitude you expect / are powered for.
-# =============================================================================
+# %% [markdown]
+# ## 4. mSPRT — always-valid peeking
+#
+# Stop when the log-likelihood ratio exceeds \(\log(1/\alpha)\).
+# `tau` is the prior SD on the effect (~ magnitude you expect / are powered for).
+
+# %%
 section("4. mSPRT — always-valid peeking (boundary = log(1/alpha))")
 
 for a in [0.10, 0.05, 0.01]:
@@ -156,19 +162,22 @@ for week in range(1, 13):
 if not stopped:
     print("    12 weeks of peeking, never crossed the boundary — type-I error controlled.")
 
-# =============================================================================
-# 5. Goldilocks: simpler two-stage plan (one early look, one final look)
-# =============================================================================
+# %% [markdown]
+# ## 5. Goldilocks two-stage alpha spending
+
+# %%
 section("5. goldilocks_alpha_spending() — two-stage design at alpha_total = 0.10")
 
 for method in ["goldilocks", "obrien_fleming", "pocock"]:
     a1, a2 = PowerSim.goldilocks_alpha_spending(alpha_total=ALPHA, method=method)
     print(f"  {method:>14}:  stop early if p < {a1:.3f}   |   final look if p < {a2:.3f}")
 
-# =============================================================================
-# 6. msprt_summary(): per-comparison mSPRT verdict straight from get_effects()
-# Provide tau (absolute effect scale) OR tau_rel (fraction of control mean).
-# =============================================================================
+# %% [markdown]
+# ## 6. `msprt_summary()` from `get_effects()`
+#
+# Provide `tau` (absolute effect scale) or `tau_rel` (fraction of control mean).
+
+# %%
 section("6. ExperimentAnalyzer.msprt_summary() — verdict per comparison")
 
 print("  Absolute prior SD (tau = 0.02):")

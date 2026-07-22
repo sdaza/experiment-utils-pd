@@ -5,15 +5,15 @@ import pandas as pd
 import pytest
 from scipy.stats import norm
 
-from experiment_utils import (
-    ExperimentAnalyzer,
+from experiment_utils import ExperimentAnalyzer
+from experiment_utils.shrinkage import (
     cumulative_impact,
+    empirical_bayes_shrinkage,
     estimate_guardrail_rho,
     fit_normal_prior_map,
     joint_metric_shrinkage,
     process_level_total_effect,
 )
-from experiment_utils.utils import empirical_bayes_shrinkage
 
 
 def _fitted_analyzer(results: pd.DataFrame) -> ExperimentAnalyzer:

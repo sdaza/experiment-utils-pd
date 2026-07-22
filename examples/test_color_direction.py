@@ -1,11 +1,24 @@
-# %% Imports
+# %% [markdown]
+# # `plot_effects` color direction
+#
+# Same multi-experiment DGP as the gallery, focused on
+# `color_direction=True` (sign × significance coloring) with and without
+# meta-analysis rows.
+#
+# Run:
+#
+#     uv run python examples/test_color_direction.py
+
+# %%
 import numpy as np
 import pandas as pd
 
 from experiment_utils import ExperimentAnalyzer
 
+# %% [markdown]
+# ## Simulate mixed positive / negative effects
+
 # %%
-# Simulate data with mix of positive/negative, significant/not-significant effects
 np.random.seed(42)
 
 LIFTS = {
@@ -47,8 +60,10 @@ analyzer = ExperimentAnalyzer(
 )
 analyzer.get_effects()
 
+# %% [markdown]
+# ## Case 1 — default colors
+
 # %%
-# Case 1 — Default colors (no color_direction)
 fig1 = analyzer.plot_effects(
     title="Default Colors",
     pct_points=True,
@@ -56,8 +71,10 @@ fig1 = analyzer.plot_effects(
     save_path="docs/assets/plot_default.png",
 )
 
+# %% [markdown]
+# ## Case 2 — `color_direction=True`
+
 # %%
-# Case 2 — color_direction=True (red/gray/light-green/dark-green)
 fig2 = analyzer.plot_effects(
     title="Color Direction (red / gray / light green / dark green)",
     pct_points=True,
@@ -66,8 +83,10 @@ fig2 = analyzer.plot_effects(
     save_path="docs/assets/plot_color_direction.png",
 )
 
+# %% [markdown]
+# ## Case 3 — color direction + meta-analysis
+
 # %%
-# Case 3 — color_direction + meta-analysis pooled row
 figs = analyzer.plot_effects(
     group_by="country",
     pct_points=True,

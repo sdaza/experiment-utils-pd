@@ -9,12 +9,16 @@
 #    MoM or Half-Cauchy **MAP** (`fit_normal_prior_map` / `prior="map"`).
 # 4. **Joint + estimated ρ** — ship with a guardrail rule; shrink primary using
 #    `estimate_guardrail_rho` + `joint_metric_shrinkage`.
+#
+# Run:
+#
+#     uv run python examples/cumulative_impact_extensions.py
 
 # %%
 import numpy as np
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
     estimate_guardrail_rho,
     fit_normal_prior_map,
@@ -112,5 +116,3 @@ print(
     "(MoM or MAP). Use Airbnb T̂_A when the estimand is process-level E[T_A]. "
     "Estimate ρ when guardrails should inform the primary posterior."
 )
-
-# %%

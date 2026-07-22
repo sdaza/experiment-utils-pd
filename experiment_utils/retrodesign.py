@@ -369,7 +369,7 @@ class RetrodesignMixin:
         """
         import warnings
 
-        from .utils import winners_curse_estimate
+        from .shrinkage import winners_curse_estimate
 
         corrected: list[float] = []
         n_warned = 0

@@ -12,20 +12,23 @@
 # 1. **Selection into treatment**: weak (near-random) vs strong (confounded)
 # 2. **Covariate prognostic strength**: weak vs strong effect of X on Y
 # 3. **Treatment effect heterogeneity**: none vs present
+#
+# Run:
+#
+#     uv run python examples/ipw_vs_regression_simulation.py
 
-# %% Imports
-import warnings
-
+# %%
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
 from experiment_utils.experiment_analyzer import ExperimentAnalyzer
 
-warnings.filterwarnings("ignore")
+# %% [markdown]
+# ## DGP
 
 
-# %% DGP
+# %%
 def generate_data(
     n: int = 3000,
     selection_strength: float = 0.0,
@@ -113,7 +116,11 @@ def generate_data(
     return data, true_ate
 
 
-# %% Estimation
+# %% [markdown]
+# ## Estimation
+
+
+# %%
 def run_estimators(data: pd.DataFrame) -> dict[str, float]:
     """
     Run 5 estimators on the data and return absolute_effect for each.
@@ -213,7 +220,11 @@ def run_estimators(data: pd.DataFrame) -> dict[str, float]:
     return results
 
 
-# %% Single simulation rep
+# %% [markdown]
+# ## Single simulation rep
+
+
+# %%
 def single_rep(
     rep: int,
     n: int,
@@ -235,7 +246,10 @@ def single_rep(
     return estimates
 
 
-# %% Scenario definitions
+# %% [markdown]
+# ## Scenario definitions
+
+# %%
 SCENARIOS = {
     # (selection_strength, prognostic_strength, heterogeneity)
     "Random + Weak X + No HTE": (0.0, 0.0, False),
@@ -246,7 +260,10 @@ SCENARIOS = {
     "Selection + Strong X + HTE": (1.0, 1.0, True),
 }
 
-# %% Run simulation
+# %% [markdown]
+# ## Run simulation
+
+# %%
 N_REPS = 500
 N_OBS = 3000
 
@@ -282,7 +299,11 @@ results_df = pd.concat(all_results, ignore_index=True)
 print("Done!")
 
 
-# %% Compute metrics
+# %% [markdown]
+# ## Compute metrics
+
+
+# %%
 def compute_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
     """Compute bias, RMSE for each estimator x scenario."""
     estimators = ["unadjusted", "regression", "ipw", "ipw_regression", "aipw"]
@@ -315,7 +336,10 @@ def compute_metrics(results_df: pd.DataFrame) -> pd.DataFrame:
 
 metrics = compute_metrics(results_df)
 
-# %% Display results
+# %% [markdown]
+# ## Display results
+
+# %%
 print("\n" + "=" * 100)
 print("RESULTS: Bias and RMSE by Scenario and Estimator")
 print("=" * 100)
@@ -331,7 +355,10 @@ for scenario in SCENARIOS:
         )
     )
 
-# %% Summary
+# %% [markdown]
+# ## Summary
+
+# %%
 print("\n" + "=" * 100)
 print("SUMMARY: Bias by scenario and estimator")
 print("=" * 100)

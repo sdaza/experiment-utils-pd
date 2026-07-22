@@ -12,22 +12,24 @@
 # 5. `estimate_guardrail_rho` recovers true ρ
 # 6. `joint_metric_shrinkage` (true / estimated ρ) beats primary-only MSE
 # 7. One-sided `winners_curse_estimate` is median-unbiased among winners
+#
+# Run:
+#
+#     uv run python examples/cumulative_methods_recovery.py
 
 # %%
-from __future__ import annotations
-
 import numpy as np
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
+    empirical_bayes_shrinkage,
     estimate_guardrail_rho,
     fit_normal_prior_map,
     joint_metric_shrinkage,
     process_level_total_effect,
     winners_curse_estimate,
 )
-from experiment_utils.utils import empirical_bayes_shrinkage
 
 PASS = "PASS"
 FAIL = "FAIL"
