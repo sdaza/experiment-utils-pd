@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     aggregate_shrunk_cumulative,
     cumulative_impact,
     joint_metric_shrinkage,

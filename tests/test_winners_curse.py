@@ -4,7 +4,7 @@ import pytest
 from scipy.stats import norm
 
 from experiment_utils import ExperimentAnalyzer
-from experiment_utils.utils import (
+from experiment_utils.shrinkage import (
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,

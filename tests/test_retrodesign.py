@@ -396,7 +396,7 @@ def _injected_analyzer(mcp: bool = False) -> ExperimentAnalyzer:
 
 def test_default_true_effect_is_winners_curse_corrected():
     """With true_effect=None the assumed truth is the de-biased observed effect."""
-    from experiment_utils.utils import winners_curse_estimate
+    from experiment_utils.shrinkage import winners_curse_estimate
 
     ea = _injected_analyzer()
     retro = ea.calculate_retrodesign(nsim=300, seed=1)
@@ -425,7 +425,7 @@ def test_retrodesign_alpha_explicit_override_wins():
 
 def test_default_true_effect_uses_mcp_alpha_for_correction():
     """The winner's-curse default must de-bias at the MCP selection threshold."""
-    from experiment_utils.utils import winners_curse_estimate
+    from experiment_utils.shrinkage import winners_curse_estimate
 
     ea = _injected_analyzer(mcp=True)
     retro = ea.calculate_retrodesign(nsim=300, seed=1)

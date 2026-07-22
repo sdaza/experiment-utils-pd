@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
-from experiment_utils import (
+from experiment_utils.shrinkage import (
     cumulative_impact,
     empirical_bayes_shrinkage,
     joint_metric_shrinkage,

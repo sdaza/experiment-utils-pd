@@ -352,9 +352,9 @@ def t_prior_shrinkage(
         grid = np.linspace(lo, hi, 4001)
         log_post = norm.logpdf(b, loc=grid, scale=se) + t_dist.logpdf(grid, df, loc=prior_mean, scale=scale)
         dens = np.exp(log_post - log_post.max())
-        dens /= np.trapz(dens, grid)
-        mean = np.trapz(grid * dens, grid)
-        var = np.trapz((grid - mean) ** 2 * dens, grid)
+        dens /= np.trapezoid(dens, grid)
+        mean = np.trapezoid(grid * dens, grid)
+        var = np.trapezoid((grid - mean) ** 2 * dens, grid)
         cdf = cumulative_trapezoid(dens, grid, initial=0.0)
         cdf /= cdf[-1]
         shrunk[i] = mean
