@@ -6,10 +6,13 @@
 
 * move portfolio shrinkage APIs into `experiment_utils.shrinkage` (winner's curse, EB / t-prior, cumulative impact, joint / NSS, Airbnb \(\hat T_A\), MAP); re-exported from the package top-level and from `experiment_utils.utils` for compatibility — prefer `from experiment_utils.shrinkage import ...`
 * add `aggregate_shrunk_cumulative` and `nss_adjusted_cumulative_impact` (joint primary|guardrail shrink, then Kessler aggregate on primary)
+* add `joint_metric_shrinkage_mvn` and `nss_adjusted_cumulative_impact_mvn` (primary + flexible K guardrails in one MVN; magnitude only — not the scale rule; default `rho_guardrails="factor"`)
+* add `resolve_mvn_prior_sd` and `prior=` on MVN APIs (`"map"` / `{"tau2"}` / `{"scale","df"}`) — still normal–normal; t scale is plugged in as τ
 
 ### Statistical notes
 
 * NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
+* Multi-guardrail MVN pools companions under a joint prior (default factor Corr(γⱼ,γₖ)=ρⱼρₖ). Keep the multi-NSS hard gate in `shipped`; do not use MVN as the ship rule. `"independent"` NSS–NSS correlations can yield a non-PD Σ when several |ρ| are large.
 
 ## [1.2.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.1.11...v1.2.0) (2026-07-22)
 

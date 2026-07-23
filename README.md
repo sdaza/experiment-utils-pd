@@ -29,7 +29,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, non-superiority, and minimum-effect (superiority by margin) following Lakens (2017, 2018), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
-- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` / NSS-adjusted cumulative, Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` with `estimate_guardrail_rho` (all in `experiment_utils.shrinkage`), plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
+- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` / NSS-adjusted cumulative, Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` / `joint_metric_shrinkage_mvn` with `estimate_guardrail_rho` (all in `experiment_utils.shrinkage`), plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
 ## Table of Contents
@@ -1632,7 +1632,9 @@ from experiment_utils.shrinkage import (
     fit_t_prior_with_estimated_mean,
     cumulative_impact,
     joint_metric_shrinkage,
+    joint_metric_shrinkage_mvn,
     nss_adjusted_cumulative_impact,
+    nss_adjusted_cumulative_impact_mvn,
     estimate_guardrail_rho,
     fit_normal_prior_map,
     process_level_total_effect,
@@ -1692,6 +1694,24 @@ nss = nss_adjusted_cumulative_impact(
     prior_sd_guard=rho_hat["tau_guard"],
 )
 
+# Multi-guardrail Bayes MVN (K flexible: 3, 5, 10, …) — magnitude, not the scale rule.
+# Pass the real all-NSS hard gate in shipped_mask; MVN only updates primary magnitude.
+mvn = joint_metric_shrinkage_mvn(
+    primary_effects, primary_ses,
+    guardrail_effects=[nss1, nss2, nss3],  # or (n, K) array
+    guardrail_ses=[se1, se2, se3],
+    rho_primary=[0.7, 0.5, 0.4],
+    prior_sd_primary=0.015,
+    rho_guardrails="factor",  # Corr(γ_j, γ_k)=ρ_j ρ_k; or "independent" / (K,K) matrix
+)
+nss_mvn = nss_adjusted_cumulative_impact_mvn(
+    primary_effects, primary_ses,
+    [nss1, nss2, nss3], [se1, se2, se3],
+    shipped=shipped_mask,
+    rho_primary=[0.7, 0.5, 0.4],
+    prior_sd_primary=0.015,
+)
+
 # Via the analyzer
 ea.cumulative_impact_summary(shipped="shipped", prior="map")
 ```
@@ -1713,10 +1733,17 @@ correlation with `estimate_guardrail_rho` before `joint_metric_shrinkage` /
 the guardrail is precise; at moderate ρ a single portfolio can look worse than
 primary-only EB (sampling noise).
 
+**Multi-guardrail MVN:** use `joint_metric_shrinkage_mvn` /
+`nss_adjusted_cumulative_impact_mvn` for primary **magnitude** given several
+NSS companions. Keep the all-pass (or product) hard gate in `shipped` — MVN is
+**not** the scale rule. Default `rho_guardrails="factor"`; `"independent"` can
+make Σ non-PD when several |ρ| are large.
+
 Runnable examples:
 
 - [`examples/shrinkage_methods_tour.py`](examples/shrinkage_methods_tour.py) — short seeded tour of each method
 - [`examples/scaled_ship_method_assessment.py`](examples/scaled_ship_method_assessment.py) — MC: which shrinker wins under SCALED ship (sig + guardrail ≥ 0)
+- [`examples/joint_metric_shrinkage_mvn.py`](examples/joint_metric_shrinkage_mvn.py) — multi-guardrail MVN vs univ / bivariate (K=3, K=5)
 - [`examples/cumulative_impact.py`](examples/cumulative_impact.py) — shrink-then-sum vs naive winners
 - [`examples/cumulative_impact_extensions.py`](examples/cumulative_impact_extensions.py) — Airbnb / MAP / joint
 - [`examples/guardrail_correlation_prior.py`](examples/guardrail_correlation_prior.py) — when joint beats primary-only
