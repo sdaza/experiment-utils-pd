@@ -1012,6 +1012,456 @@ def nss_adjusted_cumulative_impact(
     }
 
 
+def resolve_mvn_prior_sd(
+    effects,
+    standard_errors,
+    *,
+    prior: str | dict,
+    prior_mean: float = 0.0,
+) -> dict:
+    """
+    Resolve ``cumulative_impact``-style priors into a normal prior SD for MVN.
+
+    The multi-guardrail joint is always normal–normal. This helper only learns
+    ``(prior_mean, prior_sd)`` from the primary archive so you can plug MAP or
+    a Student-t *scale* into :func:`joint_metric_shrinkage_mvn`.
+
+    - ``prior="map"`` → :func:`fit_normal_prior_map` → ``prior_sd = sqrt(tau2)``
+    - ``prior={"tau2": ...}`` → ``prior_sd = sqrt(tau2)``
+    - ``prior={"scale", "df"}`` → ``prior_sd = scale`` (t scale as τ for the
+      normal MVN — **not** a multivariate-t posterior)
+
+    Optional ``prior_mean`` in a dict overrides the ``prior_mean`` kwarg.
+    """
+    y, s = _validate_effects_ses(effects, standard_errors)
+    if y.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+
+    if prior == "map":
+        fitted = fit_normal_prior_map(y, s)
+        return {
+            "prior_sd": float(np.sqrt(fitted["tau2"])),
+            "prior_mean": float(fitted["prior_mean"]),
+            "prior_family": "normal",
+            "prior_source": "half_cauchy_map",
+            "tau2": float(fitted["tau2"]),
+        }
+
+    if not isinstance(prior, dict):
+        raise ValueError("prior must be 'map' or a dict with 'tau2' or 'scale'+'df'")
+
+    loc = float(prior.get("prior_mean", prior_mean))
+    if "scale" in prior and "df" in prior:
+        scale = float(prior["scale"])
+        if not (np.isfinite(scale) and scale > 0):
+            raise ValueError("prior['scale'] must be positive and finite")
+        return {
+            "prior_sd": scale,
+            "prior_mean": loc,
+            "prior_family": "student_t_scale_as_normal_sd",
+            "prior_source": "t_scale_plug_in",
+            "scale": scale,
+            "df": float(prior["df"]),
+            "tau2": float(scale**2),
+        }
+    if "tau2" in prior:
+        tau2 = float(prior["tau2"])
+        if not (np.isfinite(tau2) and tau2 > 0):
+            raise ValueError("prior['tau2'] must be positive and finite")
+        return {
+            "prior_sd": float(np.sqrt(tau2)),
+            "prior_mean": loc,
+            "prior_family": "normal",
+            "prior_source": "tau2",
+            "tau2": tau2,
+        }
+    raise ValueError("prior must contain 'tau2' or both 'scale' and 'df'")
+
+
+def _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Accept list of K length-n arrays or (n, K) arrays → (n, K) float matrices."""
+    if isinstance(guardrail_effects, list | tuple):
+        cols = [np.asarray(c, dtype=float).reshape(-1) for c in guardrail_effects]
+        if not cols:
+            raise ValueError("guardrail_effects must contain at least one guardrail")
+        g = np.column_stack(cols)
+    else:
+        g = np.asarray(guardrail_effects, dtype=float)
+        if g.ndim == 1:
+            g = g.reshape(-1, 1)
+        if g.ndim != 2:
+            raise ValueError("guardrail_effects must be a list of arrays or a 2-D array")
+    if isinstance(guardrail_ses, list | tuple):
+        cols = [np.asarray(c, dtype=float).reshape(-1) for c in guardrail_ses]
+        if len(cols) != g.shape[1]:
+            raise ValueError("guardrail_ses must have the same number of columns as guardrail_effects")
+        sg = np.column_stack(cols)
+    else:
+        sg = np.asarray(guardrail_ses, dtype=float)
+        if sg.ndim == 1:
+            sg = sg.reshape(-1, 1)
+        if sg.ndim != 2:
+            raise ValueError("guardrail_ses must be a list of arrays or a 2-D array")
+    if g.shape[0] != n or sg.shape != g.shape:
+        raise ValueError("guardrail arrays must be aligned with primary (n experiments × K guardrails)")
+    if not np.all(np.isfinite(g)) or not np.all(np.isfinite(sg)):
+        raise ValueError("guardrail effects and SEs must be finite")
+    if np.any(sg <= 0):
+        raise ValueError("guardrail standard errors must be positive")
+    return g, sg
+
+
+def _build_prior_sigma(
+    *,
+    k: int,
+    rho_primary,
+    prior_sd_primary: float,
+    prior_sd_guard,
+    rho_guardrails,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build (K+1)×(K+1) prior covariance; return (sigma, rho_primary_vec)."""
+    if np.isscalar(rho_primary):
+        rho_vec = np.full(k, float(rho_primary))
+    else:
+        rho_vec = np.asarray(rho_primary, dtype=float).reshape(-1)
+        if rho_vec.size != k:
+            raise ValueError(f"rho_primary must be a scalar or length-{k} sequence")
+    if not np.all(np.isfinite(rho_vec)) or np.any(np.abs(rho_vec) >= 1.0):
+        raise ValueError("rho_primary values must be finite and strictly inside (-1, 1)")
+
+    if prior_sd_guard is None:
+        tau_g = np.full(k, float(prior_sd_primary))
+    elif np.isscalar(prior_sd_guard):
+        tau_g = np.full(k, float(prior_sd_guard))
+    else:
+        tau_g = np.asarray(prior_sd_guard, dtype=float).reshape(-1)
+        if tau_g.size != k:
+            raise ValueError(f"prior_sd_guard must be a scalar or length-{k} sequence")
+    if not (np.isfinite(prior_sd_primary) and prior_sd_primary > 0):
+        raise ValueError("prior_sd_primary must be positive and finite")
+    if not np.all(np.isfinite(tau_g)) or np.any(tau_g <= 0):
+        raise ValueError("prior_sd_guard must be positive and finite")
+
+    sds = np.concatenate([[float(prior_sd_primary)], tau_g])
+    corr = np.eye(k + 1, dtype=float)
+    corr[0, 1:] = rho_vec
+    corr[1:, 0] = rho_vec
+    if isinstance(rho_guardrails, str):
+        if rho_guardrails == "independent":
+            pass  # guards uncorrelated with each other (may be non-PD if sum ρ² large)
+        elif rho_guardrails == "factor":
+            # One-factor: Corr(γ_j, γ_k) = ρ_j ρ_k (always PD when |ρ_k| < 1)
+            outer = np.outer(rho_vec, rho_vec)
+            np.fill_diagonal(outer, 1.0)
+            corr[1:, 1:] = outer
+        else:
+            raise ValueError("rho_guardrails must be 'factor', 'independent', or a (K, K) correlation matrix")
+    else:
+        r = np.asarray(rho_guardrails, dtype=float)
+        if r.shape != (k, k):
+            raise ValueError(f"rho_guardrails matrix must have shape ({k}, {k})")
+        if not np.allclose(r, r.T, atol=1e-10):
+            raise ValueError("rho_guardrails correlation matrix must be symmetric")
+        if not np.allclose(np.diag(r), 1.0, atol=1e-8):
+            raise ValueError("rho_guardrails correlation matrix must have unit diagonal")
+        if not np.all(np.isfinite(r)) or np.any(np.abs(r) > 1.0 + 1e-8):
+            raise ValueError("rho_guardrails entries must be finite correlations in [-1, 1]")
+        corr[1:, 1:] = r
+
+    sigma = np.outer(sds, sds) * corr
+    # PD check (allow tiny numerical slack)
+    eig = np.linalg.eigvalsh(sigma)
+    if eig.min() <= 1e-12:
+        raise ValueError(
+            "prior covariance Sigma is not positive definite; "
+            "check rho_primary and rho_guardrails (try rho_guardrails='factor')"
+        )
+    return sigma, rho_vec
+
+
+def joint_metric_shrinkage_mvn(
+    primary_effects,
+    primary_ses,
+    guardrail_effects,
+    guardrail_ses,
+    *,
+    rho_primary,
+    prior_sd_primary: float | None = None,
+    prior_sd_guard=None,
+    prior_mean_primary: float = 0.0,
+    prior_mean_guard=0.0,
+    prior: str | dict | None = None,
+    rho_guardrails="factor",
+    ci: float = 0.95,
+    guardrail_names=None,
+) -> dict:
+    """
+    Multivariate normal–normal shrinkage: primary + K guardrails.
+
+    Bayes posterior for true effects ``(delta, gamma_1, ..., gamma_K)`` under a
+    joint normal prior and independent sampling noise. Flexible ``K`` (1, 3, 5,
+    10, …). When ``K=1`` this matches :func:`joint_metric_shrinkage`.
+
+    Default ``rho_guardrails="factor"`` sets
+    ``Corr(gamma_j, gamma_k) = rho_j * rho_k`` (one shared primary factor).
+    That stays positive-definite whenever each ``|rho_k| < 1``. Use
+    ``"independent"`` only when NSS–NSS correlations are truly ~0 *and* the
+    resulting Sigma is PD (high primary correlations often make independent
+    guards impossible). Pass a ``(K, K)`` matrix when the full structure is known.
+
+    Prior SDs: pass ``prior_sd_primary`` directly, or ``prior=`` as in
+    :func:`cumulative_impact` (``"map"``, ``{"tau2"}``, or ``{"scale","df"}``).
+    Student-t ``scale`` is plugged in as a normal SD — this is **not** a
+    multivariate-t joint (see :func:`resolve_mvn_prior_sd`).
+
+    **Magnitude only — not the scale/ship rule.** Keep the multi-guardrail hard
+    gate in the caller's ``shipped`` mask; use this for primary magnitude given
+    companions.
+
+    Parameters
+    ----------
+    primary_effects, primary_ses : array-like
+        Length-``n`` primary lifts and SEs.
+    guardrail_effects, guardrail_ses : list of arrays or (n, K) array
+        Aligned companion metrics.
+    rho_primary : float or length-K sequence
+        Corr(true primary, true guardrail_k).
+    prior_sd_primary, prior_sd_guard : float or length-K
+        Prior SDs; guard defaults to ``prior_sd_primary``. Required unless
+        ``prior=`` is set.
+    prior : ``"map"`` or dict, optional
+        Archive prior for the primary (resolved via :func:`resolve_mvn_prior_sd`).
+    rho_guardrails : ``"factor"``, ``"independent"``, or (K, K) array
+        Correlations among true guardrail effects.
+    """
+    x, sx = _validate_effects_ses(primary_effects, primary_ses)
+    if x.size < 1:
+        raise ValueError("effects must contain at least one estimate")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be strictly between 0 and 1")
+
+    prior_meta: dict = {}
+    if prior is not None:
+        if prior_sd_primary is not None:
+            raise ValueError("pass only one of prior= and prior_sd_primary")
+        resolved = resolve_mvn_prior_sd(x, sx, prior=prior, prior_mean=prior_mean_primary)
+        prior_sd_primary = resolved["prior_sd"]
+        prior_mean_primary = float(resolved["prior_mean"])
+        prior_meta = {
+            "prior_family": resolved["prior_family"],
+            "prior_source": resolved["prior_source"],
+            **{k: resolved[k] for k in ("tau2", "scale", "df") if k in resolved},
+        }
+    if prior_sd_primary is None:
+        raise ValueError("pass prior_sd_primary= or prior= ('map' / {'tau2'} / {'scale','df'})")
+
+    g, sg = _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, x.size)
+    k = g.shape[1]
+    sigma, rho_vec = _build_prior_sigma(
+        k=k,
+        rho_primary=rho_primary,
+        prior_sd_primary=float(prior_sd_primary),
+        prior_sd_guard=prior_sd_guard,
+        rho_guardrails=rho_guardrails,
+    )
+
+    if np.isscalar(prior_mean_guard):
+        mu_g = np.full(k, float(prior_mean_guard))
+    else:
+        mu_g = np.asarray(prior_mean_guard, dtype=float).reshape(-1)
+        if mu_g.size != k:
+            raise ValueError(f"prior_mean_guard must be a scalar or length-{k} sequence")
+    mu = np.concatenate([[float(prior_mean_primary)], mu_g])
+
+    if guardrail_names is not None:
+        names = list(guardrail_names)
+        if len(names) != k:
+            raise ValueError(f"guardrail_names must have length {k}")
+    else:
+        names = None
+
+    z = float(norm.ppf(1.0 - (1.0 - ci) / 2.0))
+    sigma_inv = np.linalg.inv(sigma)
+    primary_shrunk = np.empty(x.size)
+    primary_sd = np.empty(x.size)
+    guard_shrunk = np.empty_like(g)
+    guard_sd = np.empty_like(g)
+
+    for i in range(x.size):
+        y = np.concatenate([[x[i]], g[i]])
+        v = np.diag(np.concatenate([[sx[i] ** 2], sg[i] ** 2]))
+        v_inv = np.diag(1.0 / np.diag(v))
+        post_cov = np.linalg.inv(sigma_inv + v_inv)
+        a = sigma @ np.linalg.inv(sigma + v)
+        post_mean = mu + a @ (y - mu)
+        primary_shrunk[i] = post_mean[0]
+        primary_sd[i] = float(np.sqrt(max(post_cov[0, 0], 0.0)))
+        guard_shrunk[i] = post_mean[1:]
+        guard_sd[i] = np.sqrt(np.maximum(np.diag(post_cov)[1:], 0.0))
+
+    out = {
+        "method": "joint_metric_shrinkage_mvn",
+        "primary_shrunk": primary_shrunk,
+        "primary_posterior_sd": primary_sd,
+        "primary_ci_lower": primary_shrunk - z * primary_sd,
+        "primary_ci_upper": primary_shrunk + z * primary_sd,
+        "guard_shrunk": guard_shrunk,
+        "guard_posterior_sd": guard_sd,
+        "rho_primary": rho_vec,
+        "prior_sd_primary": float(prior_sd_primary),
+        "prior_sd_guard": np.sqrt(np.diag(sigma)[1:]).copy(),
+        "prior_mean_primary": float(prior_mean_primary),
+        "prior_mean_guard": mu_g.copy(),
+        "rho_guardrails": rho_guardrails if isinstance(rho_guardrails, str) else np.asarray(rho_guardrails),
+        "sigma": sigma,
+        "n_guardrails": int(k),
+        "guardrail_names": names,
+        **prior_meta,
+    }
+    return out
+
+
+def nss_adjusted_cumulative_impact_mvn(
+    primary_effects,
+    primary_ses,
+    guardrail_effects,
+    guardrail_ses,
+    *,
+    shipped=None,
+    coverage=None,
+    rho_primary=None,
+    prior_sd_primary: float | None = None,
+    prior_sd_guard=None,
+    prior_mean_primary: float = 0.0,
+    prior_mean_guard=0.0,
+    prior: str | dict | None = None,
+    rho_guardrails="factor",
+    aggregation: str = "sum",
+    ci: float = 0.95,
+    min_shipped: int = 1,
+    guardrail_names=None,
+) -> dict:
+    """
+    Multi-guardrail MVN joint shrink, then Kessler aggregate on primary.
+
+    Composes :func:`joint_metric_shrinkage_mvn` with
+    :func:`aggregate_shrunk_cumulative`. When ``rho_primary`` / prior SDs are
+    omitted they are estimated via :func:`estimate_guardrail_rho` on each
+    primary×NSS pair (``rho_guardrails`` still defaults to ``"factor"``).
+
+    Optional ``prior=`` (``"map"``, ``{"tau2"}``, ``{"scale","df"}``) sets the
+    primary normal SD via :func:`resolve_mvn_prior_sd` (still a normal MVN).
+
+    **Magnitude only — not the scale/ship rule.** Pass the real multi-guardrail
+    hard gate in ``shipped``.
+    """
+    y, sy = _validate_effects_ses(primary_effects, primary_ses)
+    g, sg = _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, y.size)
+    k = g.shape[1]
+
+    prior_meta: dict = {}
+    if prior is not None:
+        if prior_sd_primary is not None:
+            raise ValueError("pass only one of prior= and prior_sd_primary")
+        resolved = resolve_mvn_prior_sd(y, sy, prior=prior, prior_mean=prior_mean_primary)
+        prior_sd_primary = resolved["prior_sd"]
+        prior_mean_primary = float(resolved["prior_mean"])
+        prior_meta = {
+            "prior_family": resolved["prior_family"],
+            "prior_source": resolved["prior_source"],
+            **{k_: resolved[k_] for k_ in ("tau2", "scale", "df") if k_ in resolved},
+        }
+
+    need_mom = rho_primary is None or prior_sd_primary is None or prior_sd_guard is None
+    if need_mom:
+        if y.size < 5:
+            raise ValueError(
+                "estimating rho / prior SDs requires at least 5 paired experiments; "
+                "pass rho_primary, prior_sd_primary (or prior=), and prior_sd_guard explicitly"
+            )
+        rhos = []
+        tau_gs = []
+        tau_ps = []
+        for j in range(k):
+            mom = estimate_guardrail_rho(
+                y,
+                sy,
+                g[:, j],
+                sg[:, j],
+                prior_mean_primary=prior_mean_primary,
+                prior_mean_guard=(
+                    float(prior_mean_guard)
+                    if np.isscalar(prior_mean_guard)
+                    else float(np.asarray(prior_mean_guard).reshape(-1)[j])
+                ),
+            )
+            rhos.append(mom["rho"])
+            tau_gs.append(mom["tau_guard"])
+            tau_ps.append(mom["tau_primary"])
+        if rho_primary is None:
+            rho_hat = np.asarray(rhos, dtype=float)
+        elif np.isscalar(rho_primary):
+            rho_hat = np.full(k, float(rho_primary))
+        else:
+            rho_hat = np.asarray(rho_primary, dtype=float).reshape(-1)
+        if prior_sd_primary is not None:
+            sd_p = float(prior_sd_primary)
+        else:
+            positive = [t for t in tau_ps if t > 0]
+            if not positive:
+                raise ValueError("estimated prior_sd_primary is 0 for all pairs; pass prior_sd_primary or prior=")
+            sd_p = float(np.mean(positive))
+        if prior_sd_guard is None:
+            sd_g = np.asarray([t if t > 0 else sd_p for t in tau_gs], dtype=float)
+        elif np.isscalar(prior_sd_guard):
+            sd_g = float(prior_sd_guard)
+        else:
+            sd_g = prior_sd_guard
+        rho_info = {"rho_primary": rho_hat, "tau_guards": tau_gs, "source": "mom"}
+    else:
+        rho_hat = rho_primary
+        sd_p = float(prior_sd_primary)
+        sd_g = prior_sd_guard
+        rho_info = {"rho_primary": rho_hat, "source": "caller"}
+
+    joint = joint_metric_shrinkage_mvn(
+        y,
+        sy,
+        g,
+        sg,
+        rho_primary=rho_hat,
+        prior_sd_primary=sd_p,
+        prior_sd_guard=sd_g,
+        prior_mean_primary=prior_mean_primary,
+        prior_mean_guard=prior_mean_guard,
+        rho_guardrails=rho_guardrails,
+        ci=ci,
+        guardrail_names=guardrail_names,
+    )
+    agg = aggregate_shrunk_cumulative(
+        joint["primary_shrunk"],
+        joint["primary_posterior_sd"],
+        shipped=shipped,
+        coverage=coverage,
+        observed=y,
+        aggregation=aggregation,
+        ci=ci,
+        min_shipped=min_shipped,
+    )
+    return {
+        "method": "joint_metric_shrinkage_mvn → Kessler aggregate (magnitude; not scale rule)",
+        "rho_primary": joint["rho_primary"],
+        "rho_info": rho_info,
+        "prior_sd_primary": sd_p,
+        "prior_sd_guard": joint["prior_sd_guard"],
+        "joint": joint,
+        "shrunk": joint["primary_shrunk"],
+        "posterior_sd": joint["primary_posterior_sd"],
+        **prior_meta,
+        **agg,
+    }
+
+
 def process_level_total_effect(
     effects,
     standard_errors,

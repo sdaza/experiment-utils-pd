@@ -1078,8 +1078,11 @@ from .shrinkage import (  # noqa: E402, F401
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
     joint_metric_shrinkage,
+    joint_metric_shrinkage_mvn,
     nss_adjusted_cumulative_impact,
+    nss_adjusted_cumulative_impact_mvn,
     process_level_total_effect,
+    resolve_mvn_prior_sd,
     t_prior_shrinkage,
     winners_curse_estimate,
 )

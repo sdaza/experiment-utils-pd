@@ -10,8 +10,11 @@ from .shrinkage import (
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
     joint_metric_shrinkage,
+    joint_metric_shrinkage_mvn,
     nss_adjusted_cumulative_impact,
+    nss_adjusted_cumulative_impact_mvn,
     process_level_total_effect,
+    resolve_mvn_prior_sd,
     t_prior_shrinkage,
     winners_curse_estimate,
 )
@@ -46,7 +49,10 @@ __all__ = [
     "cumulative_impact",
     "aggregate_shrunk_cumulative",
     "joint_metric_shrinkage",
+    "joint_metric_shrinkage_mvn",
     "nss_adjusted_cumulative_impact",
+    "nss_adjusted_cumulative_impact_mvn",
     "process_level_total_effect",
     "estimate_guardrail_rho",
+    "resolve_mvn_prior_sd",
 ]
