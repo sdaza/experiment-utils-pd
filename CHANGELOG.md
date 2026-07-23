@@ -14,6 +14,14 @@
 * NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
 * Multi-guardrail MVN pools companions under a joint prior (default factor Corr(γⱼ,γₖ)=ρⱼρₖ). Keep the multi-NSS hard gate in `shipped`; do not use MVN as the ship rule. `"independent"` NSS–NSS correlations can yield a non-PD Σ when several |ρ| are large.
 
+## [1.3.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.2.1...v1.3.0) (2026-07-23)
+
+
+### Features
+
+* add multi-guardrail MVN joint shrinkage for primary magnitude ([1444966](https://github.com/sdaza/experiment-utils-pd/commit/14449665924397bcbea36d7e006ce167fcd008e6))
+* multi-guardrail MVN joint shrinkage ([a2d0b43](https://github.com/sdaza/experiment-utils-pd/commit/a2d0b43c7befd9e9e2d431908ee35946461abad7))
+
 ## [1.2.1](https://github.com/sdaza/experiment-utils-pd/compare/v1.2.0...v1.2.1) (2026-07-22)
 
 
