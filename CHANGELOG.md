@@ -18,6 +18,18 @@
 * Multi-guardrail MVN pools companions under a joint prior (default factor Corr(γⱼ,γₖ)=ρⱼρₖ). Keep the multi-NSS hard gate in `shipped`; do not use MVN as the ship rule. `"independent"` NSS–NSS correlations can yield a non-PD Σ when several |ρ| are large.
 * When the primary *is* an NSS metric, pass `primary_metric=` so MVN does not condition on the self-slot. Filling that metric remains correct for the ship/hard gate checklist only.
 
+## [1.5.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.4.0...v1.5.0) (2026-07-27)
+
+
+### Features
+
+* drop NSS self-slot in MVN when primary is a companion ([360b3fa](https://github.com/sdaza/experiment-utils-pd/commit/360b3fa6e2389b33a74a0ebcf9aa827686854943))
+
+
+### Bug Fixes
+
+* drop NSS self-slot in MVN when primary is a companion ([8263ba6](https://github.com/sdaza/experiment-utils-pd/commit/8263ba665360bfad8899a4bc929e83e89b9976c3))
+
 ## [1.4.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.3.0...v1.4.0) (2026-07-27)
 
 
