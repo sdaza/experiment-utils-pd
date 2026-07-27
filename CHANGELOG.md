@@ -16,6 +16,14 @@
 * NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
 * Multi-guardrail MVN pools companions under a joint prior (default factor Corr(γⱼ,γₖ)=ρⱼρₖ). Keep the multi-NSS hard gate in `shipped`; do not use MVN as the ship rule. `"independent"` NSS–NSS correlations can yield a non-PD Σ when several |ρ| are large.
 
+## [1.4.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.3.0...v1.4.0) (2026-07-27)
+
+
+### Features
+
+* add optional weights to Student-t prior fitting ([8a14c3b](https://github.com/sdaza/experiment-utils-pd/commit/8a14c3b8c3ddd3be7a5aa9986ebcaba6c5e7d197))
+* weighted Student-t prior fitting (weights= / recency_weights) ([26693ac](https://github.com/sdaza/experiment-utils-pd/commit/26693ac3037185447d0bbbde13d6de73ba796c61))
+
 ## [1.3.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.2.1...v1.3.0) (2026-07-23)
 
 
