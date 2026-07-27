@@ -4,7 +4,6 @@
 
 ### Features
 
-* add `primary_metric=` (+ `guardrail_names=`) on `joint_metric_shrinkage_mvn` / `nss_adjusted_cumulative_impact_mvn` — when the primary is one of the companions, drop that self-slot and estimate \(\hat\rho\) on companion-only rows (magnitude only — not the ship rule)
 * add optional `weights=` / `normalize=` on `fit_t_prior` and `fit_t_prior_with_estimated_mean` (weighted Student-t profile likelihood), plus `recency_weights(dates, half_life_days, as_of=...)` — analysis choices only; not part of the ship rule / NSS gate
 * move portfolio shrinkage APIs into `experiment_utils.shrinkage` (winner's curse, EB / t-prior, cumulative impact, joint / NSS, Airbnb \(\hat T_A\), MAP); re-exported from the package top-level and from `experiment_utils.utils` for compatibility — prefer `from experiment_utils.shrinkage import ...`
 * add `aggregate_shrunk_cumulative` and `nss_adjusted_cumulative_impact` (joint primary|guardrail shrink, then Kessler aggregate on primary)
@@ -24,11 +23,6 @@
 ### Features
 
 * drop NSS self-slot in MVN when primary is a companion ([360b3fa](https://github.com/sdaza/experiment-utils-pd/commit/360b3fa6e2389b33a74a0ebcf9aa827686854943))
-
-
-### Bug Fixes
-
-* drop NSS self-slot in MVN when primary is a companion ([8263ba6](https://github.com/sdaza/experiment-utils-pd/commit/8263ba665360bfad8899a4bc929e83e89b9976c3))
 
 ## [1.4.0](https://github.com/sdaza/experiment-utils-pd/compare/v1.3.0...v1.4.0) (2026-07-27)
 
