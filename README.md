@@ -1662,6 +1662,11 @@ t_prior = fit_t_prior(past_effects, past_ses, df=4.0)
 # … or profile the archive mean + LR CI when the portfolio question is the
 # typical historical lift (shrink toward that mean, not toward 0)
 t_prior_mu = fit_t_prior_with_estimated_mean(past_effects, past_ses, df=4.0)
+# Optional analysis weights (e.g. recency) when fitting the prior — not part of
+# the ship rule / NSS gate. Caller chooses half_life_days.
+# from experiment_utils import recency_weights
+# w = recency_weights(past_dates, half_life_days=180)
+# t_prior = fit_t_prior(past_effects, past_ses, df=4.0, weights=w)
 ea.winners_curse_summary(method="empirical_bayes", prior=t_prior_mu)  # honors prior_mean
 
 # Program-level cumulative impact (Kessler / Datadog): shrink all, sum shipped only.
@@ -1720,6 +1725,13 @@ ea.cumulative_impact_summary(shipped="shipped", prior="map")
 `fit_t_prior_with_estimated_mean` only when you intentionally want the
 shrinkage location to be the archive’s average underlying effect; the LR CI
 is for that mean, not for any single experiment.
+
+**Prior weights:** `weights=` on `fit_t_prior` / `fit_t_prior_with_estimated_mean`
+(and helpers like `recency_weights`) are **analysis choices** for how much each
+historical row contributes to the prior likelihood. They are **not** part of
+the ship rule or NSS gate — same idea as optional `coverage` on cumulative
+impact. Do not time-weight inside `t_prior_shrinkage`; put recency in prior
+fitting, then shrink the new experiment with the fitted prior as usual.
 
 **Cumulative impact:** always put the real ship rule in `shipped` (guardrails
 included). Prefer a historical `prior=` / fixed `tau2` / `prior="map"`

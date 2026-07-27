@@ -267,6 +267,12 @@ t_prior = fit_t_prior(
 )
 print(f"  fitted t prior: scale = {t_prior['scale']:.4f}, df = {t_prior['df']:.0f}, tau^2 = {t_prior['tau2']:.6f}")
 
+# Optional: analysis weights when fitting the prior (e.g. recency). Caller picks
+# half_life_days — not part of the ship rule / NSS gate.
+# from experiment_utils import recency_weights
+# w = recency_weights(historical["end_date"], half_life_days=180)
+# t_prior = fit_t_prior(..., weights=w)
+
 single_t = ea_single.winners_curse_summary(method="empirical_bayes", prior=t_prior)
 cols_rel = cols + ["corrected_relative_effect"]
 print(single_t[cols_rel].round(4))

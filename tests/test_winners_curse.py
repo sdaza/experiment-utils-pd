@@ -8,6 +8,7 @@ from experiment_utils.shrinkage import (
     empirical_bayes_shrinkage,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
+    recency_weights,
     t_prior_shrinkage,
     winners_curse_estimate,
 )
@@ -538,6 +539,7 @@ def test_top_level_exports():
     assert hasattr(eu, "empirical_bayes_shrinkage")
     assert hasattr(eu, "fit_t_prior")
     assert hasattr(eu, "fit_t_prior_with_estimated_mean")
+    assert hasattr(eu, "recency_weights")
     assert hasattr(eu, "t_prior_shrinkage")
     assert hasattr(eu, "cumulative_impact")
     assert hasattr(eu, "joint_metric_shrinkage")
@@ -663,3 +665,151 @@ def test_conditional_explicit_alpha_overrides_alpha_mcp():
     rev = out[out["outcome"] == "rev"].iloc[0]
     expected = winners_curse_estimate(5.0, 2.0, alpha=0.05, ci=1 - 0.05)["corrected"]
     assert rev["corrected_effect"] == pytest.approx(expected, rel=1e-9)
+
+
+def test_fit_t_prior_uniform_weights_match_unweighted():
+    rng = np.random.default_rng(11)
+    k, df = 80, 4.0
+    beta = 0.4 * rng.standard_t(df, size=k)
+    se = np.full(k, 0.25)
+    y = rng.normal(beta, se)
+    base = fit_t_prior(y, se, df=df)
+    weighted = fit_t_prior(y, se, df=df, weights=np.ones(k))
+    assert weighted["scale"] == pytest.approx(base["scale"], rel=1e-8)
+    assert weighted["df"] == pytest.approx(base["df"], rel=1e-8)
+    assert weighted["loglik"] == pytest.approx(base["loglik"], rel=1e-8)
+    assert weighted["n"] == k
+
+
+def test_fit_t_prior_with_estimated_mean_uniform_weights_match_unweighted():
+    rng = np.random.default_rng(12)
+    k, df = 60, 4.0
+    beta = 0.2 + 0.35 * rng.standard_t(df, size=k)
+    se = np.full(k, 0.2)
+    y = rng.normal(beta, se)
+    base = fit_t_prior_with_estimated_mean(y, se, df=df)
+    weighted = fit_t_prior_with_estimated_mean(y, se, df=df, weights=np.ones(k))
+    assert weighted["prior_mean"] == pytest.approx(base["prior_mean"], rel=1e-6)
+    assert weighted["scale"] == pytest.approx(base["scale"], rel=1e-6)
+    assert weighted["loglik"] == pytest.approx(base["loglik"], rel=1e-6)
+    assert weighted["prior_mean_ci_lower"] == pytest.approx(base["prior_mean_ci_lower"], rel=1e-5)
+    assert weighted["prior_mean_ci_upper"] == pytest.approx(base["prior_mean_ci_upper"], rel=1e-5)
+
+
+def test_fit_t_prior_integer_weights_match_row_duplication():
+    """Integer weights ≡ duplicating rows (oracle only; not a public API)."""
+    rng = np.random.default_rng(13)
+    y = rng.normal(0.0, 0.4, size=5)
+    se = np.full(5, 0.3)
+    w = np.array([1.0, 2.0, 1.0, 3.0, 1.0])
+    y_dup = np.repeat(y, w.astype(int))
+    se_dup = np.repeat(se, w.astype(int))
+    # normalize=False so weighted loglik matches the duplicated-row sum
+    weighted = fit_t_prior(y, se, df=4.0, weights=w, normalize=False)
+    duplicated = fit_t_prior(y_dup, se_dup, df=4.0)
+    # Separate Nelder-Mead runs; agree to ~1e-3 relative (same objective)
+    assert weighted["scale"] == pytest.approx(duplicated["scale"], rel=1e-3)
+    assert weighted["loglik"] == pytest.approx(duplicated["loglik"], rel=1e-3)
+
+
+def test_fit_t_prior_with_estimated_mean_integer_weights_match_row_duplication():
+    rng = np.random.default_rng(14)
+    y = 0.25 + rng.normal(0.0, 0.35, size=6)
+    se = np.full(6, 0.22)
+    w = np.array([2.0, 1.0, 1.0, 2.0, 1.0, 1.0])
+    y_dup = np.repeat(y, w.astype(int))
+    se_dup = np.repeat(se, w.astype(int))
+    weighted = fit_t_prior_with_estimated_mean(y, se, df=4.0, weights=w, normalize=False)
+    duplicated = fit_t_prior_with_estimated_mean(y_dup, se_dup, df=4.0)
+    assert weighted["prior_mean"] == pytest.approx(duplicated["prior_mean"], rel=1e-4)
+    assert weighted["scale"] == pytest.approx(duplicated["scale"], rel=1e-4)
+
+
+def test_fit_t_prior_normalize_preserves_mle_and_lr_scale():
+    rng = np.random.default_rng(15)
+    k, df = 40, 4.0
+    beta = 0.15 + 0.4 * rng.standard_t(df, size=k)
+    se = np.full(k, 0.2)
+    y = rng.normal(beta, se)
+    raw = np.linspace(0.5, 2.0, k)
+    fit_norm = fit_t_prior_with_estimated_mean(y, se, df=df, weights=raw, normalize=True)
+    # Constant scale of weights: same MLE with normalize=True
+    fit_scaled = fit_t_prior_with_estimated_mean(y, se, df=df, weights=3.0 * raw, normalize=True)
+    assert fit_norm["prior_mean"] == pytest.approx(fit_scaled["prior_mean"], rel=1e-6)
+    assert fit_norm["scale"] == pytest.approx(fit_scaled["scale"], rel=1e-6)
+    width_norm = fit_norm["prior_mean_ci_upper"] - fit_norm["prior_mean_ci_lower"]
+    width_scaled = fit_scaled["prior_mean_ci_upper"] - fit_scaled["prior_mean_ci_lower"]
+    assert width_norm == pytest.approx(width_scaled, rel=1e-5)
+    # Raw unnormalized sum(w) != n changes LR width vs normalize=True
+    fit_raw = fit_t_prior_with_estimated_mean(y, se, df=df, weights=raw, normalize=False)
+    assert fit_raw["prior_mean"] == pytest.approx(fit_norm["prior_mean"], rel=1e-5)
+    width_raw = fit_raw["prior_mean_ci_upper"] - fit_raw["prior_mean_ci_lower"]
+    assert abs(width_raw - width_norm) > 1e-4
+
+
+def test_fit_t_prior_weights_validation():
+    y = [1.0, 2.0, 3.0]
+    se = [0.5, 0.5, 0.5]
+    with pytest.raises(ValueError):
+        fit_t_prior(y, se, weights=[1.0, 1.0])  # wrong length
+    with pytest.raises(ValueError):
+        fit_t_prior(y, se, weights=[1.0, -0.1, 1.0])
+    with pytest.raises(ValueError):
+        fit_t_prior(y, se, weights=[1.0, np.nan, 1.0])
+    with pytest.raises(ValueError):
+        fit_t_prior(y, se, weights=[0.0, 0.0, 0.0])
+    with pytest.raises(ValueError):
+        fit_t_prior(y, se, weights=[1.0, 1.0, 0.0])  # only 2 positive
+
+
+def test_recency_weights_half_life():
+    from datetime import date, timedelta
+
+    as_of = date(2026, 7, 1)
+    dates = [as_of, as_of - timedelta(days=30), as_of - timedelta(days=60)]
+    w = recency_weights(dates, half_life_days=30.0, as_of=as_of)
+    assert w[0] == pytest.approx(1.0)
+    assert w[1] == pytest.approx(0.5)
+    assert w[2] == pytest.approx(0.25)
+    # default as_of = max(dates)
+    w_default = recency_weights(dates, half_life_days=30.0)
+    np.testing.assert_allclose(w_default, w)
+
+
+def test_recency_weights_validation():
+    from datetime import date
+
+    with pytest.raises(ValueError):
+        recency_weights([date(2024, 1, 1)], half_life_days=0.0)
+    with pytest.raises(ValueError):
+        recency_weights([date(2024, 1, 1)], half_life_days=-10.0)
+
+
+def test_fit_t_prior_recency_weights_recover_recent_scale():
+    """Two-scale DGP: down-weighting old archive recovers recent scale better than unweighted.
+
+    Old experiments have large true scale; recent have small scale. Recency weights
+    with a short half-life should pull the fitted scale toward the recent regime.
+    """
+    rng = np.random.default_rng(27)
+    df, se_val = 4.0, 0.15
+    n_old, n_recent = 120, 80
+    scale_old, scale_recent = 0.8, 0.25
+
+    beta_old = scale_old * rng.standard_t(df, size=n_old)
+    beta_recent = scale_recent * rng.standard_t(df, size=n_recent)
+    y = np.concatenate([rng.normal(beta_old, se_val), rng.normal(beta_recent, se_val)])
+    se = np.full(y.size, se_val)
+
+    # Ages: old ~ 400 days, recent ~ 10 days; half-life 60 days heavily down-weights old
+    ages = np.concatenate([np.full(n_old, 400.0), np.full(n_recent, 10.0)])
+    w = 0.5 ** (ages / 60.0)
+
+    unweighted = fit_t_prior(y, se, df=df)
+    weighted = fit_t_prior(y, se, df=df, weights=w, normalize=True)
+
+    err_unweighted = abs(unweighted["scale"] - scale_recent)
+    err_weighted = abs(weighted["scale"] - scale_recent)
+    assert err_weighted < err_unweighted
+    # Weighted should be closer to recent than to old
+    assert abs(weighted["scale"] - scale_recent) < abs(weighted["scale"] - scale_old)

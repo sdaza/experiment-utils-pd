@@ -1082,6 +1082,7 @@ from .shrinkage import (  # noqa: E402, F401
     nss_adjusted_cumulative_impact,
     nss_adjusted_cumulative_impact_mvn,
     process_level_total_effect,
+    recency_weights,
     resolve_mvn_prior_sd,
     t_prior_shrinkage,
     winners_curse_estimate,
