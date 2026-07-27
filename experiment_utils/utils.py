@@ -1074,6 +1074,7 @@ from .shrinkage import (  # noqa: E402, F401
     cumulative_impact,
     empirical_bayes_shrinkage,
     estimate_guardrail_rho,
+    exclude_index_from_targets,
     fit_normal_prior_map,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,

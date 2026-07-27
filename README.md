@@ -29,7 +29,7 @@ Source code: https://github.com/sdaza/experiment-utils-pd
 - **Equivalence Testing (TOST)**: Two One-Sided Tests for equivalence, non-inferiority, non-superiority, and minimum-effect (superiority by margin) following Lakens (2017, 2018), with absolute, relative, and Cohen's d bounds, Lakens' four-cell conclusion matrix, and dedicated visualization
 - **Power Analysis**: Calculate statistical power and find optimal sample sizes, including TOST equivalence power
 - **Retrodesign Analysis**: Assess reliability of study designs (Type S/M errors)
-- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` / NSS-adjusted cumulative, Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` / `joint_metric_shrinkage_mvn` with `estimate_guardrail_rho` (all in `experiment_utils.shrinkage`), plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
+- **Winner's-Curse Correction**: De-bias effects selected by significance — conditional truncated-normal estimate with selection-adjusted CI (two-sided or one-sided), empirical-Bayes / Student-t / Half-Cauchy-MAP shrinkage, program-level `cumulative_impact` / NSS-adjusted cumulative, Airbnb `process_level_total_effect`, optional `joint_metric_shrinkage` / `joint_metric_shrinkage_mvn` (`primary_metric=` drops self-slot companions) with `estimate_guardrail_rho` (all in `experiment_utils.shrinkage`), plus analyzer wrappers (`winners_curse_summary`, `cumulative_impact_summary`)
 - **Random Assignment**: Generate balanced treatment assignments with stratification
 
 ## Table of Contents
@@ -1715,6 +1715,8 @@ nss_mvn = nss_adjusted_cumulative_impact_mvn(
     shipped=shipped_mask,
     rho_primary=[0.7, 0.5, 0.4],
     prior_sd_primary=0.015,
+    guardrail_names=["nss1", "nss2", "nss3"],
+    primary_metric=target_metric_names,  # drops self-slot when primary ∈ NSS
 )
 
 # Via the analyzer
@@ -1749,7 +1751,9 @@ primary-only EB (sampling noise).
 `nss_adjusted_cumulative_impact_mvn` for primary **magnitude** given several
 NSS companions. Keep the all-pass (or product) hard gate in `shipped` — MVN is
 **not** the scale rule. Default `rho_guardrails="factor"`; `"independent"` can
-make Σ non-PD when several |ρ| are large.
+make Σ non-PD when several |ρ| are large. Pass `primary_metric=` +
+`guardrail_names=` whenever the primary may be one of the companions — the
+self-slot is dropped automatically (ship checklist may still fill that metric).
 
 Runnable examples:
 

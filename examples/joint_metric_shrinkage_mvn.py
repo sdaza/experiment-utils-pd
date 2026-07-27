@@ -19,6 +19,7 @@ from scipy.stats import norm
 from experiment_utils.shrinkage import (
     cumulative_impact,
     empirical_bayes_shrinkage,
+    exclude_index_from_targets,
     fit_t_prior,
     joint_metric_shrinkage,
     joint_metric_shrinkage_mvn,
@@ -314,4 +315,40 @@ print(
 print(
     "\n  Note: joint remains normal–normal; MAP/t only set prior_sd_primary\n"
     "  (and mean for MAP). Not a multivariate-t posterior."
+)
+
+# %% [markdown]
+# ## 4. Exclude self-slot when primary ∈ companions
+#
+# Pass `primary_metric=` + `guardrail_names=`. Rows whose primary is a companion
+# drop that column (K−1); other rows keep all K.
+
+# %%
+section("4) Exclude self-slot (primary ∈ companions)")
+names3 = ["g0", "g1", "g2"]
+delta, x, g = sim_portfolio(80, tau, rhos3, se_p, se_g)
+# Mix: non-NSS primary (all K) + g0 / g1 / g2 as primary (K−1 each)
+primary_metric = ["other"] * 20 + ["g0"] * 20 + ["g1"] * 20 + ["g2"] * 20
+g_panel = g.copy()
+se_g_panel = np.full_like(g_panel, se_g)
+for j, name in enumerate(names3):
+    mask = np.asarray(primary_metric) == name
+    g_panel[mask, j] = np.nan
+    se_g_panel[mask, j] = np.nan
+excl = joint_metric_shrinkage_mvn(
+    x,
+    np.full(80, se_p),
+    g_panel,
+    se_g_panel,
+    rho_primary=list(rhos3),
+    prior_sd_primary=tau,
+    prior_sd_guard=tau,
+    guardrail_names=names3,
+    primary_metric=primary_metric,
+)
+print(f"  strata_n = {excl['strata_n']}")
+print(f"  primary_shrunk finite? {np.isfinite(excl['primary_shrunk']).all()}")
+print(
+    "  Tip: exclude_index_from_targets(target_names, guardrail_names) "
+    f"→ e.g. {exclude_index_from_targets(['g0', 'other'], names3)}"
 )
