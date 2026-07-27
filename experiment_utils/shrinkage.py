@@ -285,6 +285,50 @@ def _validate_effects_ses(effects, standard_errors) -> tuple[np.ndarray, np.ndar
     return y, s
 
 
+def _validate_prior_weights(weights, n: int, *, normalize: bool) -> np.ndarray:
+    """Validate analysis weights for t-prior fitting; optionally rescale to sum to n."""
+    w = np.asarray(weights, dtype=float)
+    if w.ndim != 1 or w.shape != (n,):
+        raise ValueError("weights must be a 1-D array aligned with effects")
+    if not np.all(np.isfinite(w)) or np.any(w < 0):
+        raise ValueError("weights must be finite and non-negative")
+    if float(np.sum(w)) <= 0:
+        raise ValueError("weights must sum to a positive total")
+    if int(np.sum(w > 0)) < 3:
+        raise ValueError("at least 3 experiments must have positive weight")
+    if normalize:
+        w = w * (n / float(np.sum(w)))
+    return w
+
+
+def recency_weights(dates, half_life_days: float, as_of=None) -> np.ndarray:
+    """
+    Exponential half-life weights from experiment dates (analysis choice only).
+
+    ``w_i = 0.5 ** (age_days / half_life_days)`` with
+    ``age_days = (as_of - date_i).days``. When ``as_of`` is omitted, uses the
+    maximum date in ``dates``.
+
+    Half-life is a caller choice — this helper does not pick a default policy.
+    Weights are for prior fitting (e.g. :func:`fit_t_prior`); they are **not**
+    part of the ship rule / NSS gate.
+    """
+    if not np.isfinite(half_life_days) or half_life_days <= 0:
+        raise ValueError("half_life_days must be positive and finite")
+    arr = np.asarray(dates, dtype=object)
+    if arr.ndim != 1 or arr.size == 0:
+        raise ValueError("dates must be a non-empty 1-D array")
+    parsed = np.asarray([np.datetime64(d, "D") for d in arr])
+    if as_of is None:
+        as_of_d = parsed.max()
+    else:
+        as_of_d = np.datetime64(as_of, "D")
+    age_days = (as_of_d - parsed).astype("timedelta64[D]").astype(float)
+    if np.any(age_days < 0):
+        raise ValueError("all dates must be on or before as_of")
+    return np.power(0.5, age_days / float(half_life_days))
+
+
 def t_prior_shrinkage(
     effects,
     standard_errors,
@@ -384,6 +428,8 @@ def fit_t_prior(
     standard_errors,
     prior_mean: float = 0.0,
     df: float | None = None,
+    weights=None,
+    normalize: bool = True,
 ) -> dict:
     """
     Fit a Student-t prior to a historical archive of experiment estimates.
@@ -407,6 +453,15 @@ def fit_t_prior(
         Fix the degrees of freedom and fit only the scale. When None
         (default) both are fitted, with ``df`` constrained to > 2 so the
         prior variance is finite.
+    weights : array-like, optional
+        Non-negative analysis weights ``w_i``; each experiment's log-likelihood
+        contribution is multiplied by ``w_i``. An analysis choice only — not
+        part of the ship rule / NSS gate. Use :func:`recency_weights` for a
+        simple half-life schedule (caller picks the half-life).
+    normalize : bool
+        If True (default), rescale weights so they sum to ``n`` (keeps profile
+        LR CIs from :func:`fit_t_prior_with_estimated_mean` on the usual
+        Wilks scale when weights are relative). If False, use raw ``w_i``.
 
     Returns
     -------
@@ -420,13 +475,18 @@ def fit_t_prior(
     if df is not None and not (np.isfinite(df) and df > 0):
         raise ValueError("df must be positive and finite")
 
+    if weights is None:
+        w = np.ones(y.size, dtype=float)
+    else:
+        w = _validate_prior_weights(weights, y.size, normalize=normalize)
+
     gh_x, gh_w = np.polynomial.hermite.hermgauss(64)
     nodes = y[:, None] + np.sqrt(2.0) * s[:, None] * gh_x[None, :]
     inv_sqrt_pi = 1.0 / np.sqrt(np.pi)
 
     def nll(log_scale: float, dfv: float) -> float:
         marginal = inv_sqrt_pi * (t_dist.pdf(nodes, dfv, loc=prior_mean, scale=np.exp(log_scale)) * gh_w).sum(axis=1)
-        return float(-np.sum(np.log(np.maximum(marginal, 1e-300))))
+        return float(-np.sum(w * np.log(np.maximum(marginal, 1e-300))))
 
     tau2_0 = _paule_mandel_tau2(y, s**2, prior_mean=prior_mean)
     scale0 = np.sqrt(tau2_0) if tau2_0 > 0 else 0.5 * float(np.median(s))
@@ -455,6 +515,8 @@ def fit_t_prior_with_estimated_mean(
     *,
     df: float = 4.0,
     mean_ci: float = 0.95,
+    weights=None,
+    normalize: bool = True,
 ) -> dict:
     """
     Fit a Student-t prior's location and scale by profile likelihood.
@@ -481,6 +543,12 @@ def fit_t_prior_with_estimated_mean(
     mean_ci : float
         Nominal level of the profile likelihood-ratio interval for the prior
         mean (default 0.95).
+    weights : array-like, optional
+        Non-negative analysis weights passed through to :func:`fit_t_prior`.
+        An analysis choice only — not part of the ship rule / NSS gate.
+    normalize : bool
+        Forwarded to :func:`fit_t_prior` (default True: rescale so weights
+        sum to ``n``, preserving Wilks scaling for the LR interval).
 
     Returns
     -------
@@ -497,10 +565,20 @@ def fit_t_prior_with_estimated_mean(
         raise ValueError("mean_ci must be strictly between 0 and 1")
     if not np.isfinite(df) or df <= 1:
         raise ValueError("df must be finite and greater than 1 so the prior mean exists")
+    # Validate once here so callers get a clear error before profiling.
+    if weights is not None:
+        _validate_prior_weights(weights, y.size, normalize=normalize)
 
     @cache
     def conditional_fit(prior_mean: float) -> dict:
-        return fit_t_prior(y, se, prior_mean=float(prior_mean), df=df)
+        return fit_t_prior(
+            y,
+            se,
+            prior_mean=float(prior_mean),
+            df=df,
+            weights=weights,
+            normalize=normalize,
+        )
 
     def objective(prior_mean: float) -> float:
         return -conditional_fit(float(prior_mean))["loglik"]

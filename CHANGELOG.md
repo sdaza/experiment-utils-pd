@@ -4,6 +4,7 @@
 
 ### Features
 
+* add optional `weights=` / `normalize=` on `fit_t_prior` and `fit_t_prior_with_estimated_mean` (weighted Student-t profile likelihood), plus `recency_weights(dates, half_life_days, as_of=...)` — analysis choices only; not part of the ship rule / NSS gate
 * move portfolio shrinkage APIs into `experiment_utils.shrinkage` (winner's curse, EB / t-prior, cumulative impact, joint / NSS, Airbnb \(\hat T_A\), MAP); re-exported from the package top-level and from `experiment_utils.utils` for compatibility — prefer `from experiment_utils.shrinkage import ...`
 * add `aggregate_shrunk_cumulative` and `nss_adjusted_cumulative_impact` (joint primary|guardrail shrink, then Kessler aggregate on primary)
 * add `joint_metric_shrinkage_mvn` and `nss_adjusted_cumulative_impact_mvn` (primary + flexible K guardrails in one MVN; magnitude only — not the scale rule; default `rho_guardrails="factor"`)
@@ -11,6 +12,7 @@
 
 ### Statistical notes
 
+* Prior `weights=` reweight archive rows when learning a Student-t prior; half-life / recency policy stays with the caller. Do not confuse with `shipped` or NSS gates.
 * NSS-adjusted cumulative helps on average when |ρ| is high and the guardrail is precise; at moderate ρ a single portfolio can look worse than primary-only EB (sampling noise)
 * Multi-guardrail MVN pools companions under a joint prior (default factor Corr(γⱼ,γₖ)=ρⱼρₖ). Keep the multi-NSS hard gate in `shipped`; do not use MVN as the ship rule. `"independent"` NSS–NSS correlations can yield a non-PD Σ when several |ρ| are large.
 

@@ -44,9 +44,7 @@ def test_nss_equals_compose_joint_then_aggregate():
         prior_sd_primary=tau,
         prior_sd_guard=tau,
     )
-    joint = joint_metric_shrinkage(
-        x, se_p, g, se_g, rho=rho, prior_sd_primary=tau, prior_sd_guard=tau
-    )
+    joint = joint_metric_shrinkage(x, se_p, g, se_g, rho=rho, prior_sd_primary=tau, prior_sd_guard=tau)
     agg = aggregate_shrunk_cumulative(
         joint["primary_shrunk"],
         joint["primary_posterior_sd"],
@@ -121,9 +119,7 @@ def test_nss_recovery_beats_naive_and_primary_when_rho_large():
             continue
         true_sums.append(float(delta[ship].sum()))
         naive_sums.append(float(x[ship].sum()))
-        prim = cumulative_impact(
-            x, np.full(n_exp, se_p), shipped=ship, tau2=tau**2, prior_mean=0.0
-        )
+        prim = cumulative_impact(x, np.full(n_exp, se_p), shipped=ship, tau2=tau**2, prior_mean=0.0)
         prim_sums.append(prim["cumulative"])
         nss = nss_adjusted_cumulative_impact(
             x,
