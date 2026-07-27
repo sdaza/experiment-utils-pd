@@ -1257,6 +1257,66 @@ def _build_prior_sigma(
     return sigma, rho_vec
 
 
+def exclude_index_from_targets(target_names, guardrail_names) -> np.ndarray:
+    """Map per-row primary metric names to companion columns to drop (``-1`` = keep all).
+
+    Used internally when ``primary_metric=`` is passed to the MVN APIs.
+    """
+    names = [str(x).lower() for x in guardrail_names]
+    name_to_j = {name: j for j, name in enumerate(names)}
+    targets = np.asarray([str(t).lower() for t in target_names], dtype=object)
+    return np.asarray(
+        [name_to_j[t] if t in name_to_j else -1 for t in targets],
+        dtype=int,
+    )
+
+
+def _coerce_guardrail_matrix_allowing_self_nan(
+    guardrail_effects,
+    guardrail_ses,
+    n: int,
+    exclude_index: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Like :func:`_coerce_guardrail_matrix`, but NaN allowed only in dropped self-slots."""
+    if isinstance(guardrail_effects, list | tuple):
+        cols = [np.asarray(c, dtype=float).reshape(-1) for c in guardrail_effects]
+        if not cols:
+            raise ValueError("guardrail_effects must contain at least one guardrail")
+        g = np.column_stack(cols)
+    else:
+        g = np.asarray(guardrail_effects, dtype=float)
+        if g.ndim == 1:
+            g = g.reshape(-1, 1)
+        if g.ndim != 2:
+            raise ValueError("guardrail_effects must be a list of arrays or a 2-D array")
+    if isinstance(guardrail_ses, list | tuple):
+        cols = [np.asarray(c, dtype=float).reshape(-1) for c in guardrail_ses]
+        if len(cols) != g.shape[1]:
+            raise ValueError("guardrail_ses must have the same number of columns as guardrail_effects")
+        sg = np.column_stack(cols)
+    else:
+        sg = np.asarray(guardrail_ses, dtype=float)
+        if sg.ndim == 1:
+            sg = sg.reshape(-1, 1)
+        if sg.ndim != 2:
+            raise ValueError("guardrail_ses must be a list of arrays or a 2-D array")
+    if g.shape[0] != n or sg.shape != g.shape:
+        raise ValueError("guardrail arrays must be aligned with primary (n experiments × K guardrails)")
+    k = g.shape[1]
+    for i in range(n):
+        ex = int(exclude_index[i])
+        if ex < -1 or ex >= k:
+            raise ValueError(f"exclude_index[{i}]={ex} out of range for K={k}")
+        for j in range(k):
+            if j == ex:
+                continue
+            if not (np.isfinite(g[i, j]) and np.isfinite(sg[i, j]) and sg[i, j] > 0):
+                raise ValueError(
+                    f"non-excluded guardrail effects/SEs must be finite with positive SE (row {i}, column {j})"
+                )
+    return g, sg
+
+
 def joint_metric_shrinkage_mvn(
     primary_effects,
     primary_ses,
@@ -1272,6 +1332,7 @@ def joint_metric_shrinkage_mvn(
     rho_guardrails="factor",
     ci: float = 0.95,
     guardrail_names=None,
+    primary_metric=None,
 ) -> dict:
     """
     Multivariate normal–normal shrinkage: primary + K guardrails.
@@ -1292,6 +1353,11 @@ def joint_metric_shrinkage_mvn(
     Student-t ``scale`` is plugged in as a normal SD — this is **not** a
     multivariate-t joint (see :func:`resolve_mvn_prior_sd`).
 
+    When ``primary_metric`` is set (with ``guardrail_names``), any row whose
+    primary equals companion ``j`` drops that self-slot (conditions on the other
+    ``K-1``). Self-slot cells may be NaN. Do this whenever the primary *is* one
+    of the companions — never treat the outcome as its own guardrail.
+
     **Magnitude only — not the scale/ship rule.** Keep the multi-guardrail hard
     gate in the caller's ``shipped`` mask; use this for primary magnitude given
     companions.
@@ -1311,6 +1377,11 @@ def joint_metric_shrinkage_mvn(
         Archive prior for the primary (resolved via :func:`resolve_mvn_prior_sd`).
     rho_guardrails : ``"factor"``, ``"independent"``, or (K, K) array
         Correlations among true guardrail effects.
+    guardrail_names : sequence of str, optional
+        Companion names (required if ``primary_metric`` is set).
+    primary_metric : length-n names, optional
+        Per-experiment primary metric. When it matches a companion name, that
+        column is excluded for that row.
     """
     x, sx = _validate_effects_ses(primary_effects, primary_ses)
     if x.size < 1:
@@ -1332,6 +1403,90 @@ def joint_metric_shrinkage_mvn(
         }
     if prior_sd_primary is None:
         raise ValueError("pass prior_sd_primary= or prior= ('map' / {'tau2'} / {'scale','df'})")
+
+    exclude = None
+    if primary_metric is not None:
+        if guardrail_names is None:
+            raise ValueError("primary_metric requires guardrail_names")
+        exclude = exclude_index_from_targets(primary_metric, guardrail_names)
+        if exclude.shape != (x.size,):
+            raise ValueError("primary_metric must be length-n aligned to primary")
+
+    if exclude is not None and np.any(exclude >= 0):
+        g, sg = _coerce_guardrail_matrix_allowing_self_nan(guardrail_effects, guardrail_ses, x.size, exclude)
+        k = g.shape[1]
+        if np.isscalar(rho_primary):
+            rho_vec = np.full(k, float(rho_primary))
+        else:
+            rho_vec = np.asarray(rho_primary, dtype=float).reshape(-1)
+            if rho_vec.size != k:
+                raise ValueError(f"rho_primary must be a scalar or length-{k} sequence")
+        if prior_sd_guard is None:
+            sd_g = np.full(k, float(prior_sd_primary))
+        elif np.isscalar(prior_sd_guard):
+            sd_g = np.full(k, float(prior_sd_guard))
+        else:
+            sd_g = np.asarray(prior_sd_guard, dtype=float).reshape(-1)
+            if sd_g.size != k:
+                raise ValueError(f"prior_sd_guard must be a scalar or length-{k} sequence")
+        names = [str(n).lower() for n in guardrail_names]
+        if len(names) != k:
+            raise ValueError(f"guardrail_names must have length {k}")
+
+        primary_shrunk = np.empty(x.size)
+        primary_sd = np.empty(x.size)
+        strata_n: dict[str, int] = {}
+        for ex in sorted(set(exclude.tolist())):
+            idxs = np.flatnonzero(exclude == ex)
+            cols = list(range(k)) if ex < 0 else [j for j in range(k) if j != ex]
+            if not cols:
+                raise ValueError("cannot exclude the only guardrail column")
+            stratum = "all_k" if ex < 0 else f"drop:{names[ex]}"
+            strata_n[stratum] = int(idxs.size)
+            gmean = prior_mean_guard
+            if np.ndim(prior_mean_guard) != 0:
+                gmean = np.asarray(prior_mean_guard, dtype=float)[cols]
+            joint_s = joint_metric_shrinkage_mvn(
+                x[idxs],
+                sx[idxs],
+                g[idxs][:, cols],
+                sg[idxs][:, cols],
+                rho_primary=rho_vec[cols],
+                prior_sd_primary=float(prior_sd_primary),
+                prior_sd_guard=sd_g[cols],
+                prior_mean_primary=prior_mean_primary,
+                prior_mean_guard=gmean,
+                rho_guardrails=rho_guardrails,
+                ci=ci,
+                guardrail_names=[names[j] for j in cols],
+            )
+            primary_shrunk[idxs] = joint_s["primary_shrunk"]
+            primary_sd[idxs] = joint_s["primary_posterior_sd"]
+
+        z = float(norm.ppf(1.0 - (1.0 - ci) / 2.0))
+        return {
+            "method": "joint_metric_shrinkage_mvn",
+            "primary_shrunk": primary_shrunk,
+            "primary_posterior_sd": primary_sd,
+            "primary_ci_lower": primary_shrunk - z * primary_sd,
+            "primary_ci_upper": primary_shrunk + z * primary_sd,
+            "rho_primary": rho_vec,
+            "prior_sd_primary": float(prior_sd_primary),
+            "prior_sd_guard": sd_g.copy(),
+            "prior_mean_primary": float(prior_mean_primary),
+            "prior_mean_guard": (
+                np.full(k, float(prior_mean_guard))
+                if np.isscalar(prior_mean_guard)
+                else np.asarray(prior_mean_guard, dtype=float).reshape(-1).copy()
+            ),
+            "rho_guardrails": (rho_guardrails if isinstance(rho_guardrails, str) else np.asarray(rho_guardrails)),
+            "n_guardrails": int(k),
+            "guardrail_names": names,
+            "primary_metric_excluded": True,
+            "exclude_index": exclude.copy(),
+            "strata_n": strata_n,
+            **prior_meta,
+        }
 
     g, sg = _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, x.size)
     k = g.shape[1]
@@ -1394,6 +1549,7 @@ def joint_metric_shrinkage_mvn(
         "sigma": sigma,
         "n_guardrails": int(k),
         "guardrail_names": names,
+        "primary_metric_excluded": False,
         **prior_meta,
     }
     return out
@@ -1418,6 +1574,7 @@ def nss_adjusted_cumulative_impact_mvn(
     ci: float = 0.95,
     min_shipped: int = 1,
     guardrail_names=None,
+    primary_metric=None,
 ) -> dict:
     """
     Multi-guardrail MVN joint shrink, then Kessler aggregate on primary.
@@ -1427,6 +1584,10 @@ def nss_adjusted_cumulative_impact_mvn(
     omitted they are estimated via :func:`estimate_guardrail_rho` on each
     primary×NSS pair (``rho_guardrails`` still defaults to ``"factor"``).
 
+    Pass ``primary_metric`` + ``guardrail_names`` whenever the primary may be
+    one of the companions: self-slots are dropped and MoM ``ρ`` uses
+    companion-only rows (never self-copies).
+
     Optional ``prior=`` (``"map"``, ``{"tau2"}``, ``{"scale","df"}``) sets the
     primary normal SD via :func:`resolve_mvn_prior_sd` (still a normal MVN).
 
@@ -1434,7 +1595,17 @@ def nss_adjusted_cumulative_impact_mvn(
     hard gate in ``shipped``.
     """
     y, sy = _validate_effects_ses(primary_effects, primary_ses)
-    g, sg = _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, y.size)
+
+    exclude = None
+    if primary_metric is not None:
+        if guardrail_names is None:
+            raise ValueError("primary_metric requires guardrail_names")
+        exclude = exclude_index_from_targets(primary_metric, guardrail_names)
+        if exclude.shape != (y.size,):
+            raise ValueError("primary_metric must be length-n aligned to primary")
+        g, sg = _coerce_guardrail_matrix_allowing_self_nan(guardrail_effects, guardrail_ses, y.size, exclude)
+    else:
+        g, sg = _coerce_guardrail_matrix(guardrail_effects, guardrail_ses, y.size)
     k = g.shape[1]
 
     prior_meta: dict = {}
@@ -1451,27 +1622,38 @@ def nss_adjusted_cumulative_impact_mvn(
         }
 
     need_mom = rho_primary is None or prior_sd_primary is None or prior_sd_guard is None
+    n_pair: list[int] = []
     if need_mom:
         if y.size < 5:
             raise ValueError(
                 "estimating rho / prior SDs requires at least 5 paired experiments; "
                 "pass rho_primary, prior_sd_primary (or prior=), and prior_sd_guard explicitly"
             )
-        rhos = []
-        tau_gs = []
-        tau_ps = []
+        rhos, tau_gs, tau_ps = [], [], []
         for j in range(k):
+            gmean = (
+                float(prior_mean_guard)
+                if np.isscalar(prior_mean_guard) or np.ndim(prior_mean_guard) == 0
+                else float(np.asarray(prior_mean_guard).reshape(-1)[j])
+            )
+            if exclude is None:
+                mask = np.ones(y.size, dtype=bool)
+            else:
+                mask = (exclude != j) & np.isfinite(g[:, j]) & np.isfinite(sg[:, j]) & (sg[:, j] > 0)
+            n_j = int(mask.sum())
+            n_pair.append(n_j)
+            if n_j < 5:
+                raise ValueError(
+                    f"MoM for guardrail column {j} needs ≥5 usable rows (got {n_j}); "
+                    "pass rho_primary / prior SDs or widen the panel"
+                )
             mom = estimate_guardrail_rho(
-                y,
-                sy,
-                g[:, j],
-                sg[:, j],
+                y[mask],
+                sy[mask],
+                g[mask, j],
+                sg[mask, j],
                 prior_mean_primary=prior_mean_primary,
-                prior_mean_guard=(
-                    float(prior_mean_guard)
-                    if np.isscalar(prior_mean_guard)
-                    else float(np.asarray(prior_mean_guard).reshape(-1)[j])
-                ),
+                prior_mean_guard=gmean,
             )
             rhos.append(mom["rho"])
             tau_gs.append(mom["tau_guard"])
@@ -1495,7 +1677,12 @@ def nss_adjusted_cumulative_impact_mvn(
             sd_g = float(prior_sd_guard)
         else:
             sd_g = prior_sd_guard
-        rho_info = {"rho_primary": rho_hat, "tau_guards": tau_gs, "source": "mom"}
+        rho_info = {
+            "rho_primary": rho_hat,
+            "tau_guards": tau_gs,
+            "n_pair": n_pair,
+            "source": "mom_companion_only" if exclude is not None else "mom",
+        }
     else:
         rho_hat = rho_primary
         sd_p = float(prior_sd_primary)
@@ -1515,6 +1702,7 @@ def nss_adjusted_cumulative_impact_mvn(
         rho_guardrails=rho_guardrails,
         ci=ci,
         guardrail_names=guardrail_names,
+        primary_metric=primary_metric,
     )
     agg = aggregate_shrunk_cumulative(
         joint["primary_shrunk"],
@@ -1526,7 +1714,7 @@ def nss_adjusted_cumulative_impact_mvn(
         ci=ci,
         min_shipped=min_shipped,
     )
-    return {
+    out = {
         "method": "joint_metric_shrinkage_mvn → Kessler aggregate (magnitude; not scale rule)",
         "rho_primary": joint["rho_primary"],
         "rho_info": rho_info,
@@ -1538,6 +1726,10 @@ def nss_adjusted_cumulative_impact_mvn(
         **prior_meta,
         **agg,
     }
+    if joint.get("strata_n") is not None:
+        out["strata_n"] = joint["strata_n"]
+        out["primary_metric_excluded"] = True
+    return out
 
 
 def process_level_total_effect(

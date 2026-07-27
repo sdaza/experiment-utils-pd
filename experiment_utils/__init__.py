@@ -6,6 +6,7 @@ from .shrinkage import (
     cumulative_impact,
     empirical_bayes_shrinkage,
     estimate_guardrail_rho,
+    exclude_index_from_targets,
     fit_normal_prior_map,
     fit_t_prior,
     fit_t_prior_with_estimated_mean,
@@ -56,5 +57,6 @@ __all__ = [
     "nss_adjusted_cumulative_impact_mvn",
     "process_level_total_effect",
     "estimate_guardrail_rho",
+    "exclude_index_from_targets",
     "resolve_mvn_prior_sd",
 ]
